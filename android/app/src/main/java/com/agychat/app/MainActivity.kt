@@ -9,11 +9,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.agychat.app.domain.PluginManager
 import com.agychat.app.ui.chat.ChatScreen
+import com.agychat.app.ui.chat.ChatViewModel
+import com.agychat.app.ui.history.HistoryScreen
 import com.agychat.app.ui.settings.SettingsScreen
 import com.agychat.app.ui.theme.AGYChatTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -50,6 +53,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AGYChatNavHost(pluginManager: PluginManager) {
     val navController = rememberNavController()
+    // Share a single ChatViewModel instance across all screens
+    val sharedChatViewModel: ChatViewModel = hiltViewModel()
 
     NavHost(
         navController = navController,
@@ -57,18 +62,21 @@ fun AGYChatNavHost(pluginManager: PluginManager) {
     ) {
         composable(AppRoutes.CHAT) {
             ChatScreen(
+                viewModel = sharedChatViewModel,
                 pluginManager = pluginManager,
                 onNavigateToSettings = { navController.navigate(AppRoutes.SETTINGS) }
             )
         }
         composable(AppRoutes.HISTORY) {
-            com.agychat.app.ui.history.HistoryScreen(
-                onBack = { navController.popBackStack() }
+            HistoryScreen(
+                onBack = { navController.popBackStack() },
+                chatViewModel = sharedChatViewModel
             )
         }
         composable(AppRoutes.SETTINGS) {
             SettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                chatViewModel = sharedChatViewModel
             )
         }
     }

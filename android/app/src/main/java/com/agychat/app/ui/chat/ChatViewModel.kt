@@ -1,5 +1,6 @@
 package com.agychat.app.ui.chat
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agychat.app.data.local.ChatDao
@@ -11,6 +12,7 @@ import com.agychat.app.domain.model.Message
 import com.agychat.app.domain.model.SlashCommand
 import com.agychat.app.domain.model.WsEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +26,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val webSocketClient: AgyWebSocketClient,
     private val chatDao: ChatDao
 ) : ViewModel() {
@@ -54,11 +57,26 @@ class ChatViewModel @Inject constructor(
     // Real-time conversations list from Room DB
     val conversations = chatDao.getAllConversations()
 
+    init {
+        // Auto-connect to last saved URL on app launch, or fall back to default bridge URL
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        val savedUrl = prefs.getString("server_url", "wss://angeles-preston-focus-dimensional.trycloudflare.com/ws")
+        if (!savedUrl.isNullOrBlank()) {
+            connectToServer(savedUrl)
+        }
+    }
+
     fun connectToServer(url: String) {
         val trimmed = url.trim()
         if (trimmed.isBlank()) return
+
+        // Persist URL so it survives app restarts
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("server_url", trimmed).apply()
+
         _serverUrl.value = trimmed
         _connectionState.value = ConnectionState.CONNECTING
+        _currentStatus.value = "Connecting to Colab bridge..."
 
         connectionJob?.cancel()
         connectionJob = viewModelScope.launch {
@@ -72,7 +90,7 @@ class ChatViewModel @Inject constructor(
                     is WsEvent.Error -> {
                         _connectionState.value = ConnectionState.ERROR
                         _isLoading.value = false
-                        _currentStatus.value = "Connection error: ${event.error.localizedMessage ?: "Failed"}"
+                        _currentStatus.value = "Disconnected. Tap to retry."
                     }
                     is WsEvent.Closed -> {
                         _connectionState.value = ConnectionState.DISCONNECTED
@@ -81,6 +99,14 @@ class ChatViewModel @Inject constructor(
                     }
                 }
             }
+        }
+    }
+
+    fun reconnect() {
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        val url = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+        if (url.isNotBlank()) {
+            connectToServer(url)
         }
     }
 
@@ -230,7 +256,7 @@ class ChatViewModel @Inject constructor(
         if (trimmed.isBlank()) return
 
         if (_connectionState.value != ConnectionState.CONNECTED) {
-            appendSystemMessage("⚠️ Not connected to Colab Bridge. Open Settings to connect.")
+            appendSystemMessage("⚠️ Not connected to Colab Bridge. Tap reconnect or open Settings.")
             return
         }
 
@@ -243,10 +269,13 @@ class ChatViewModel @Inject constructor(
         _messages.value = _messages.value + userMessage
         saveMessageToDb(userMessage)
 
-        // Frame and send JSON payload
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        val effort = prefs.getString("reasoning_effort", "high") ?: "high"
+
         val payload = JSONObject().apply {
             put("message", trimmed)
             put("conversation_id", currentConversationId)
+            put("effort", effort)
         }.toString()
 
         webSocketClient.sendMessage(payload)
@@ -335,7 +364,7 @@ class ChatViewModel @Inject constructor(
 
     fun exportConversationToMarkdown(): String {
         val sb = StringBuilder()
-        sb.append("# AGY Chat Export\n\n")
+        sb.append("# Next AI Chat Export\n\n")
         sb.append("*Generated: ${java.util.Date()}*\n\n---\n\n")
         for (m in _messages.value) {
             when (m.role) {
