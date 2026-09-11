@@ -1,0 +1,6 @@
+<resources>
+    <!-- Dark application theme. Uses Android built-in Material theme for Compose root window -->
+    <style name="Theme.NextAI" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
