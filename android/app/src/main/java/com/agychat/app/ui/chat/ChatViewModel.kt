@@ -91,8 +91,7 @@ class ChatViewModel @Inject constructor(
                     appendChunkToStreaming(content)
                 }
                 "done" -> {
-                    // Response complete — finalize the streaming message
-                    finalizeStreamingMessage()
+                    finalizeStreamingMessage(content)
                     _isLoading.value = false
                 }
                 "error" -> {
@@ -101,12 +100,10 @@ class ChatViewModel @Inject constructor(
                     _isLoading.value = false
                 }
                 else -> {
-                    // Fallback: treat as plain text chunk
                     appendChunkToStreaming(text)
                 }
             }
         } catch (e: Exception) {
-            // Not JSON — treat as plain text chunk
             appendChunkToStreaming(text)
         }
     }
@@ -118,11 +115,10 @@ class ChatViewModel @Inject constructor(
         if (existingIdx >= 0) {
             val existing = currentMessages[existingIdx]
             currentMessages[existingIdx] = existing.copy(
-                content = existing.content + "\n" + chunk,
+                content = existing.content + chunk,
                 isStreaming = true
             )
         } else {
-            // Start a new streaming message
             val newId = UUID.randomUUID().toString()
             streamingMessageId = newId
             currentMessages.add(
@@ -139,12 +135,14 @@ class ChatViewModel @Inject constructor(
         _isLoading.value = true
     }
 
-    private fun finalizeStreamingMessage() {
+    private fun finalizeStreamingMessage(finalContent: String? = null) {
         val id = streamingMessageId ?: return
         val currentMessages = _messages.value.toMutableList()
         val idx = currentMessages.indexOfFirst { it.id == id }
         if (idx >= 0) {
-            val finalized = currentMessages[idx].copy(isStreaming = false)
+            val existing = currentMessages[idx]
+            val contentToSet = if (!finalContent.isNullOrBlank()) finalContent else existing.content
+            val finalized = existing.copy(content = contentToSet, isStreaming = false)
             currentMessages[idx] = finalized
             _messages.value = currentMessages
             saveMessageToDb(finalized)
