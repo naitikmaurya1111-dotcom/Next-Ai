@@ -4,7 +4,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -29,6 +33,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
@@ -39,9 +44,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil.compose.AsyncImage
 import com.agychat.app.data.local.ConversationEntity
 import com.agychat.app.domain.PluginItem
 import com.agychat.app.domain.PluginManager
+import com.agychat.app.domain.model.AttachmentItem
 import com.agychat.app.domain.model.ConnectionState
 import com.agychat.app.domain.model.Message
 import com.agychat.app.ui.plugin.PluginDrawer
@@ -49,6 +56,21 @@ import com.agychat.app.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+
+fun queryFileName(context: Context, uri: Uri): String {
+    var name = "attachment"
+    try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIndex != -1 && cursor.moveToFirst()) {
+                name = cursor.getString(nameIndex) ?: name
+            }
+        }
+    } catch (e: Exception) {
+        name = uri.lastPathSegment ?: "attachment"
+    }
+    return name
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +84,7 @@ fun ChatScreen(
     val connectionState by viewModel.connectionState.collectAsState()
     val currentStatus by viewModel.currentStatus.collectAsState()
     val conversations by viewModel.conversations.collectAsState(initial = emptyList())
+    val selectedAttachment by viewModel.selectedAttachment.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showPluginBottomSheet by remember { mutableStateOf(false) }
@@ -71,6 +94,31 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+
+    // File and Image picker launcher
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            val fileName = queryFileName(context, uri)
+            val mimeType = context.contentResolver.getType(uri) ?: ""
+            val isImg = mimeType.startsWith("image/") ||
+                    fileName.lowercase().endsWith(".png") ||
+                    fileName.lowercase().endsWith(".jpg") ||
+                    fileName.lowercase().endsWith(".jpeg") ||
+                    fileName.lowercase().endsWith(".webp")
+
+            viewModel.setAttachment(
+                AttachmentItem(
+                    uri = uri.toString(),
+                    name = fileName,
+                    isImage = isImg
+                )
+            )
+            Toast.makeText(context, "Attached: $fileName", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Detect if user has scrolled up to show "Scroll to Bottom" FAB
     val showScrollToBottom by remember {
@@ -256,7 +304,7 @@ fun ChatScreen(
 
                     Spacer(Modifier.height(6.dp))
 
-                    // Claude Web Floating Input Box
+                    // Claude Web Floating Input Box with File Attachment Support
                     ClaudeFloatingInputBar(
                         text = inputText,
                         onTextChange = { inputText = it },
@@ -268,6 +316,15 @@ fun ChatScreen(
                         onOpenPlugins = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             showPluginBottomSheet = true
+                        },
+                        onAttachFile = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            filePickerLauncher.launch("*/*")
+                        },
+                        attachment = selectedAttachment,
+                        onRemoveAttachment = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.clearAttachment()
                         },
                         isConnected = connectionState == ConnectionState.CONNECTED,
                         isLoading = isLoading
@@ -430,16 +487,61 @@ fun MessageItem(
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
                         .clickable { showUserActions = !showUserActions }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
                 ) {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyLarge.copy(
-                            fontSize = 15.sp,
-                            lineHeight = 23.sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Column {
+                        // Display attached image if present
+                        if (!message.attachmentUri.isNullOrBlank()) {
+                            if (message.attachmentIsImage) {
+                                AsyncImage(
+                                    model = message.attachmentUri,
+                                    contentDescription = "Attached image",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 200.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            } else {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surface)
+                                        .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.InsertDriveFile,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                        tint = ClaudeTerracotta
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = message.attachmentName ?: "Attached file",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+
+                        if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:")) {
+                            Text(
+                                text = message.content,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontSize = 15.sp,
+                                    lineHeight = 23.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                 }
 
                 // Interactive Quick Actions for User Message
@@ -768,6 +870,9 @@ fun ClaudeFloatingInputBar(
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
     onOpenPlugins: () -> Unit,
+    onAttachFile: () -> Unit,
+    attachment: AttachmentItem?,
+    onRemoveAttachment: () -> Unit,
     isConnected: Boolean,
     isLoading: Boolean
 ) {
@@ -779,98 +884,192 @@ fun ClaudeFloatingInputBar(
             .shadow(2.dp, RoundedCornerShape(24.dp))
             .border(1.2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.Bottom
+                .padding(horizontal = 8.dp, vertical = 6.dp)
         ) {
-            // Plugins drawer button (+)
-            IconButton(
-                onClick = onOpenPlugins,
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = "Slash Plugins",
-                    tint = ClaudeTerracotta,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+            // Attachment Preview Bar
+            AnimatedVisibility(visible = attachment != null) {
+                if (attachment != null) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (attachment.isImage) {
+                            AsyncImage(
+                                model = attachment.uri,
+                                contentDescription = "Attached image",
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.InsertDriveFile,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = ClaudeTerracotta
+                                )
+                            }
+                        }
 
-            Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.width(10.dp))
 
-            // Multi-line Text input
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(vertical = 2.dp),
-                placeholder = {
-                    Text(
-                        if (isConnected) "Message Next AI or type /..." else "Connect in Settings to chat...",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                },
-                maxLines = 6,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Sentences,
-                    imeAction = ImeAction.Default
-                ),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    cursorColor = ClaudeTerracotta
-                )
-            )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = attachment.name,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = if (attachment.isImage) "Image ready to send" else "File ready to send",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
 
-            if (text.isNotBlank()) {
-                IconButton(
-                    onClick = { onTextChange("") },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = "Clear input",
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(16.dp)
-                    )
+                        IconButton(
+                            onClick = onRemoveAttachment,
+                            modifier = Modifier.size(26.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Remove attachment",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(Modifier.width(4.dp))
-
-            // Claude Circular Send Button
-            val canSend = text.isNotBlank() && isConnected && !isLoading
-            FilledIconButton(
-                onClick = onSend,
-                enabled = canSend,
-                modifier = Modifier.size(38.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = ClaudeTerracotta,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
+            // Main Input Action Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Bottom
             ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp,
-                        color = ClaudeTerracotta
-                    )
-                } else {
+                // Plugins drawer button (+)
+                IconButton(
+                    onClick = onOpenPlugins,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                ) {
                     Icon(
-                        Icons.Default.ArrowUpward,
-                        contentDescription = "Send",
-                        tint = if (canSend) Color.White else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        Icons.Default.Add,
+                        contentDescription = "Slash Plugins",
+                        tint = ClaudeTerracotta,
                         modifier = Modifier.size(18.dp)
                     )
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                // Attach File / Image Button (Paperclip)
+                IconButton(
+                    onClick = onAttachFile,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Icon(
+                        Icons.Default.AttachFile,
+                        contentDescription = "Attach file or image",
+                        tint = if (attachment != null) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(6.dp))
+
+                // Multi-line Text input
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 2.dp),
+                    placeholder = {
+                        Text(
+                            if (isConnected) "Message Next AI or type /..." else "Connect in Settings to chat...",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    },
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Default
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        cursorColor = ClaudeTerracotta
+                    )
+                )
+
+                if (text.isNotBlank()) {
+                    IconButton(
+                        onClick = { onTextChange("") },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Clear input",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                // Claude Circular Send Button
+                val canSend = (text.isNotBlank() || attachment != null) && isConnected && !isLoading
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = canSend,
+                    modifier = Modifier.size(38.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = ClaudeTerracotta,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = ClaudeTerracotta
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.ArrowUpward,
+                            contentDescription = "Send",
+                            tint = if (canSend) Color.White else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }

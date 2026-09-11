@@ -141,6 +141,7 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.info(f"Received: {raw[:200]}")
 
             # Parse incoming message
+            user_message = raw
             conv_id = ""
             effort = "high"
             try:
@@ -148,6 +149,20 @@ async def websocket_endpoint(websocket: WebSocket):
                 user_message = payload.get("message", raw)
                 conv_id = payload.get("conversation_id", "")
                 effort = payload.get("effort", "high")
+                file_name = payload.get("file_name")
+                file_data = payload.get("file_data")
+                if file_name and file_data:
+                    try:
+                        import base64
+                        safe_name = os.path.basename(file_name)
+                        os.makedirs("/tmp/uploads", exist_ok=True)
+                        save_path = f"/tmp/uploads/{safe_name}"
+                        with open(save_path, "wb") as f:
+                            f.write(base64.b64decode(file_data))
+                        user_message = f"[User attached file: {save_path}]\n\n{user_message}"
+                        logger.info(f"Saved uploaded file to {save_path}")
+                    except Exception as upload_err:
+                        logger.error(f"Failed to process file attachment: {upload_err}")
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
 

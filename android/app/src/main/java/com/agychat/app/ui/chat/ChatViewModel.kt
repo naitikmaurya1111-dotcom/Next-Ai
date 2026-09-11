@@ -7,6 +7,9 @@ import com.agychat.app.data.local.ChatDao
 import com.agychat.app.data.local.ConversationEntity
 import com.agychat.app.data.local.MessageEntity
 import com.agychat.app.data.network.AgyWebSocketClient
+import android.net.Uri
+import android.util.Base64
+import com.agychat.app.domain.model.AttachmentItem
 import com.agychat.app.domain.model.ConnectionState
 import com.agychat.app.domain.model.Message
 import com.agychat.app.domain.model.SlashCommand
@@ -45,6 +48,17 @@ class ChatViewModel @Inject constructor(
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
+
+    private val _selectedAttachment = MutableStateFlow<AttachmentItem?>(null)
+    val selectedAttachment: StateFlow<AttachmentItem?> = _selectedAttachment.asStateFlow()
+
+    fun setAttachment(item: AttachmentItem?) {
+        _selectedAttachment.value = item
+    }
+
+    fun clearAttachment() {
+        _selectedAttachment.value = null
+    }
 
     // Active conversation ID
     var currentConversationId: String = UUID.randomUUID().toString()
@@ -253,7 +267,8 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isBlank()) return
+        val attachment = _selectedAttachment.value
+        if (trimmed.isBlank() && attachment == null) return
 
         if (_connectionState.value != ConnectionState.CONNECTED) {
             appendSystemMessage("⚠️ Not connected to Colab Bridge. Tap reconnect or open Settings.")
@@ -263,19 +278,45 @@ class ChatViewModel @Inject constructor(
         val userMessage = Message(
             id = UUID.randomUUID().toString(),
             role = "user",
-            content = trimmed,
-            timestamp = System.currentTimeMillis()
+            content = trimmed.ifBlank { "Sent an attachment: ${attachment?.name}" },
+            timestamp = System.currentTimeMillis(),
+            attachmentUri = attachment?.uri,
+            attachmentName = attachment?.name,
+            attachmentIsImage = attachment?.isImage ?: false
         )
+        _selectedAttachment.value = null
         _messages.value = _messages.value + userMessage
         saveMessageToDb(userMessage)
+
+        var fileBase64: String? = null
+        if (attachment != null) {
+            try {
+                val uri = Uri.parse(attachment.uri)
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val bytes = stream.readBytes()
+                    if (bytes.size <= 5 * 1024 * 1024) {
+                        fileBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore read errors
+            }
+        }
 
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
         val effort = prefs.getString("reasoning_effort", "high") ?: "high"
 
         val payload = JSONObject().apply {
-            put("message", trimmed)
+            put("message", trimmed.ifBlank { "Please inspect the attached file: ${attachment?.name}" })
             put("conversation_id", currentConversationId)
             put("effort", effort)
+            if (attachment != null) {
+                put("file_name", attachment.name)
+                put("file_is_image", attachment.isImage)
+                if (fileBase64 != null) {
+                    put("file_data", fileBase64)
+                }
+            }
         }.toString()
 
         webSocketClient.sendMessage(payload)
@@ -319,7 +360,10 @@ class ChatViewModel @Inject constructor(
                     conversationId = currentConversationId,
                     role = message.role,
                     content = message.content,
-                    timestamp = message.timestamp
+                    timestamp = message.timestamp,
+                    attachmentUri = message.attachmentUri,
+                    attachmentName = message.attachmentName,
+                    attachmentIsImage = message.attachmentIsImage
                 )
             )
         }
@@ -327,6 +371,7 @@ class ChatViewModel @Inject constructor(
 
     fun startNewConversation() {
         _messages.value = emptyList()
+        _selectedAttachment.value = null
         streamingMessageId = null
         currentConversationId = UUID.randomUUID().toString()
         _currentStatus.value = null
@@ -336,6 +381,7 @@ class ChatViewModel @Inject constructor(
     fun loadConversation(conversationId: String) {
         currentConversationId = conversationId
         streamingMessageId = null
+        _selectedAttachment.value = null
         _isLoading.value = false
         _currentStatus.value = null
 
@@ -346,7 +392,10 @@ class ChatViewModel @Inject constructor(
                         id = it.id,
                         role = it.role,
                         content = it.content,
-                        timestamp = it.timestamp
+                        timestamp = it.timestamp,
+                        attachmentUri = it.attachmentUri,
+                        attachmentName = it.attachmentName,
+                        attachmentIsImage = it.attachmentIsImage
                     )
                 }
             }

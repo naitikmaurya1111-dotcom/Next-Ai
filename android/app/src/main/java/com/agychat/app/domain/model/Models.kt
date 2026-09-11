@@ -12,7 +12,17 @@ data class Message(
     val timestamp: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false,
     val isThinking: Boolean = false,
-    val isThinkingExpanded: Boolean = false
+    val isThinkingExpanded: Boolean = false,
+    val attachmentUri: String? = null,
+    val attachmentName: String? = null,
+    val attachmentIsImage: Boolean = false
+)
+
+data class AttachmentItem(
+    val uri: String,
+    val name: String,
+    val size: Long = 0,
+    val isImage: Boolean = false
 )
 
 @Serializable
