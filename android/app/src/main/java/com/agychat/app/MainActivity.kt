@@ -22,6 +22,7 @@ import javax.inject.Inject
 object AppRoutes {
     const val CHAT = "chat"
     const val SETTINGS = "settings"
+    const val HISTORY = "history"
 }
 
 @AndroidEntryPoint
