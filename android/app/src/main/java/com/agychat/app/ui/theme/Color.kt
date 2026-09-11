@@ -9,41 +9,47 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// ── Claude Warm Palette ───────────────────────────────────────────────────
-val ClaudeTerracotta    = Color(0xFFD4704B) // Claude signature warm terracotta
-val ClaudeAmberLight    = Color(0xFFE5855E)
-val ClaudeAmberDark     = Color(0xFFB85633)
+// ── Claude Web Warm Aesthetic Palette ──────────────────────────────────────
+val ClaudeTerracotta       = Color(0xFFD97757) // Claude signature warm terracotta coral
+val ClaudeTerracottaLight  = Color(0xFFE88A6D)
+val ClaudeTerracottaDark   = Color(0xFFBD5E3F)
 
-// Dark Theme Surfaces
-val DarkBg              = Color(0xFF141413) // Warm charcoal
-val DarkSurface         = Color(0xFF1F1E1D) // Slightly lighter card
-val DarkSurfaceElevated = Color(0xFF2B2A27) // Input & user bubble
-val DarkBorder          = Color(0xFF33322E) // Refined subtle border
-val DarkTextPrimary     = Color(0xFFEDECE6) // Cream off-white
-val DarkTextSecondary   = Color(0xFF9E9C94) // Muted warm gray
+// Dark Theme Surfaces (Warm rich charcoal, matching Claude Web dark mode)
+val DarkBg                 = Color(0xFF1E1E1C) // Claude Web dark background
+val DarkSurface            = Color(0xFF262624) // Soft warm dark card
+val DarkSurfaceElevated    = Color(0xFF2F2E2A) // Floating input & user bubble
+val DarkBorder             = Color(0xFF3D3C37) // Hairline warm border
+val DarkTextPrimary        = Color(0xFFEDECE8) // Warm off-white
+val DarkTextSecondary      = Color(0xFFA8A69E) // Muted warm gray
 
-// Light Theme Surfaces
-val LightBg             = Color(0xFFFAF9F5) // Warm paper cream
-val LightSurface        = Color(0xFFFFFFFF)
-val LightSurfaceElevated= Color(0xFFF2F0E8) // User bubble & subtle card
-val LightBorder         = Color(0xFFE5E3D8)
-val LightTextPrimary    = Color(0xFF1C1B18)
-val LightTextSecondary  = Color(0xFF737067)
+// Light Theme Surfaces (Warm ivory & parchment, matching Claude Web light mode)
+val LightBg                = Color(0xFFFAF9F5) // Claude Web iconic warm parchment
+val LightSurface           = Color(0xFFFFFFFF) // Crisp white card/floating input
+val LightSurfaceElevated   = Color(0xFFF0EEE6) // User bubble & subtle elevated card
+val LightBorder            = Color(0xFFE5E2D9) // Delicate warm border
+val LightTextPrimary       = Color(0xFF1F1E1B) // Deep charcoal coffee
+val LightTextSecondary     = Color(0xFF6F6D66) // Soft slate text
 
 // Semantic Accents
-val ThinkingPurpleBg    = Color(0xFF1C182A)
-val ThinkingPurpleBorder= Color(0xFF4C3D7A)
-val ThinkingPurpleText  = Color(0xFFC0B4F2)
-val CodeBlockDark       = Color(0xFF0F0F0F)
+val ThinkingPurpleBgDark   = Color(0xFF211D2B)
+val ThinkingPurpleBorderDark= Color(0xFF3E3557)
+val ThinkingPurpleTextDark = Color(0xFFC7B8F2)
+val ThinkingPurpleBgLight  = Color(0xFFF7F5FC)
+val ThinkingPurpleBorderLight= Color(0xFFE2DCF7)
+val ThinkingPurpleTextLight= Color(0xFF5B45A8)
+
+val CodeBlockBg            = Color(0xFF161618)
+val CodeBlockHeader        = Color(0xFF202024)
+val CodeBlockBorder        = Color(0xFF2D2D33)
 
 // ── Material 3 Schemes ────────────────────────────────────────────────────
 val DarkColorScheme = darkColorScheme(
     primary             = ClaudeTerracotta,
     onPrimary           = Color.White,
-    primaryContainer    = Color(0xFF3D2117),
+    primaryContainer    = Color(0xFF3B231B),
     onPrimaryContainer  = Color(0xFFFFDBCF),
-    secondary           = Color(0xFFE5855E),
-    onSecondary         = Color(0xFF441B08),
+    secondary           = ClaudeTerracottaLight,
+    onSecondary         = Color(0xFF451909),
     tertiary            = Color(0xFF7CB342),
     onTertiary          = Color.White,
     background          = DarkBg,
@@ -53,6 +59,7 @@ val DarkColorScheme = darkColorScheme(
     surfaceVariant      = DarkSurfaceElevated,
     onSurfaceVariant    = DarkTextSecondary,
     outline             = DarkBorder,
+    outlineVariant      = Color(0xFF2E2D29),
     error               = Color(0xFFEF5350),
     onError             = Color.White
 )
@@ -60,9 +67,9 @@ val DarkColorScheme = darkColorScheme(
 val LightColorScheme = lightColorScheme(
     primary             = ClaudeTerracotta,
     onPrimary           = Color.White,
-    primaryContainer    = Color(0xFFFFDBCF),
-    onPrimaryContainer  = Color(0xFF3D2117),
-    secondary           = Color(0xFFB85633),
+    primaryContainer    = Color(0xFFFBECE5),
+    onPrimaryContainer  = Color(0xFF3D1F16),
+    secondary           = ClaudeTerracottaDark,
     onSecondary         = Color.White,
     tertiary            = Color(0xFF558B2F),
     onTertiary          = Color.White,
@@ -73,6 +80,7 @@ val LightColorScheme = lightColorScheme(
     surfaceVariant      = LightSurfaceElevated,
     onSurfaceVariant    = LightTextSecondary,
     outline             = LightBorder,
+    outlineVariant      = Color(0xFFEDE9E0),
     error               = Color(0xFFD32F2F),
     onError             = Color.White
 )

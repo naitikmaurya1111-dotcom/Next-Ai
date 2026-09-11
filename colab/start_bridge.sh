@@ -1,11 +1,15 @@
 #!/bin/bash
 set -e
 
-# Kill any previous instance on port 8000 or cloudflared
+# Kill any previous instance on port 8000, cloudflared, or auto-backup daemon
 fuser -k 8000/tcp 2>/dev/null || true
 pkill -f "cloudflared tunnel --url http://127.0.0.1:8000" 2>/dev/null || true
+pkill -f "drive_sync_manager.py daemon" 2>/dev/null || true
 
 cd /content/Next-Ai/colab
+
+echo "Starting Next AI Auto-Backup Daemon (Google Drive sync every 5 min)..."
+nohup python3 drive_sync_manager.py daemon 300 > /tmp/nextai_backup_daemon.log 2>&1 &
 
 echo "Starting AGY Colab Bridge Server on port 8000..."
 nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/agy_bridge.log 2>&1 &

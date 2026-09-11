@@ -26,8 +26,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -67,6 +70,14 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+
+    // Detect if user has scrolled up to show "Scroll to Bottom" FAB
+    val showScrollToBottom by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 1 || listState.firstVisibleItemScrollOffset > 300
+        }
+    }
 
     // Auto-scroll on new messages
     LaunchedEffect(messages.size, messages.lastOrNull()?.content?.length) {
@@ -82,14 +93,19 @@ fun ChatScreen(
                 conversations = conversations,
                 activeId = viewModel.currentConversationId,
                 onSelectConversation = { id ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     viewModel.loadConversation(id)
                     scope.launch { drawerState.close() }
                 },
                 onNewChat = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     viewModel.startNewConversation()
                     scope.launch { drawerState.close() }
                 },
-                onDelete = { id -> viewModel.deleteConversation(id) },
+                onDelete = { id ->
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    viewModel.deleteConversation(id)
+                },
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     onNavigateToSettings()
@@ -99,84 +115,160 @@ fun ChatScreen(
     ) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "Next AI",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                ConnectionStatusBadge(
-                                    state = connectionState,
-                                    onClick = onNavigateToSettings
-                                )
-                            }
-                            if (currentStatus != null) {
-                                Text(
-                                    text = currentStatus ?: "",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Default.Menu, contentDescription = "History Drawer")
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { viewModel.startNewConversation() }) {
-                            Icon(Icons.Default.AddComment, contentDescription = "New Chat")
-                        }
-                        IconButton(onClick = {
-                            val md = viewModel.exportConversationToMarkdown()
-                            val sendIntent = Intent().apply {
-                                action = Intent.ACTION_SEND
-                                putExtra(Intent.EXTRA_TEXT, md)
-                                type = "text/plain"
-                            }
-                            context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
-                        }) {
-                            Icon(Icons.Default.Share, contentDescription = "Share/Export Chat")
-                        }
-                        IconButton(onClick = onNavigateToSettings) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface
-                    )
-                )
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        TopAppBar(
+                            title = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(start = 2.dp)
+                                ) {
+                                    // Claude Terracotta Asterisk Badge
+                                    Box(
+                                        modifier = Modifier
+                                            .size(30.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "✦",
+                                            color = ClaudeTerracotta,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 17.sp
+                                        )
+                                    }
+
+                                    Spacer(Modifier.width(10.dp))
+
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "Next AI",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = (-0.3).sp
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            ConnectionStatusBadge(
+                                                state = connectionState,
+                                                onClick = {
+                                                    if (connectionState == ConnectionState.DISCONNECTED || connectionState == ConnectionState.ERROR) {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        Toast.makeText(context, "Reconnecting to Colab bridge...", Toast.LENGTH_SHORT).show()
+                                                        viewModel.reconnect()
+                                                    } else {
+                                                        onNavigateToSettings()
+                                                    }
+                                                }
+                                            )
+                                        }
+
+                                        if (!currentStatus.isNullOrBlank()) {
+                                            Text(
+                                                text = currentStatus ?: "",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = ClaudeTerracotta,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            navigationIcon = {
+                                IconButton(onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    scope.launch { drawerState.open() }
+                                }) {
+                                    Icon(
+                                        Icons.Default.Menu,
+                                        contentDescription = "History Drawer",
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.startNewConversation()
+                                }) {
+                                    Icon(
+                                        Icons.Default.AddComment,
+                                        contentDescription = "New Chat",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = {
+                                    val md = viewModel.exportConversationToMarkdown()
+                                    val sendIntent = Intent().apply {
+                                        action = Intent.ACTION_SEND
+                                        putExtra(Intent.EXTRA_TEXT, md)
+                                        type = "text/plain"
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
+                                }) {
+                                    Icon(
+                                        Icons.Default.Share,
+                                        contentDescription = "Share/Export Chat",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = onNavigateToSettings) {
+                                    Icon(
+                                        Icons.Default.Settings,
+                                        contentDescription = "Settings",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            )
+                        )
+                        HorizontalDivider(
+                            thickness = 0.8.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                    }
+                }
             },
             bottomBar = {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface)
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .navigationBarsPadding()
+                        .imePadding()
                 ) {
                     // Quick-Action Slash Command Chips
                     QuickSlashChipsRow(
                         plugins = pluginManager.plugins,
                         onChipClick = { plugin ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             inputText = "${plugin.prefix} "
                         }
                     )
 
-                    // Main Input Bar
-                    ChatInputBar(
+                    Spacer(Modifier.height(6.dp))
+
+                    // Claude Web Floating Input Box
+                    ClaudeFloatingInputBar(
                         text = inputText,
                         onTextChange = { inputText = it },
                         onSend = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         },
-                        onOpenPlugins = { showPluginBottomSheet = true },
+                        onOpenPlugins = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showPluginBottomSheet = true
+                        },
                         isConnected = connectionState == ConnectionState.CONNECTED,
                         isLoading = isLoading
                     )
@@ -193,6 +285,7 @@ fun ChatScreen(
                     EmptyChatGreeting(
                         plugins = pluginManager.plugins,
                         onPromptCardClick = { prompt ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.sendMessage(prompt)
                         }
                     )
@@ -201,14 +294,25 @@ fun ChatScreen(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp),
-                        contentPadding = PaddingValues(top = 12.dp, bottom = 16.dp)
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp)
                     ) {
                         items(messages, key = { it.id }) { msg ->
                             MessageItem(
                                 message = msg,
-                                onToggleThinking = { viewModel.toggleThinkingExpanded(msg.id) }
+                                onToggleThinking = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.toggleThinkingExpanded(msg.id)
+                                },
+                                onRetry = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.sendMessage(msg.content)
+                                },
+                                onEditMessage = { text ->
+                                    inputText = text
+                                    Toast.makeText(context, "Editing prompt...", Toast.LENGTH_SHORT).show()
+                                }
                             )
                         }
 
@@ -216,6 +320,38 @@ fun ChatScreen(
                             item {
                                 ClaudeTypingBubble()
                             }
+                        }
+                    }
+
+                    // Floating "Scroll to Bottom" button
+                    AnimatedVisibility(
+                        visible = showScrollToBottom,
+                        enter = fadeIn() + scaleIn(),
+                        exit = fadeOut() + scaleOut(),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = 12.dp)
+                    ) {
+                        FilledIconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                scope.launch {
+                                    listState.animateScrollToItem(messages.size - 1)
+                                }
+                            },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .shadow(4.dp, CircleShape),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = ClaudeTerracotta
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.KeyboardArrowDown,
+                                contentDescription = "Scroll to bottom",
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
                 }
@@ -227,6 +363,7 @@ fun ChatScreen(
         PluginDrawer(
             pluginManager = pluginManager,
             onCommandSelected = { cmd ->
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.sendSlashCommand(cmd)
                 showPluginBottomSheet = false
             },
@@ -238,18 +375,19 @@ fun ChatScreen(
 @Composable
 fun ConnectionStatusBadge(state: ConnectionState, onClick: () -> Unit) {
     val (color, text) = when (state) {
-        ConnectionState.CONNECTED -> Color(0xFF4CAF50) to "Connected"
+        ConnectionState.CONNECTED -> Color(0xFF4CAF50) to "Online"
         ConnectionState.CONNECTING -> Color(0xFFFFB300) to "Connecting"
-        ConnectionState.ERROR -> Color(0xFFEF5350) to "Error"
+        ConnectionState.ERROR -> Color(0xFFEF5350) to "Retry"
         ConnectionState.DISCONNECTED -> Color(0xFF9E9E9E) to "Offline"
     }
 
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(color.copy(alpha = 0.15f))
+            .background(color.copy(alpha = 0.12f))
+            .border(0.6.dp, color.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 7.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
@@ -258,7 +396,7 @@ fun ConnectionStatusBadge(state: ConnectionState, onClick: () -> Unit) {
                 .clip(CircleShape)
                 .background(color)
         )
-        Spacer(Modifier.width(4.dp))
+        Spacer(Modifier.width(5.dp))
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
@@ -269,28 +407,76 @@ fun ConnectionStatusBadge(state: ConnectionState, onClick: () -> Unit) {
 }
 
 @Composable
-fun MessageItem(message: Message, onToggleThinking: () -> Unit) {
+fun MessageItem(
+    message: Message,
+    onToggleThinking: () -> Unit,
+    onRetry: () -> Unit = {},
+    onEditMessage: (String) -> Unit = {}
+) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    var showUserActions by remember { mutableStateOf(false) }
 
     when (message.role) {
         "user" -> {
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalAlignment = Alignment.End
             ) {
                 Box(
                     modifier = Modifier
-                        .widthIn(max = 300.dp)
-                        .clip(RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp))
+                        .widthIn(max = 310.dp)
+                        .clip(RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
+                        .clickable { showUserActions = !showUserActions }
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Text(
                         text = message.content,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            fontSize = 15.sp,
+                            lineHeight = 23.sp
+                        ),
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                }
+
+                // Interactive Quick Actions for User Message
+                AnimatedVisibility(visible = showUserActions) {
+                    Row(
+                        modifier = Modifier.padding(top = 4.dp, end = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TextButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onEditMessage(message.content)
+                                showUserActions = false
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit", modifier = Modifier.size(13.dp), tint = ClaudeTerracotta)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Edit", style = MaterialTheme.typography.labelSmall, color = ClaudeTerracotta)
+                        }
+
+                        TextButton(
+                            onClick = {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("User Prompt", message.content))
+                                Toast.makeText(context, "Copied prompt", Toast.LENGTH_SHORT).show()
+                                showUserActions = false
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Copy", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
         }
@@ -299,96 +485,88 @@ fun MessageItem(message: Message, onToggleThinking: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Start
             ) {
-                // Claude / AGY Avatar
+                // Claude Avatar with Terracotta Sparkle
                 Box(
                     modifier = Modifier
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(ClaudeTerracotta),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "A",
+                        text = "✦",
                         color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.bodySmall
+                        fontSize = 17.sp
                     )
                 }
 
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    // 1. Thinking block (Claude 3.7/4.6 Reasoning)
+                    // 1. Thinking Process Card (Claude 3.7 Style)
                     if (!message.thinking.isNullOrBlank()) {
                         ThinkingAccordionCard(
                             thinkingText = message.thinking,
                             isExpanded = message.isThinkingExpanded,
                             onToggle = onToggleThinking
                         )
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                     }
 
-                    // 2. Tool Execution Status
+                    // 2. Tool Execution Status Pill
                     if (!message.toolExecution.isNullOrBlank()) {
                         Row(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                                 .padding(horizontal = 10.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                Icons.Default.Build,
+                                Icons.Default.Terminal,
                                 contentDescription = null,
                                 modifier = Modifier.size(13.dp),
-                                tint = MaterialTheme.colorScheme.primary
+                                tint = ClaudeTerracotta
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
                                 text = message.toolExecution,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                                color = ClaudeTerracotta
                             )
                         }
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                     }
 
-                    // 3. Main Message Content
+                    // 3. Main Message Markdown Content
                     if (message.content.isNotBlank()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp))
-                                .background(MaterialTheme.colorScheme.surface)
-                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp))
-                                .padding(horizontal = 14.dp, vertical = 12.dp)
-                        ) {
-                            MarkdownContent(text = message.content)
-                        }
+                        MarkdownContent(text = message.content)
                     }
 
-                    // 4. Action bar below assistant message
+                    // 4. Subtle Action Bar below assistant message
                     if (!message.isStreaming) {
                         Row(
-                            modifier = Modifier.padding(top = 4.dp, start = 2.dp),
+                            modifier = Modifier.padding(top = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
                                 onClick = {
                                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     cm.setPrimaryClip(ClipData.newPlainText("Response", message.content))
-                                    Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Copied response to clipboard", Toast.LENGTH_SHORT).show()
                                 },
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
                                     Icons.Default.ContentCopy,
                                     contentDescription = "Copy message",
                                     modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
-                            Spacer(Modifier.width(8.dp))
+                            Spacer(Modifier.width(4.dp))
                             IconButton(
                                 onClick = {
                                     val intent = Intent().apply {
@@ -398,13 +576,25 @@ fun MessageItem(message: Message, onToggleThinking: () -> Unit) {
                                     }
                                     context.startActivity(Intent.createChooser(intent, "Share response"))
                                 },
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
                                     Icons.Default.Share,
                                     contentDescription = "Share",
                                     modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            IconButton(
+                                onClick = onRetry,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Regenerate / Retry",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
                         }
@@ -413,7 +603,7 @@ fun MessageItem(message: Message, onToggleThinking: () -> Unit) {
             }
         }
         else -> {
-            // System message
+            // System message pill
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -436,14 +626,19 @@ fun ThinkingAccordionCard(
     isExpanded: Boolean,
     onToggle: () -> Unit
 ) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val bgColor = if (isDark) ThinkingPurpleBgDark else ThinkingPurpleBgLight
+    val borderColor = if (isDark) ThinkingPurpleBorderDark else ThinkingPurpleBorderLight
+    val textColor = if (isDark) ThinkingPurpleTextDark else ThinkingPurpleTextLight
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(ThinkingPurpleBg)
-            .border(1.dp, ThinkingPurpleBorder, RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
             .clickable(onClick = onToggle)
-            .padding(10.dp)
+            .padding(12.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -455,31 +650,33 @@ fun ThinkingAccordionCard(
                     Icons.Default.AutoAwesome,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp),
-                    tint = ThinkingPurpleText
+                    tint = textColor
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = "Thinking Process",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    color = ThinkingPurpleText
+                    color = textColor
                 )
             }
             Icon(
                 if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                 contentDescription = null,
                 modifier = Modifier.size(16.dp),
-                tint = ThinkingPurpleText
+                tint = textColor
             )
         }
 
         AnimatedVisibility(visible = isExpanded) {
             Text(
                 text = thinkingText,
-                style = MaterialTheme.typography.bodySmall,
-                color = ThinkingPurpleText.copy(alpha = 0.85f),
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(top = 8.dp)
+                style = MaterialTheme.typography.bodySmall.copy(
+                    lineHeight = 18.sp,
+                    fontFamily = FontFamily.Monospace
+                ),
+                color = textColor.copy(alpha = 0.9f),
+                modifier = Modifier.padding(top = 10.dp)
             )
         }
     }
@@ -488,7 +685,7 @@ fun ThinkingAccordionCard(
 @Composable
 fun ClaudeTypingBubble() {
     Row(
-        modifier = Modifier.padding(start = 40.dp, top = 2.dp),
+        modifier = Modifier.padding(start = 44.dp, top = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         val infiniteTransition = rememberInfiniteTransition(label = "dots")
@@ -509,15 +706,17 @@ fun ClaudeTypingBubble() {
             modifier = Modifier
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             listOf(alpha1, alpha2, alpha3).forEach { a ->
                 Box(
                     modifier = Modifier
                         .size(6.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = a))
+                        .background(ClaudeTerracotta.copy(alpha = a))
                 )
             }
         }
@@ -532,31 +731,30 @@ fun QuickSlashChipsRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         for (p in plugins) {
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(p.badgeColor).copy(alpha = 0.12f))
-                    .border(1.dp, Color(p.badgeColor).copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
                     .clickable { onChipClick(p) }
-                    .padding(horizontal = 9.dp, vertical = 4.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     p.icon,
                     contentDescription = null,
-                    modifier = Modifier.size(13.dp),
-                    tint = Color(p.badgeColor)
+                    modifier = Modifier.size(12.dp),
+                    tint = ClaudeTerracotta
                 )
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(5.dp))
                 Text(
                     text = p.prefix,
                     style = MaterialTheme.typography.labelSmall,
-                    color = Color(p.badgeColor),
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -565,7 +763,7 @@ fun QuickSlashChipsRow(
 }
 
 @Composable
-fun ChatInputBar(
+fun ClaudeFloatingInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
@@ -574,68 +772,106 @@ fun ChatInputBar(
     isLoading: Boolean
 ) {
     Surface(
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth()
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(2.dp, RoundedCornerShape(24.dp))
+            .border(1.2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 8.dp)
-                .navigationBarsPadding()
-                .imePadding(),
+                .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.Bottom
         ) {
-            // Plugins drawer button
+            // Plugins drawer button (+)
             IconButton(
                 onClick = onOpenPlugins,
-                modifier = Modifier.size(42.dp)
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 Icon(
                     Icons.Default.Add,
                     contentDescription = "Slash Plugins",
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = ClaudeTerracotta,
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
-            // Text input
+            Spacer(Modifier.width(6.dp))
+
+            // Multi-line Text input
             OutlinedTextField(
                 value = text,
                 onValueChange = onTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 2.dp),
                 placeholder = {
                     Text(
                         if (isConnected) "Message Next AI or type /..." else "Connect in Settings to chat...",
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 },
-                shape = RoundedCornerShape(24.dp),
                 maxLines = 6,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     imeAction = ImeAction.Default
                 ),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent,
+                    cursorColor = ClaudeTerracotta
                 )
             )
 
-            Spacer(Modifier.width(8.dp))
+            if (text.isNotBlank()) {
+                IconButton(
+                    onClick = { onTextChange("") },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Clear input",
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
 
-            // Send Button
+            Spacer(Modifier.width(4.dp))
+
+            // Claude Circular Send Button
+            val canSend = text.isNotBlank() && isConnected && !isLoading
             FilledIconButton(
                 onClick = onSend,
-                enabled = text.isNotBlank() && isConnected && !isLoading,
-                modifier = Modifier.size(44.dp),
+                enabled = canSend,
+                modifier = Modifier.size(38.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primary
+                    containerColor = ClaudeTerracotta,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
                 )
             ) {
-                Icon(
-                    Icons.Default.ArrowUpward,
-                    contentDescription = "Send",
-                    tint = Color.White
-                )
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = ClaudeTerracotta
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.ArrowUpward,
+                        contentDescription = "Send",
+                        tint = if (canSend) Color.White else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }
@@ -649,67 +885,71 @@ fun EmptyChatGreeting(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(horizontal = 24.dp, vertical = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        // Claude Terracotta Star Halo
         Box(
             modifier = Modifier
-                .size(64.dp)
+                .size(68.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(ClaudeTerracotta.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                Icons.Default.AutoAwesome,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp),
-                tint = MaterialTheme.colorScheme.primary
+            Text(
+                text = "✦",
+                color = ClaudeTerracotta,
+                fontSize = 36.sp,
+                fontWeight = FontWeight.Bold
             )
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(18.dp))
 
         Text(
-            text = "Welcome to Next AI",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
+            text = "How can I help you today?",
+            style = MaterialTheme.typography.headlineSmall.copy(
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = (-0.4).sp
+            ),
+            color = MaterialTheme.colorScheme.onBackground
         )
 
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
 
         Text(
-            text = "Connected to Antigravity CLI in Colab",
-            style = MaterialTheme.typography.bodySmall,
+            text = "Connected to Antigravity CLI in Google Colab",
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(30.dp))
 
-        // 4 Starter Prompt Cards
+        // Claude Starter Prompt Cards
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             val starterPrompts = listOf(
-                "⚡ Deep Reasoning" to "/boost inspect the project and outline architecture improvements",
-                "🎯 Autonomous Goal" to "/goal check all code, fix bugs, and run tests",
-                "📋 Phased Roadmap" to "/plan design the next feature set with timeline",
-                "🌐 Live Web Lookup" to "/browser search the latest documentation"
+                Pair("⚡ Deep Reasoning", "/boost inspect the codebase architecture and suggest performance improvements"),
+                Pair("🎯 Autonomous Goal", "/goal write automated tests and fix edge cases"),
+                Pair("📋 Phased Roadmap", "/plan design next sprint features with phased execution"),
+                Pair("🌐 Real-time Web Search", "/browser find latest documentation for modern Jetpack Compose")
             )
 
             for ((title, prompt) in starterPrompts) {
-                Card(
+                Surface(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
                         .clickable { onPromptCardClick(prompt) },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -722,7 +962,7 @@ fun EmptyChatGreeting(
                             Icons.Default.ArrowForward,
                             contentDescription = null,
                             modifier = Modifier.size(15.dp),
-                            tint = MaterialTheme.colorScheme.outline
+                            tint = ClaudeTerracotta
                         )
                     }
                 }
@@ -742,27 +982,39 @@ fun HistoryDrawerContent(
 ) {
     val dateFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
 
-    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
+    ModalDrawerSheet(
+        modifier = Modifier.width(310.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp)
+                .padding(18.dp)
         ) {
-            Text(
-                text = "Conversations",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 12.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Conversations",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-0.3).sp
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
 
             Button(
                 onClick = onNewChat,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
             ) {
-                Icon(Icons.Default.Add, null)
-                Spacer(Modifier.width(6.dp))
-                Text("New Chat")
+                Icon(Icons.Default.Add, null, tint = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Text("Start New Chat", color = Color.White, fontWeight = FontWeight.SemiBold)
             }
 
             Spacer(Modifier.height(16.dp))
@@ -776,25 +1028,31 @@ fun HistoryDrawerContent(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (isActive) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isActive) ClaudeTerracotta.copy(alpha = 0.12f)
+                                else Color.Transparent
+                            )
                             .clickable { onSelectConversation(conv.id) }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
                             Icons.Default.ChatBubbleOutline,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                            modifier = Modifier.size(17.dp),
+                            tint = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.outline
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = conv.title.ifBlank { "Untitled" },
-                                style = MaterialTheme.typography.bodyMedium,
+                                text = conv.title.ifBlank { "Untitled Chat" },
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                                ),
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                color = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = dateFormat.format(Date(conv.updatedAt)),
@@ -817,19 +1075,31 @@ fun HistoryDrawerContent(
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 12.dp),
+                thickness = 0.8.dp,
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
 
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .clickable(onClick = onOpenSettings)
-                    .padding(8.dp),
+                    .padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Settings, contentDescription = null, tint = MaterialTheme.colorScheme.outline)
-                Spacer(Modifier.width(8.dp))
-                Text("Settings", style = MaterialTheme.typography.bodyMedium)
+                Icon(
+                    Icons.Default.Settings,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Settings & Colab Tunnel",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     }
