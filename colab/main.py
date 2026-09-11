@@ -70,6 +70,16 @@ async def health_check():
     }
 
 
+@app.get("/models")
+async def get_models():
+    """Return list of all supported AI models in Antigravity CLI."""
+    from agy_runner import AVAILABLE_MODELS
+    return {
+        "models": AVAILABLE_MODELS,
+        "count": len(AVAILABLE_MODELS)
+    }
+
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Accept file upload from Android app, save to /tmp."""
@@ -144,11 +154,13 @@ async def websocket_endpoint(websocket: WebSocket):
             user_message = raw
             conv_id = ""
             effort = "high"
+            model = ""
             try:
                 payload = json.loads(raw)
                 user_message = payload.get("message", raw)
                 conv_id = payload.get("conversation_id", "")
                 effort = payload.get("effort", "high")
+                model = payload.get("model", "")
                 file_name = payload.get("file_name")
                 file_data = payload.get("file_data")
                 if file_name and file_data:
@@ -166,8 +178,8 @@ async def websocket_endpoint(websocket: WebSocket):
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
 
-            # Stream agy command output back to client
-            async for event in run_agy_command(user_message, conv_id, effort):
+            # Stream agy command output back to client with model and effort
+            async for event in run_agy_command(user_message, conv_id, effort, model):
                 await manager.send(event, websocket)
 
     except WebSocketDisconnect:

@@ -25,7 +25,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.agychat.app.domain.model.AiModel
 import com.agychat.app.domain.model.ConnectionState
+import com.agychat.app.domain.model.ModelRegistry
 import com.agychat.app.ui.chat.ChatViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,6 +39,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE) }
     val connectionState by chatViewModel.connectionState.collectAsState()
+    val selectedModel by chatViewModel.selectedModel.collectAsState()
 
     var serverUrl by remember {
         mutableStateOf(
@@ -130,47 +133,169 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 2: AI Reasoning & Agent Configuration ─────────────
+            // ── Section 2: AI Model Selection & Reasoning ─────────────────
             SettingsCard(
-                title = "Agent Reasoning & CLI",
+                title = "AI Model & Reasoning",
                 icon = Icons.Default.Psychology
             ) {
                 Text(
-                    text = "Configure reasoning depth and tool permissions for the active Antigravity CLI session.",
+                    text = "Select active Antigravity CLI intelligence and configure reasoning effort.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
 
                 Text(
-                    text = "Reasoning Effort:",
+                    text = "Active CLI Model:",
                     style = MaterialTheme.typography.titleSmall
                 )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("low", "medium", "high").forEach { effort ->
-                        val isSelected = reasoningEffort == effort
-                        OutlinedButton(
-                            onClick = {
-                                reasoningEffort = effort
-                                prefs.edit().putString("reasoning_effort", effort).apply()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                            )
+                Spacer(Modifier.height(6.dp))
+
+                var showModelDropdown by remember { mutableStateOf(false) }
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedCard(
+                        onClick = { showModelDropdown = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = selectedModel.name,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (selectedModel.badge.isNotBlank()) {
+                                        Spacer(Modifier.width(8.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer
+                                        ) {
+                                            Text(
+                                                text = selectedModel.badge,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = "${selectedModel.provider} · ${selectedModel.description}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showModelDropdown,
+                        onDismissRequest = { showModelDropdown = false },
+                        modifier = Modifier.fillMaxWidth(0.88f)
+                    ) {
+                        ModelRegistry.ALL_MODELS.forEach { model ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = model.name,
+                                                fontWeight = if (selectedModel.id == model.id) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (selectedModel.id == model.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "(${model.provider})",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                        Text(
+                                            text = model.description,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    chatViewModel.selectModel(model)
+                                    showModelDropdown = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                Text(
+                    text = "Reasoning Depth:",
+                    style = MaterialTheme.typography.titleSmall
+                )
+
+                if (selectedModel.supportsEffort) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("low", "medium", "high").forEach { effort ->
+                            val isSelected = reasoningEffort == effort
+                            OutlinedButton(
+                                onClick = {
+                                    reasoningEffort = effort
+                                    chatViewModel.setReasoningEffort(effort)
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
+                                )
+                            ) {
+                                Text(
+                                    text = effort.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(Modifier.width(8.dp))
                             Text(
-                                text = effort.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                text = "${selectedModel.name} thinking level is fixed to default in Antigravity CLI and cannot be modified.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

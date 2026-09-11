@@ -15,18 +15,125 @@ data class PluginItem(
     val prefix: String,
     val tag: String,
     val examplePrompt: String,
-    val badgeColor: Long // ARGB Hex
+    val badgeColor: Long, // ARGB Hex
+    val isDirectAction: Boolean = false
 )
 
 @Singleton
 class PluginManager @Inject constructor() {
 
     val plugins = listOf(
+        // === Antigravity CLI Controls ===
+        PluginItem(
+            name = "model",
+            title = "Switch Model",
+            description = "Switch active AI model: Gemini 3.8 Flash, Claude Sonnet 4.6, Claude Opus, GPT-OSS",
+            icon = Icons.Default.Tune,
+            prefix = "/model",
+            tag = "CLI",
+            examplePrompt = "/model",
+            badgeColor = 0xFF1976D2, // Blue
+            isDirectAction = true
+        ),
+        PluginItem(
+            name = "effort",
+            title = "Reasoning Effort",
+            description = "Adjust thinking budget: High, Medium, Low (Gemini & Open models)",
+            icon = Icons.Default.ElectricBolt,
+            prefix = "/effort",
+            tag = "CLI",
+            examplePrompt = "/effort",
+            badgeColor = 0xFFD4704B, // Terracotta
+            isDirectAction = true
+        ),
+        PluginItem(
+            name = "skills",
+            title = "Active Skills",
+            description = "View all loaded skills, integrations, and workflow extensions in Antigravity",
+            icon = Icons.Default.Extension,
+            prefix = "/skills",
+            tag = "CLI",
+            examplePrompt = "/skills",
+            badgeColor = 0xFF0097A7
+        ),
+        PluginItem(
+            name = "agents",
+            title = "Custom Agents",
+            description = "List available custom agents, subagents, and roles",
+            icon = Icons.Default.AccountCircle,
+            prefix = "/agents",
+            tag = "CLI",
+            examplePrompt = "/agents",
+            badgeColor = 0xFF5E35B1
+        ),
+        PluginItem(
+            name = "usage",
+            title = "Quota & Usage",
+            description = "Inspect token quota, token usage, and daily limits in Antigravity",
+            icon = Icons.Default.BarChart,
+            prefix = "/usage",
+            tag = "CLI",
+            examplePrompt = "/usage",
+            badgeColor = 0xFF388E3C
+        ),
+        PluginItem(
+            name = "credits",
+            title = "G1 Compute Credits",
+            description = "Check remaining G1 credits and compute allocation",
+            icon = Icons.Default.MonetizationOn,
+            prefix = "/credits",
+            tag = "CLI",
+            examplePrompt = "/credits",
+            badgeColor = 0xFFF57F17
+        ),
+        PluginItem(
+            name = "permissions",
+            title = "Tool Permissions",
+            description = "Manage auto-approve rules and security policies for bash and edits",
+            icon = Icons.Default.Security,
+            prefix = "/permissions",
+            tag = "CLI",
+            examplePrompt = "/permissions",
+            badgeColor = 0xFF0288D1
+        ),
+        PluginItem(
+            name = "changelog",
+            title = "CLI Changelog",
+            description = "Show Antigravity release notes, new features, and version updates",
+            icon = Icons.Default.History,
+            prefix = "/changelog",
+            tag = "CLI",
+            examplePrompt = "/changelog",
+            badgeColor = 0xFF6D4C41
+        ),
+        PluginItem(
+            name = "clear",
+            title = "Clear Chat",
+            description = "Clear current conversation messages and start a fresh turn",
+            icon = Icons.Default.DeleteOutline,
+            prefix = "/clear",
+            tag = "ACTION",
+            examplePrompt = "/clear",
+            badgeColor = 0xFFD32F2F,
+            isDirectAction = true
+        ),
+        PluginItem(
+            name = "help",
+            title = "Command Directory",
+            description = "Show full list of CLI commands, capabilities, and keybindings",
+            icon = Icons.Default.HelpOutline,
+            prefix = "/help",
+            tag = "CLI",
+            examplePrompt = "/help",
+            badgeColor = 0xFF455A64
+        ),
+
+        // === Autonomous Agent Skills ===
         PluginItem(
             name = "boost",
             title = "Deep Thinking",
             description = "Multi-perspective deep reasoning, architecture review, and rigorous verification.",
-            icon = Icons.Default.ElectricBolt,
+            icon = Icons.Default.AutoAwesome,
             prefix = "/boost",
             tag = "REASONING",
             examplePrompt = "/boost review my architecture and find edge cases",
@@ -112,5 +219,16 @@ class PluginManager @Inject constructor() {
             tag = it.tag,
             example = it.examplePrompt
         )
+    }
+
+    fun filterCommands(query: String): List<PluginItem> {
+        val cleanQuery = query.removePrefix("/").trim().lowercase()
+        if (cleanQuery.isEmpty()) return plugins
+        return plugins.filter {
+            it.name.lowercase().contains(cleanQuery) ||
+            it.title.lowercase().contains(cleanQuery) ||
+            it.tag.lowercase().contains(cleanQuery) ||
+            it.description.lowercase().contains(cleanQuery)
+        }
     }
 }

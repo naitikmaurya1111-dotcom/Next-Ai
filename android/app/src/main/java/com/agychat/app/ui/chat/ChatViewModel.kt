@@ -9,9 +9,11 @@ import com.agychat.app.data.local.MessageEntity
 import com.agychat.app.data.network.AgyWebSocketClient
 import android.net.Uri
 import android.util.Base64
+import com.agychat.app.domain.model.AiModel
 import com.agychat.app.domain.model.AttachmentItem
 import com.agychat.app.domain.model.ConnectionState
 import com.agychat.app.domain.model.Message
+import com.agychat.app.domain.model.ModelRegistry
 import com.agychat.app.domain.model.SlashCommand
 import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.domain.model.WsEvent
@@ -61,6 +63,19 @@ class ChatViewModel @Inject constructor(
         _selectedAttachment.value = null
     }
 
+    private val _selectedModel = MutableStateFlow<AiModel>(ModelRegistry.DEFAULT_MODEL)
+    val selectedModel: StateFlow<AiModel> = _selectedModel.asStateFlow()
+
+    fun selectModel(model: AiModel) {
+        _selectedModel.value = model
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("selected_model", model.id).apply()
+        // If the chosen model has fixed thinking (e.g. Claude or GPT-OSS), update effort to default
+        if (!model.supportsEffort) {
+            _reasoningEffort.value = model.defaultEffort
+        }
+    }
+
     private val _reasoningEffort = MutableStateFlow("high")
     val reasoningEffort: StateFlow<String> = _reasoningEffort.asStateFlow()
 
@@ -82,12 +97,15 @@ class ChatViewModel @Inject constructor(
     val conversations = chatDao.getAllConversations()
 
     init {
-        // Auto-connect to last saved URL on app launch, or fall back to active Colab bridge tunnel URL
+        // Load saved model preference
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        val savedModelId = prefs.getString("selected_model", ModelRegistry.DEFAULT_MODEL.id)
+        _selectedModel.value = ModelRegistry.findById(savedModelId)
+
         val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
         _reasoningEffort.value = savedEffort
 
-        val savedUrl = prefs.getString("server_url", "wss://weather-manitoba-derek-intensive.trycloudflare.com/ws")
+        val savedUrl = prefs.getString("server_url", "wss://fell-worldwide-mistakes-asks.trycloudflare.com/ws")
         if (!savedUrl.isNullOrBlank()) {
             connectToServer(savedUrl)
         }
@@ -445,6 +463,7 @@ class ChatViewModel @Inject constructor(
             put("message", trimmed.ifBlank { "Please inspect the attached file: ${attachment?.name}" })
             put("conversation_id", currentConversationId)
             put("effort", effort)
+            put("model", _selectedModel.value.id)
             if (attachment != null) {
                 put("file_name", attachment.name)
                 put("file_is_image", attachment.isImage)
@@ -546,6 +565,7 @@ class ChatViewModel @Inject constructor(
             put("message", lastUserMsg.content)
             put("conversation_id", currentConversationId)
             put("effort", effort)
+            put("model", _selectedModel.value.id)
         }.toString()
 
         webSocketClient.sendMessage(payload)
@@ -567,6 +587,10 @@ class ChatViewModel @Inject constructor(
             chatDao.clearAllMessages()
             startNewConversation()
         }
+    }
+
+    fun clearChat() {
+        startNewConversation()
     }
 
     fun startNewConversation() {

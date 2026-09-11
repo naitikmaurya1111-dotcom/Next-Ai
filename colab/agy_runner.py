@@ -52,7 +52,73 @@ def get_agy_path() -> str:
             return c
     return "agy"
 
-async def run_agy_command(message: str, client_conv_id: str = "", effort: str = "high"):
+AVAILABLE_MODELS = [
+    {
+        "id": "gemini-3.8-flash-high",
+        "name": "Gemini 3.8 Flash",
+        "provider": "Google",
+        "description": "Latest flagship multimodal and high-speed coding model",
+        "supports_effort": True,
+        "default_effort": "high",
+        "badge": "Default · High Speed"
+    },
+    {
+        "id": "gemini-3.7-flash-high",
+        "name": "Gemini 3.7 Flash",
+        "provider": "Google",
+        "description": "Hybrid reasoning model with balanced latency and depth",
+        "supports_effort": True,
+        "default_effort": "high",
+        "badge": "Hybrid Reasoning"
+    },
+    {
+        "id": "gemini-3.6-flash-high",
+        "name": "Gemini 3.6 Flash",
+        "provider": "Google",
+        "description": "Lightweight, ultra-low latency response model",
+        "supports_effort": True,
+        "default_effort": "high",
+        "badge": "Lightweight"
+    },
+    {
+        "id": "gemini-3.1-pro-high",
+        "name": "Gemini 3.1 Pro",
+        "provider": "Google",
+        "description": "Deep multi-file architecture, complex refactoring & math",
+        "supports_effort": True,
+        "default_effort": "high",
+        "badge": "Pro Architecture"
+    },
+    {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "provider": "Anthropic",
+        "description": "State-of-the-art coding, system architecture & creative design",
+        "supports_effort": False,
+        "default_effort": "default",
+        "badge": "Thinking Default"
+    },
+    {
+        "id": "claude-opus-4-6-thinking",
+        "name": "Claude Opus 4.6",
+        "provider": "Anthropic",
+        "description": "Deepest cognitive reasoning & complex autonomous workflows",
+        "supports_effort": False,
+        "default_effort": "default",
+        "badge": "Maximum Reasoning"
+    },
+    {
+        "id": "gpt-oss-120b-medium",
+        "name": "GPT-OSS 120B",
+        "provider": "Open Source",
+        "description": "High-capacity open-weights model for code & general tasks",
+        "supports_effort": False,
+        "default_effort": "medium",
+        "badge": "Open Weights"
+    }
+]
+
+async def run_agy_command(message: str, client_conv_id: str = "", effort: str = "high", model: str = ""):
     """
     Runs agy command asynchronously with native stream-json output
     and yields real-time JSON-framed tokens (thinking, tool_event, chunk, done, error)
@@ -71,8 +137,17 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
-    if effort in ("low", "medium", "high"):
-        cmd_args.extend(["--effort", effort])
+    # Model flag selection
+    clean_model = model.strip() if model else ""
+    if clean_model:
+        cmd_args.extend(["--model", clean_model])
+        # Antigravity CLI strictly disallows --effort for Claude and GPT-OSS models
+        if "claude" not in clean_model.lower() and "gpt-oss" not in clean_model.lower():
+            if effort in ("low", "medium", "high"):
+                cmd_args.extend(["--effort", effort])
+    else:
+        if effort in ("low", "medium", "high"):
+            cmd_args.extend(["--effort", effort])
 
     cmd_args.extend([
         "--dangerously-skip-permissions",
@@ -80,8 +155,8 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
         "-p", message_trimmed
     ])
 
-    logger.info(f"Executing: {' '.join(cmd_args[:4])} ... -p '{message_trimmed[:40]}'")
-    yield _make_event("info", "AGY thinking...")
+    logger.info(f"Executing: {' '.join(cmd_args[:6])} ... -p '{message_trimmed[:40]}'")
+    yield _make_event("info", f"AGY running with {clean_model or 'default model'}...")
 
     try:
         process = await asyncio.create_subprocess_exec(
