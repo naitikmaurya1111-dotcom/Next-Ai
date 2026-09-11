@@ -3,12 +3,26 @@ package com.agychat.app.domain.model
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class ToolExecutionItem(
+    val id: String = "",
+    val toolName: String,
+    val state: String = "DONE", // "ACTIVE", "DONE", "ERROR"
+    val command: String? = null,
+    val targetFile: String? = null,
+    val parametersSummary: String? = null,
+    val output: String? = null,
+    val durationSeconds: Double = 0.0
+)
+
+@Serializable
 data class Message(
     val id: String,
     val role: String, // "user", "assistant", "system"
     val content: String = "",
     val thinking: String? = null,
     val toolExecution: String? = null,
+    val toolExecutions: List<ToolExecutionItem> = emptyList(),
+    val isToolsExpanded: Boolean = true,
     val timestamp: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false,
     val isThinking: Boolean = false,

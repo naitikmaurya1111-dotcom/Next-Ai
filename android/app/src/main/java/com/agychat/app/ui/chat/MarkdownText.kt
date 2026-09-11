@@ -38,13 +38,26 @@ import com.agychat.app.ui.theme.CodeBlockBorder
 import com.agychat.app.ui.theme.CodeBlockHeader
 import kotlinx.coroutines.delay
 
+fun sanitizeMarkdownInput(raw: String): String {
+    if (raw.isBlank()) return ""
+    return raw
+        // Strip ANSI escape codes (e.g. \u001B[31m, \u001B[0m)
+        .replace(Regex("\u001B\\[[;?0-9]*[a-zA-Z]"), "")
+        // Strip terminal query responses and bracketed paste noise (e.g. //#]jsi^9)
+        .replace(Regex("//#\\][^\r\n]*"), "")
+        .replace(Regex("\\[\\?[0-9;]*[a-zA-Z]"), "")
+        // Strip non-printable ASCII control characters except \n, \r, \t
+        .replace(Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]"), "")
+}
+
 @Composable
 fun MarkdownContent(
     text: String,
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface
 ) {
-    val sections = remember(text) { parseMarkdownBlocks(text) }
+    val cleanText = remember(text) { sanitizeMarkdownInput(text) }
+    val sections = remember(cleanText) { parseMarkdownBlocks(cleanText) }
 
     Column(
         modifier = modifier,

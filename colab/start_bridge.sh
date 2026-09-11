@@ -14,10 +14,21 @@ nohup python3 drive_sync_manager.py daemon 300 > /tmp/nextai_backup_daemon.log 2
 echo "Starting AGY Colab Bridge Server on port 8000..."
 nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/agy_bridge.log 2>&1 &
 
-sleep 2
+# Wait up to 10s for server to start
+SERVER_UP=false
+for i in {1..10}; do
+    if curl -s http://127.0.0.1:8000/health >/dev/null 2>&1; then
+        SERVER_UP=true
+        break
+    fi
+    sleep 1
+done
 
-# Verify server is up
-curl -s http://127.0.0.1:8000/health || (echo "Failed to start server. Log:" && cat /tmp/agy_bridge.log && exit 1)
+if [ "$SERVER_UP" = false ]; then
+    echo "Failed to start server. Log:"
+    cat /tmp/agy_bridge.log
+    exit 1
+fi
 
 echo "Server running locally. Starting Cloudflare Tunnel to generate public WebSocket URL..."
 rm -f /tmp/cloudflared.log

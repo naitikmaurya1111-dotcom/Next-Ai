@@ -56,6 +56,7 @@ import com.agychat.app.domain.PluginManager
 import com.agychat.app.domain.model.AttachmentItem
 import com.agychat.app.domain.model.ConnectionState
 import com.agychat.app.domain.model.Message
+import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.ui.plugin.PluginDrawer
 import com.agychat.app.ui.theme.*
 import kotlinx.coroutines.launch
@@ -528,6 +529,10 @@ fun ChatScreen(
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.toggleThinkingExpanded(msg.id)
                                 },
+                                onToggleTools = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.toggleToolsExpanded(msg.id)
+                                },
                                 onRetry = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.regenerateLastResponse()
@@ -756,6 +761,7 @@ fun MessageItem(
     isSpeaking: Boolean = false,
     isLastAssistant: Boolean = false,
     onToggleThinking: () -> Unit,
+    onToggleTools: () -> Unit = {},
     onRetry: () -> Unit = {},
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: () -> Unit = {},
@@ -922,29 +928,14 @@ fun MessageItem(
                         Spacer(Modifier.height(10.dp))
                     }
 
-                    // 2. Tool Execution Status Pill
-                    if (!message.toolExecution.isNullOrBlank()) {
-                        Row(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                .padding(horizontal = 10.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Terminal,
-                                contentDescription = null,
-                                modifier = Modifier.size(13.dp),
-                                tint = ClaudeTerracotta
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = message.toolExecution,
-                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                                color = ClaudeTerracotta
-                            )
-                        }
+                    // 2. AGY Terminal Execution Card (bash commands, file edits, views, searches)
+                    if (message.toolExecutions.isNotEmpty() || !message.toolExecution.isNullOrBlank()) {
+                        AgyTerminalExecutionCard(
+                            toolItems = message.toolExecutions,
+                            singleStatus = message.toolExecution,
+                            isExpanded = message.isToolsExpanded,
+                            onToggle = onToggleTools
+                        )
                         Spacer(Modifier.height(10.dp))
                     }
 
@@ -1157,6 +1148,342 @@ fun ThinkingAccordionCard(
                 color = textColor.copy(alpha = 0.9f),
                 modifier = Modifier.padding(top = 10.dp)
             )
+        }
+    }
+}
+
+@Composable
+fun AgyTerminalExecutionCard(
+    toolItems: List<ToolExecutionItem>,
+    singleStatus: String?,
+    isExpanded: Boolean,
+    onToggle: () -> Unit
+) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+
+    val terminalCardBg = if (isDark) Color(0xFF16171D) else Color(0xFFF6F5F2)
+    val terminalBorder = if (isDark) Color(0xFF282932) else Color(0xFFE2DFD8)
+    val terminalHeaderBg = if (isDark) Color(0xFF1E2028) else Color(0xFFECEAE3)
+    val terminalCodeBg = if (isDark) Color(0xFF0F1014) else Color(0xFFFFFFFF)
+    val terminalCodeBorder = if (isDark) Color(0xFF252630) else Color(0xFFDDD9D0)
+    val greenAccent = Color(0xFF10B981)
+    val amberAccent = Color(0xFFF59E0B)
+
+    val anyRunning = toolItems.any { it.state == "ACTIVE" }
+    val totalToolsCount = maxOf(toolItems.size, if (!singleStatus.isNullOrBlank()) 1 else 0)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(terminalCardBg)
+            .border(1.dp, terminalBorder, RoundedCornerShape(12.dp))
+    ) {
+        // Terminal Card Header Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(terminalHeaderBg)
+                .clickable(onClick = onToggle)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (anyRunning) amberAccent.copy(alpha = 0.2f) else greenAccent.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Terminal,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                        tint = if (anyRunning) amberAccent else greenAccent
+                    )
+                }
+
+                Spacer(Modifier.width(9.dp))
+
+                Text(
+                    text = "AGY Execution",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                // Pill counter
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (anyRunning) amberAccent.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (anyRunning) "Running..." else "$totalToolsCount step${if (totalToolsCount != 1) "s" else ""}",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = if (anyRunning) amberAccent else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Icon(
+                if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = if (isExpanded) "Collapse" else "Expand",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        // Body
+        AnimatedVisibility(visible = isExpanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (toolItems.isEmpty() && !singleStatus.isNullOrBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(terminalCodeBg)
+                            .border(0.6.dp, terminalCodeBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = singleStatus,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                } else {
+                    for (item in toolItems) {
+                        ToolExecutionItemRow(
+                            item = item,
+                            codeBg = terminalCodeBg,
+                            borderColor = terminalCodeBorder,
+                            isDark = isDark
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ToolExecutionItemRow(
+    item: ToolExecutionItem,
+    codeBg: Color,
+    borderColor: Color,
+    isDark: Boolean
+) {
+    val context = LocalContext.current
+    var isOutputExpanded by remember { mutableStateOf(false) }
+
+    val (icon, iconTint, toolTitle) = when (item.toolName) {
+        "run_command" -> Triple(
+            Icons.Default.Terminal,
+            Color(0xFF10B981),
+            item.command ?: "bash command"
+        )
+        "replace_file_content", "write_to_file", "sed_file" -> Triple(
+            Icons.Default.Edit,
+            Color(0xFFF59E0B),
+            item.targetFile ?: "File Edit"
+        )
+        "view_file", "read_resource", "read_url_content" -> Triple(
+            Icons.Default.Description,
+            Color(0xFF3B82F6),
+            item.targetFile ?: "View File"
+        )
+        "grep_search", "find_by_name", "search_web" -> Triple(
+            Icons.Default.Search,
+            Color(0xFF8B5CF6),
+            item.parametersSummary ?: item.toolName
+        )
+        else -> Triple(
+            Icons.Default.Code,
+            ClaudeTerracotta,
+            item.toolName
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(codeBg)
+            .border(0.7.dp, borderColor, RoundedCornerShape(8.dp))
+            .padding(9.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = iconTint
+                )
+
+                Spacer(Modifier.width(7.dp))
+
+                Text(
+                    text = toolTitle,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            Spacer(Modifier.width(6.dp))
+
+            // Duration or Active status pill
+            if (item.state == "ACTIVE") {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFFF59E0B).copy(alpha = 0.2f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "ACTIVE",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = Color(0xFFF59E0B)
+                    )
+                }
+            } else if (item.durationSeconds > 0) {
+                Text(
+                    text = String.format(Locale.US, "%.2fs", item.durationSeconds),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
+        }
+
+        // Show command line if tool is run_command and title was different
+        if (item.toolName == "run_command" && !item.command.isNullOrBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "\$ ",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF10B981)
+                    )
+                )
+                Text(
+                    text = item.command,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                )
+            }
+        }
+
+        // Output toggle & Console
+        if (!item.output.isNullOrBlank()) {
+            Spacer(Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { isOutputExpanded = !isOutputExpanded }
+                    .padding(vertical = 2.dp, horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isOutputExpanded) "▼ Hide output" else "▶ Show output",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = ClaudeTerracotta
+                )
+            }
+
+            AnimatedVisibility(visible = isOutputExpanded) {
+                Column(
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isDark) Color(0xFF090A0D) else Color(0xFF202124))
+                        .padding(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        IconButton(
+                            onClick = {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("Command Output", item.output))
+                                Toast.makeText(context, "Output copied", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.size(20.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Copy output",
+                                modifier = Modifier.size(12.dp),
+                                tint = Color(0xFFA6A6B0)
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = item.output,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        ),
+                        color = Color(0xFFEDEDF0),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    )
+                }
+            }
         }
     }
 }

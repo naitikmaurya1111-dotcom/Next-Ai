@@ -13,6 +13,7 @@ import com.agychat.app.domain.model.AttachmentItem
 import com.agychat.app.domain.model.ConnectionState
 import com.agychat.app.domain.model.Message
 import com.agychat.app.domain.model.SlashCommand
+import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.domain.model.WsEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -81,12 +82,12 @@ class ChatViewModel @Inject constructor(
     val conversations = chatDao.getAllConversations()
 
     init {
-        // Auto-connect to last saved URL on app launch, or fall back to default bridge URL
+        // Auto-connect to last saved URL on app launch, or fall back to active Colab bridge tunnel URL
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
         val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
         _reasoningEffort.value = savedEffort
 
-        val savedUrl = prefs.getString("server_url", "wss://english-memories-opens-judicial.trycloudflare.com/ws")
+        val savedUrl = prefs.getString("server_url", "wss://computational-really-dish-div.trycloudflare.com/ws")
         if (!savedUrl.isNullOrBlank()) {
             connectToServer(savedUrl)
         }
@@ -136,6 +137,15 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun sanitizeChunk(raw: String): String {
+        if (raw.isBlank()) return ""
+        return raw
+            .replace(Regex("\u001B\\[[;?0-9]*[a-zA-Z]"), "")
+            .replace(Regex("//#\\][^\r\n]*"), "")
+            .replace(Regex("\\[\\?[0-9;]*[a-zA-Z]"), "")
+            .replace(Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]"), "")
+    }
+
     private fun handleIncomingMessage(rawText: String) {
         try {
             val json = JSONObject(rawText)
@@ -148,13 +158,20 @@ class ChatViewModel @Inject constructor(
                     _currentStatus.value = null
                 }
                 "info" -> {
-                    _currentStatus.value = content
+                    _currentStatus.value = sanitizeChunk(content)
                 }
                 "thinking" -> {
                     appendThinkingChunk(content)
                 }
+                "tool_event" -> {
+                    handleToolEvent(json)
+                }
                 "tool" -> {
-                    updateToolStatus(content)
+                    if (json.has("tool_name")) {
+                        handleToolEvent(json)
+                    } else {
+                        updateToolStatus(content)
+                    }
                 }
                 "chunk" -> {
                     appendContentChunk(content)
@@ -171,22 +188,114 @@ class ChatViewModel @Inject constructor(
                     _currentStatus.value = null
                 }
                 else -> {
-                    appendContentChunk(rawText)
+                    // Ignore unrecognized event types to prevent distorted syntax leakage
                 }
             }
         } catch (e: Exception) {
-            appendContentChunk(rawText)
+            // Never append unparsed JSON or raw control text directly into message content
         }
     }
 
+    private fun handleToolEvent(json: JSONObject) {
+        val toolName = json.optString("tool_name", json.optString("content", "tool"))
+        val toolState = json.optString("tool_state", "DONE")
+        val paramsObj = json.optJSONObject("tool_params")
+        val output = sanitizeChunk(json.optString("tool_output", ""))
+        val duration = json.optDouble("duration", 0.0)
+
+        val command = paramsObj?.optString("CommandLine")?.takeIf { it.isNotBlank() }
+            ?: paramsObj?.optString("command")?.takeIf { it.isNotBlank() }
+        val targetFile = paramsObj?.optString("TargetFile")?.takeIf { it.isNotBlank() }
+            ?: paramsObj?.optString("AbsolutePath")?.takeIf { it.isNotBlank() }
+            ?: paramsObj?.optString("SearchPath")?.takeIf { it.isNotBlank() }
+            ?: paramsObj?.optString("path")?.takeIf { it.isNotBlank() }
+        val summary = when {
+            paramsObj?.has("Query") == true -> "Query: \"" + paramsObj.optString("Query") + "\""
+            paramsObj?.has("Pattern") == true -> "Pattern: \"" + paramsObj.optString("Pattern") + "\""
+            paramsObj?.has("Instruction") == true -> paramsObj.optString("Instruction")
+            else -> null
+        }
+
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == streamingMessageId }
+
+        val statusText = if (toolState == "ACTIVE") "Running $toolName..." else "Completed $toolName"
+        _currentStatus.value = statusText
+
+        if (idx >= 0) {
+            val cur = list[idx]
+            val toolList = cur.toolExecutions.toMutableList()
+            val existingActiveIdx = toolList.indexOfLast { it.toolName == toolName && it.state == "ACTIVE" }
+            if (existingActiveIdx >= 0 && toolState != "ACTIVE") {
+                val existing = toolList[existingActiveIdx]
+                toolList[existingActiveIdx] = existing.copy(
+                    state = toolState,
+                    command = command ?: existing.command,
+                    targetFile = targetFile ?: existing.targetFile,
+                    parametersSummary = summary ?: existing.parametersSummary,
+                    output = if (output.isNotBlank()) output else existing.output,
+                    durationSeconds = if (duration > 0) duration else existing.durationSeconds
+                )
+            } else {
+                toolList.add(
+                    ToolExecutionItem(
+                        id = UUID.randomUUID().toString(),
+                        toolName = toolName,
+                        state = toolState,
+                        command = command,
+                        targetFile = targetFile,
+                        parametersSummary = summary,
+                        output = output.takeIf { it.isNotBlank() },
+                        durationSeconds = duration
+                    )
+                )
+            }
+            list[idx] = cur.copy(
+                toolExecution = statusText,
+                toolExecutions = toolList,
+                isStreaming = true
+            )
+            _messages.value = list
+        } else {
+            val newId = UUID.randomUUID().toString()
+            streamingMessageId = newId
+            val newTool = ToolExecutionItem(
+                id = UUID.randomUUID().toString(),
+                toolName = toolName,
+                state = toolState,
+                command = command,
+                targetFile = targetFile,
+                parametersSummary = summary,
+                output = output.takeIf { it.isNotBlank() },
+                durationSeconds = duration
+            )
+            list.add(
+                Message(
+                    id = newId,
+                    role = "assistant",
+                    content = "",
+                    toolExecution = statusText,
+                    toolExecutions = listOf(newTool),
+                    timestamp = System.currentTimeMillis(),
+                    isStreaming = true
+                )
+            )
+            _messages.value = list
+        }
+        _isLoading.value = true
+    }
+
     private fun appendContentChunk(chunk: String) {
+        val cleanChunk = sanitizeChunk(chunk)
+        if (cleanChunk.isEmpty()) return
+
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == streamingMessageId }
 
         if (idx >= 0) {
             val cur = list[idx]
             list[idx] = cur.copy(
-                content = cur.content + chunk,
+                content = cur.content + cleanChunk,
                 isStreaming = true,
                 isThinking = false
             )
@@ -197,7 +306,7 @@ class ChatViewModel @Inject constructor(
                 Message(
                     id = newId,
                     role = "assistant",
-                    content = chunk,
+                    content = cleanChunk,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true,
                     isThinking = false
@@ -209,6 +318,9 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun appendThinkingChunk(chunk: String) {
+        val cleanChunk = sanitizeChunk(chunk)
+        if (cleanChunk.isEmpty()) return
+
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == streamingMessageId }
 
@@ -216,7 +328,7 @@ class ChatViewModel @Inject constructor(
             val cur = list[idx]
             val prevThinking = cur.thinking ?: ""
             list[idx] = cur.copy(
-                thinking = prevThinking + chunk,
+                thinking = prevThinking + cleanChunk,
                 isStreaming = true,
                 isThinking = true
             )
@@ -228,7 +340,7 @@ class ChatViewModel @Inject constructor(
                     id = newId,
                     role = "assistant",
                     content = "",
-                    thinking = chunk,
+                    thinking = cleanChunk,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true,
                     isThinking = true
@@ -240,10 +352,11 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun updateToolStatus(toolText: String) {
+        val cleanStatus = sanitizeChunk(toolText)
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == streamingMessageId }
         if (idx >= 0) {
-            list[idx] = list[idx].copy(toolExecution = toolText)
+            list[idx] = list[idx].copy(toolExecution = cleanStatus)
             _messages.value = list
         }
     }
@@ -254,7 +367,7 @@ class ChatViewModel @Inject constructor(
         val idx = list.indexOfFirst { it.id == id }
         if (idx >= 0) {
             val cur = list[idx]
-            val resolvedContent = if (!finalContent.isNullOrBlank()) finalContent else cur.content
+            val resolvedContent = if (!finalContent.isNullOrBlank()) sanitizeChunk(finalContent) else cur.content
             val finalized = cur.copy(
                 content = resolvedContent,
                 isStreaming = false,
@@ -273,6 +386,16 @@ class ChatViewModel @Inject constructor(
         if (idx >= 0) {
             val cur = list[idx]
             list[idx] = cur.copy(isThinkingExpanded = !cur.isThinkingExpanded)
+            _messages.value = list
+        }
+    }
+
+    fun toggleToolsExpanded(messageId: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx >= 0) {
+            val cur = list[idx]
+            list[idx] = cur.copy(isToolsExpanded = !cur.isToolsExpanded)
             _messages.value = list
         }
     }
