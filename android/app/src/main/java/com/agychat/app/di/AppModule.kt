@@ -57,7 +57,7 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideGoogleDriveManager(@ApplicationContext context: Context): GoogleDriveManager {
-        return GoogleDriveManager(context)
+    fun provideGoogleDriveManager(): GoogleDriveManager {
+        return GoogleDriveManager()
     }
 }
