@@ -1,0 +1,56 @@
+# Android build outputs
+android/.gradle/
+android/local.properties
+android/.idea/
+android/app/build/
+android/build/
+android/captures/
+android/.externalNativeBuild/
+android/.cxx/
+android/*.iml
+android/**/*.iml
+
+# Keystore files (NEVER commit these)
+*.jks
+*.keystore
+keystore.properties
+
+# Google services (contains API keys — add your own)
+android/app/google-services.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.env
+venv/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Secrets & tokens
+*.token
+secrets.json
+.env.local
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Linux
+*~
+
+# Logs
+*.log
