@@ -37,11 +37,11 @@ def get_agy_path() -> str:
             return c
     return "agy"
 
-async def run_agy_command(message: str, client_conv_id: str = ""):
+async def run_agy_command(message: str, client_conv_id: str = "", effort: str = "high"):
     """
     Runs agy command asynchronously with native stream-json output
-    and yields real-time JSON-framed tokens directly to the Android app.
-    Maintains clean conversation continuity per client conversation ID.
+    and yields real-time JSON-framed tokens (thinking, tool, chunk, done, error)
+    directly to the Android app.
     """
     message_trimmed = message.strip()
     if not message_trimmed:
@@ -50,7 +50,6 @@ async def run_agy_command(message: str, client_conv_id: str = ""):
 
     agy_bin = get_agy_path()
 
-    # Determine if we have an existing agy conversation ID for this client
     agy_conv_id = conversation_map.get(client_conv_id) if client_conv_id else None
 
     cmd_args = [agy_bin]
@@ -58,13 +57,16 @@ async def run_agy_command(message: str, client_conv_id: str = ""):
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
+    if effort in ("low", "medium", "high"):
+        cmd_args.extend(["--effort", effort])
+
     cmd_args.extend([
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "-p", message_trimmed
     ])
 
-    logger.info(f"Executing: {' '.join(cmd_args[:3])} ... -p '{message_trimmed[:40]}'")
+    logger.info(f"Executing: {' '.join(cmd_args[:4])} ... -p '{message_trimmed[:40]}'")
     yield _make_event("info", "AGY thinking...")
 
     try:
@@ -100,8 +102,15 @@ async def run_agy_command(message: str, client_conv_id: str = ""):
 
                 elif event_type == "step_update":
                     step_update = data.get("step_update", {})
+                    step_type = step_update.get("step_type", "")
                     text_delta = step_update.get("text_delta")
-                    if text_delta:
+
+                    if (step_type == "thought" or step_type == "reasoning") and text_delta:
+                        yield _make_event("thinking", text_delta)
+                    elif step_type == "tool_call":
+                        tool_name = step_update.get("tool_name", "Tool")
+                        yield _make_event("tool", f"Running: {tool_name}")
+                    elif text_delta:
                         accumulated_text += text_delta
                         yield _make_event("chunk", text_delta)
 

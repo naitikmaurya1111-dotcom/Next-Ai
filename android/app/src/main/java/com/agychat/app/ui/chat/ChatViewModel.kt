@@ -11,6 +11,8 @@ import com.agychat.app.domain.model.Message
 import com.agychat.app.domain.model.SlashCommand
 import com.agychat.app.domain.model.WsEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,167 +37,249 @@ class ChatViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _currentStatus = MutableStateFlow<String?>(null)
+    val currentStatus: StateFlow<String?> = _currentStatus.asStateFlow()
+
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
-    private var currentConversationId: String = UUID.randomUUID().toString()
+    // Active conversation ID
+    var currentConversationId: String = UUID.randomUUID().toString()
+        private set
 
-    // Tracks the ID of the current streaming message being assembled
+    // Stream tracking
     private var streamingMessageId: String? = null
+    private var connectionJob: Job? = null
+
+    // Real-time conversations list from Room DB
+    val conversations = chatDao.getAllConversations()
 
     fun connectToServer(url: String) {
-        if (url.isBlank()) return
-        _serverUrl.value = url
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return
+        _serverUrl.value = trimmed
         _connectionState.value = ConnectionState.CONNECTING
-        viewModelScope.launch {
-            webSocketClient.connect(url).collectLatest { event ->
+
+        connectionJob?.cancel()
+        connectionJob = viewModelScope.launch {
+            webSocketClient.connect(trimmed).collectLatest { event ->
                 when (event) {
                     is WsEvent.Connected -> {
                         _connectionState.value = ConnectionState.CONNECTED
+                        _currentStatus.value = null
                     }
                     is WsEvent.Message -> handleIncomingMessage(event.text)
                     is WsEvent.Error -> {
                         _connectionState.value = ConnectionState.ERROR
                         _isLoading.value = false
-                        appendSystemMessage("Connection error: ${event.error.message}")
+                        _currentStatus.value = "Connection error: ${event.error.localizedMessage ?: "Failed"}"
                     }
                     is WsEvent.Closed -> {
                         _connectionState.value = ConnectionState.DISCONNECTED
                         _isLoading.value = false
+                        _currentStatus.value = null
                     }
                 }
             }
         }
     }
 
-    /**
-     * Handle JSON-framed events from the bridge server.
-     * Protocol: {"type": "chunk"|"done"|"error"|"info", "content": "...", "timestamp": ...}
-     */
-    private fun handleIncomingMessage(text: String) {
+    private fun handleIncomingMessage(rawText: String) {
         try {
-            val json = JSONObject(text)
+            val json = JSONObject(rawText)
             val type = json.optString("type", "chunk")
             val content = json.optString("content", "")
 
             when (type) {
                 "connected" -> {
-                    // Bridge handshake — do nothing or show connected banner
+                    _connectionState.value = ConnectionState.CONNECTED
+                    _currentStatus.value = null
                 }
                 "info" -> {
-                    // Informational status, show as subtle system message
-                    appendSystemMessage(content)
+                    _currentStatus.value = content
+                }
+                "thinking" -> {
+                    appendThinkingChunk(content)
+                }
+                "tool" -> {
+                    updateToolStatus(content)
                 }
                 "chunk" -> {
-                    // Streaming chunk — append to current streaming message
-                    appendChunkToStreaming(content)
+                    appendContentChunk(content)
                 }
                 "done" -> {
                     finalizeStreamingMessage(content)
                     _isLoading.value = false
+                    _currentStatus.value = null
                 }
                 "error" -> {
                     finalizeStreamingMessage()
                     appendSystemMessage("⚠️ $content")
                     _isLoading.value = false
+                    _currentStatus.value = null
                 }
                 else -> {
-                    appendChunkToStreaming(text)
+                    appendContentChunk(rawText)
                 }
             }
         } catch (e: Exception) {
-            appendChunkToStreaming(text)
+            appendContentChunk(rawText)
         }
     }
 
-    private fun appendChunkToStreaming(chunk: String) {
-        val currentMessages = _messages.value.toMutableList()
-        val existingIdx = currentMessages.indexOfFirst { it.id == streamingMessageId }
+    private fun appendContentChunk(chunk: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == streamingMessageId }
 
-        if (existingIdx >= 0) {
-            val existing = currentMessages[existingIdx]
-            currentMessages[existingIdx] = existing.copy(
-                content = existing.content + chunk,
-                isStreaming = true
+        if (idx >= 0) {
+            val cur = list[idx]
+            list[idx] = cur.copy(
+                content = cur.content + chunk,
+                isStreaming = true,
+                isThinking = false
             )
         } else {
             val newId = UUID.randomUUID().toString()
             streamingMessageId = newId
-            currentMessages.add(
+            list.add(
                 Message(
                     id = newId,
                     role = "assistant",
                     content = chunk,
                     timestamp = System.currentTimeMillis(),
-                    isStreaming = true
+                    isStreaming = true,
+                    isThinking = false
                 )
             )
         }
-        _messages.value = currentMessages
+        _messages.value = list
         _isLoading.value = true
+    }
+
+    private fun appendThinkingChunk(chunk: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == streamingMessageId }
+
+        if (idx >= 0) {
+            val cur = list[idx]
+            val prevThinking = cur.thinking ?: ""
+            list[idx] = cur.copy(
+                thinking = prevThinking + chunk,
+                isStreaming = true,
+                isThinking = true
+            )
+        } else {
+            val newId = UUID.randomUUID().toString()
+            streamingMessageId = newId
+            list.add(
+                Message(
+                    id = newId,
+                    role = "assistant",
+                    content = "",
+                    thinking = chunk,
+                    timestamp = System.currentTimeMillis(),
+                    isStreaming = true,
+                    isThinking = true
+                )
+            )
+        }
+        _messages.value = list
+        _isLoading.value = true
+    }
+
+    private fun updateToolStatus(toolText: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == streamingMessageId }
+        if (idx >= 0) {
+            list[idx] = list[idx].copy(toolExecution = toolText)
+            _messages.value = list
+        }
     }
 
     private fun finalizeStreamingMessage(finalContent: String? = null) {
         val id = streamingMessageId ?: return
-        val currentMessages = _messages.value.toMutableList()
-        val idx = currentMessages.indexOfFirst { it.id == id }
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == id }
         if (idx >= 0) {
-            val existing = currentMessages[idx]
-            val contentToSet = if (!finalContent.isNullOrBlank()) finalContent else existing.content
-            val finalized = existing.copy(content = contentToSet, isStreaming = false)
-            currentMessages[idx] = finalized
-            _messages.value = currentMessages
+            val cur = list[idx]
+            val resolvedContent = if (!finalContent.isNullOrBlank()) finalContent else cur.content
+            val finalized = cur.copy(
+                content = resolvedContent,
+                isStreaming = false,
+                isThinking = false
+            )
+            list[idx] = finalized
+            _messages.value = list
             saveMessageToDb(finalized)
         }
         streamingMessageId = null
     }
 
-    private fun appendSystemMessage(content: String) {
+    fun toggleThinkingExpanded(messageId: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx >= 0) {
+            val cur = list[idx]
+            list[idx] = cur.copy(isThinkingExpanded = !cur.isThinkingExpanded)
+            _messages.value = list
+        }
+    }
+
+    fun sendMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
+
+        if (_connectionState.value != ConnectionState.CONNECTED) {
+            appendSystemMessage("⚠️ Not connected to Colab Bridge. Open Settings to connect.")
+            return
+        }
+
+        val userMessage = Message(
+            id = UUID.randomUUID().toString(),
+            role = "user",
+            content = trimmed,
+            timestamp = System.currentTimeMillis()
+        )
+        _messages.value = _messages.value + userMessage
+        saveMessageToDb(userMessage)
+
+        // Frame and send JSON payload
+        val payload = JSONObject().apply {
+            put("message", trimmed)
+            put("conversation_id", currentConversationId)
+        }.toString()
+
+        webSocketClient.sendMessage(payload)
+        _isLoading.value = true
+        _currentStatus.value = "Sending to AGY..."
+    }
+
+    fun sendSlashCommand(command: SlashCommand, extraPrompt: String = "") {
+        val fullPrompt = if (extraPrompt.isNotBlank()) {
+            "${command.prefix} $extraPrompt"
+        } else {
+            command.prefix
+        }
+        sendMessage(fullPrompt)
+    }
+
+    private fun appendSystemMessage(text: String) {
         val msg = Message(
             id = UUID.randomUUID().toString(),
             role = "system",
-            content = content,
-            timestamp = System.currentTimeMillis(),
-            isStreaming = false
+            content = text,
+            timestamp = System.currentTimeMillis()
         )
         _messages.value = _messages.value + msg
     }
 
-    fun sendMessage(text: String) {
-        if (text.isBlank()) return
-        if (_connectionState.value != ConnectionState.CONNECTED) {
-            appendSystemMessage("⚠️ Not connected. Go to Settings and enter your server URL.")
-            return
-        }
-
-        val message = Message(
-            id = UUID.randomUUID().toString(),
-            role = "user",
-            content = text,
-            timestamp = System.currentTimeMillis()
-        )
-        _messages.value = _messages.value + message
-        saveMessageToDb(message)
-
-        // Send JSON-framed message to bridge
-        val payload = JSONObject().apply {
-            put("message", text)
-            put("conversation_id", currentConversationId)
-        }.toString()
-        webSocketClient.sendMessage(payload)
-        _isLoading.value = true
-    }
-
-    fun sendSlashCommand(command: SlashCommand) {
-        sendMessage(command.prefix)
-    }
-
     private fun saveMessageToDb(message: Message) {
         viewModelScope.launch {
+            val firstUserPrompt = _messages.value.firstOrNull { it.role == "user" }?.content?.take(45) ?: "New Chat"
             chatDao.insertConversation(
                 ConversationEntity(
                     id = currentConversationId,
-                    title = _messages.value.firstOrNull { it.role == "user" }?.content?.take(40) ?: "New Chat",
+                    title = firstUserPrompt,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
@@ -212,21 +296,67 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun clearConversation() {
+    fun startNewConversation() {
         _messages.value = emptyList()
         streamingMessageId = null
         currentConversationId = UUID.randomUUID().toString()
+        _currentStatus.value = null
+        _isLoading.value = false
     }
 
-    fun backupToDrive() {
+    fun loadConversation(conversationId: String) {
+        currentConversationId = conversationId
+        streamingMessageId = null
+        _isLoading.value = false
+        _currentStatus.value = null
+
         viewModelScope.launch {
-            // TODO: integrate GoogleDriveManager here
-            appendSystemMessage("ℹ️ Drive backup triggered (configure Google Sign-In in Settings).")
+            chatDao.getMessagesForConversation(conversationId).collectLatest { entities ->
+                _messages.value = entities.map {
+                    Message(
+                        id = it.id,
+                        role = it.role,
+                        content = it.content,
+                        timestamp = it.timestamp
+                    )
+                }
+            }
         }
+    }
+
+    fun deleteConversation(conversationId: String) {
+        viewModelScope.launch {
+            chatDao.deleteConversation(conversationId)
+            if (currentConversationId == conversationId) {
+                startNewConversation()
+            }
+        }
+    }
+
+    fun exportConversationToMarkdown(): String {
+        val sb = StringBuilder()
+        sb.append("# AGY Chat Export\n\n")
+        sb.append("*Generated: ${java.util.Date()}*\n\n---\n\n")
+        for (m in _messages.value) {
+            when (m.role) {
+                "user" -> sb.append("### 👤 You\n${m.content}\n\n")
+                "assistant" -> {
+                    sb.append("### 🤖 Next AI\n")
+                    if (!m.thinking.isNullOrBlank()) {
+                        sb.append("> **Thinking Process:**\n> ${m.thinking.replace("\n", "\n> ")}\n\n")
+                    }
+                    sb.append("${m.content}\n\n")
+                }
+                "system" -> sb.append("*System: ${m.content}*\n\n")
+            }
+            sb.append("---\n\n")
+        }
+        return sb.toString()
     }
 
     override fun onCleared() {
         super.onCleared()
         webSocketClient.disconnect()
+        connectionJob?.cancel()
     }
 }

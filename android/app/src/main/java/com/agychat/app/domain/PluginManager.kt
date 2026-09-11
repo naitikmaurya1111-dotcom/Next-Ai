@@ -7,83 +7,110 @@ import com.agychat.app.domain.model.SlashCommand
 import javax.inject.Inject
 import javax.inject.Singleton
 
-data class PluginCommand(
+data class PluginItem(
     val name: String,
+    val title: String,
     val description: String,
     val icon: ImageVector,
     val prefix: String,
-    val color: Long // ARGB hex
+    val tag: String,
+    val examplePrompt: String,
+    val badgeColor: Long // ARGB Hex
 )
 
 @Singleton
 class PluginManager @Inject constructor() {
 
-    val pluginCommands = listOf(
-        PluginCommand(
-            name = "goal",
-            description = "Run until done — agent keeps going until the goal is fully achieved",
-            icon = Icons.Default.RocketLaunch,
-            prefix = "/goal",
-            color = 0xFF4CAF50
-        ),
-        PluginCommand(
-            name = "plan",
-            description = "Step-by-step planning before execution",
-            icon = Icons.Default.List,
-            prefix = "/plan",
-            color = 0xFF2196F3
-        ),
-        PluginCommand(
+    val plugins = listOf(
+        PluginItem(
             name = "boost",
-            description = "Deep thinking — multiple perspectives and rigorous verification",
+            title = "Deep Thinking",
+            description = "Multi-perspective deep reasoning, architecture review, and rigorous verification.",
             icon = Icons.Default.ElectricBolt,
             prefix = "/boost",
-            color = 0xFFFF9800
+            tag = "REASONING",
+            examplePrompt = "/boost review my architecture and find edge cases",
+            badgeColor = 0xFFD4704B // Claude Terracotta
         ),
-        PluginCommand(
-            name = "schedule",
-            description = "Set a timer or recurring cron job",
-            icon = Icons.Default.Schedule,
-            prefix = "/schedule",
-            color = 0xFF9C27B0
+        PluginItem(
+            name = "goal",
+            title = "Autonomous Goal",
+            description = "Runs continuously in loop until the objective is fully solved without stopping.",
+            icon = Icons.Default.RocketLaunch,
+            prefix = "/goal",
+            tag = "AUTONOMOUS",
+            examplePrompt = "/goal write complete unit tests and ensure all pass",
+            badgeColor = 0xFF2E7D32 // Emerald Green
         ),
-        PluginCommand(
+        PluginItem(
+            name = "plan",
+            title = "Step-by-Step Plan",
+            description = "Generates a structured, phased implementation roadmap before executing.",
+            icon = Icons.Default.Assignment,
+            prefix = "/plan",
+            tag = "PLANNING",
+            examplePrompt = "/plan design a realtime notification system",
+            badgeColor = 0xFF1976D2 // Deep Blue
+        ),
+        PluginItem(
             name = "browser",
-            description = "Browse the web and interact with web applications",
+            title = "Web Automation",
+            description = "Navigates live web pages, reads docs, extracts data, and searches.",
             icon = Icons.Default.Language,
             prefix = "/browser",
-            color = 0xFF00BCD4
+            tag = "RESEARCH",
+            examplePrompt = "/browser search latest android compose best practices",
+            badgeColor = 0xFF0097A7 // Cyan
         ),
-        PluginCommand(
+        PluginItem(
+            name = "schedule",
+            title = "Timer & Cron",
+            description = "Sets one-shot reminders or scheduled recurring tasks in background.",
+            icon = Icons.Default.Schedule,
+            prefix = "/schedule",
+            tag = "AUTOMATION",
+            examplePrompt = "/schedule run health check every 10 minutes",
+            badgeColor = 0xFF7B1FA2 // Purple
+        ),
+        PluginItem(
             name = "learn",
-            description = "Persist this behavior for future conversations",
-            icon = Icons.Default.AutoFixHigh,
+            title = "Persist Memory",
+            description = "Permanently saves project rules, conventions, and habits to agent brain.",
+            icon = Icons.Default.Psychology,
             prefix = "/learn",
-            color = 0xFFE91E63
+            tag = "MEMORY",
+            examplePrompt = "/learn always use MVVM and Compose in this project",
+            badgeColor = 0xFFC2185B // Pink
         ),
-        PluginCommand(
+        PluginItem(
             name = "grill-me",
-            description = "Interactive interview to align on a plan",
-            icon = Icons.Default.Forum,
+            title = "Interview Me",
+            description = "Asks you hard clarifying questions to stress-test your design and assumptions.",
+            icon = Icons.Default.QuestionAnswer,
             prefix = "/grill-me",
-            color = 0xFFFF5722
+            tag = "INTERVIEW",
+            examplePrompt = "/grill-me on my system architecture proposal",
+            badgeColor = 0xFFE65100 // Deep Orange
         ),
-        PluginCommand(
+        PluginItem(
             name = "teamwork-preview",
-            description = "Spawn a team of autonomous agents working together",
-            icon = Icons.Default.Group,
+            title = "Multi-Agent Team",
+            description = "Orchestrates parallel specialized agents collaborating on complex workflows.",
+            icon = Icons.Default.Groups,
             prefix = "/teamwork-preview",
-            color = 0xFF607D8B
+            tag = "COLLAB",
+            examplePrompt = "/teamwork-preview build frontend and backend in parallel",
+            badgeColor = 0xFF455A64 // Slate
         )
     )
 
-    // Legacy compat: SlashCommand list for PluginDrawer
-    val commands = pluginCommands.map { p ->
+    val commands: List<SlashCommand> = plugins.map {
         SlashCommand(
-            name = p.name,
-            description = p.description,
-            icon = 0, // unused — PluginDrawer uses pluginCommands now
-            prefix = p.prefix
+            name = it.name,
+            description = it.description,
+            prefix = it.prefix,
+            tag = it.tag,
+            example = it.examplePrompt
         )
     }
 }

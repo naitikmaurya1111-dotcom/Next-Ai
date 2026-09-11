@@ -14,7 +14,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.agychat.app.domain.PluginManager
 import com.agychat.app.ui.chat.ChatScreen
-import com.agychat.app.ui.history.HistoryScreen
 import com.agychat.app.ui.settings.SettingsScreen
 import com.agychat.app.ui.theme.AGYChatTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -22,7 +21,6 @@ import javax.inject.Inject
 
 object AppRoutes {
     const val CHAT = "chat"
-    const val HISTORY = "history"
     const val SETTINGS = "settings"
 }
 
@@ -59,12 +57,11 @@ fun AGYChatNavHost(pluginManager: PluginManager) {
         composable(AppRoutes.CHAT) {
             ChatScreen(
                 pluginManager = pluginManager,
-                onNavigateToHistory = { navController.navigate(AppRoutes.HISTORY) },
                 onNavigateToSettings = { navController.navigate(AppRoutes.SETTINGS) }
             )
         }
         composable(AppRoutes.HISTORY) {
-            HistoryScreen(
+            com.agychat.app.ui.history.HistoryScreen(
                 onBack = { navController.popBackStack() }
             )
         }
