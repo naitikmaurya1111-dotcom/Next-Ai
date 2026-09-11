@@ -60,6 +60,15 @@ class ChatViewModel @Inject constructor(
         _selectedAttachment.value = null
     }
 
+    private val _reasoningEffort = MutableStateFlow("high")
+    val reasoningEffort: StateFlow<String> = _reasoningEffort.asStateFlow()
+
+    fun setReasoningEffort(effort: String) {
+        _reasoningEffort.value = effort
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("reasoning_effort", effort).apply()
+    }
+
     // Active conversation ID
     var currentConversationId: String = UUID.randomUUID().toString()
         private set
@@ -74,7 +83,10 @@ class ChatViewModel @Inject constructor(
     init {
         // Auto-connect to last saved URL on app launch, or fall back to default bridge URL
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
-        val savedUrl = prefs.getString("server_url", "wss://angeles-preston-focus-dimensional.trycloudflare.com/ws")
+        val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
+        _reasoningEffort.value = savedEffort
+
+        val savedUrl = prefs.getString("server_url", "wss://english-memories-opens-judicial.trycloudflare.com/ws")
         if (!savedUrl.isNullOrBlank()) {
             connectToServer(savedUrl)
         }
@@ -363,9 +375,74 @@ class ChatViewModel @Inject constructor(
                     timestamp = message.timestamp,
                     attachmentUri = message.attachmentUri,
                     attachmentName = message.attachmentName,
-                    attachmentIsImage = message.attachmentIsImage
+                    attachmentIsImage = message.attachmentIsImage,
+                    feedback = message.feedback
                 )
             )
+        }
+    }
+
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            _messages.value = _messages.value.filterNot { it.id == messageId }
+            chatDao.deleteMessage(messageId)
+        }
+    }
+
+    fun toggleFeedback(messageId: String, feedbackType: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx >= 0) {
+            val cur = list[idx]
+            val newFeedback = if (cur.feedback == feedbackType) null else feedbackType
+            val updated = cur.copy(feedback = newFeedback)
+            list[idx] = updated
+            _messages.value = list
+            saveMessageToDb(updated)
+        }
+    }
+
+    fun regenerateLastResponse() {
+        val msgs = _messages.value
+        val lastUserMsg = msgs.lastOrNull { it.role == "user" } ?: return
+        
+        // Remove the last assistant response if exists
+        val lastMsg = msgs.lastOrNull()
+        if (lastMsg?.role == "assistant") {
+            val filtered = msgs.filterNot { it.id == lastMsg.id }
+            _messages.value = filtered
+            viewModelScope.launch {
+                chatDao.deleteMessage(lastMsg.id)
+            }
+        }
+        
+        // Resend the last user message text
+        val effort = _reasoningEffort.value
+
+        val payload = JSONObject().apply {
+            put("message", lastUserMsg.content)
+            put("conversation_id", currentConversationId)
+            put("effort", effort)
+        }.toString()
+
+        webSocketClient.sendMessage(payload)
+        _isLoading.value = true
+        _currentStatus.value = "Regenerating response..."
+    }
+
+    fun renameConversation(conversationId: String, newTitle: String) {
+        val trimmed = newTitle.trim()
+        if (trimmed.isBlank()) return
+        viewModelScope.launch {
+            chatDao.updateConversationTitle(conversationId, trimmed)
+        }
+    }
+
+    fun clearAllConversations() {
+        viewModelScope.launch {
+            chatDao.clearAllConversations()
+            chatDao.clearAllMessages()
+            startNewConversation()
         }
     }
 
@@ -395,7 +472,8 @@ class ChatViewModel @Inject constructor(
                         timestamp = it.timestamp,
                         attachmentUri = it.attachmentUri,
                         attachmentName = it.attachmentName,
-                        attachmentIsImage = it.attachmentIsImage
+                        attachmentIsImage = it.attachmentIsImage,
+                        feedback = it.feedback
                     )
                 }
             }

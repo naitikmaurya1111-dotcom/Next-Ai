@@ -22,4 +22,19 @@ interface ChatDao {
 
     @Query("DELETE FROM conversations WHERE id = :conversationId")
     suspend fun deleteConversation(conversationId: String)
+
+    @Query("DELETE FROM messages WHERE id = :messageId")
+    suspend fun deleteMessage(messageId: String)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId")
+    suspend fun deleteMessagesForConversation(conversationId: String)
+
+    @Query("UPDATE conversations SET title = :title, updatedAt = :updatedAt WHERE id = :conversationId")
+    suspend fun updateConversationTitle(conversationId: String, title: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM conversations")
+    suspend fun clearAllConversations()
+
+    @Query("DELETE FROM messages")
+    suspend fun clearAllMessages()
 }

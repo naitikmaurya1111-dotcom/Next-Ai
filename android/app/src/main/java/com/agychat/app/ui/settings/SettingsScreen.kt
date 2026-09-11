@@ -40,7 +40,7 @@ fun SettingsScreen(
 
     var serverUrl by remember {
         mutableStateOf(
-            prefs.getString("server_url", "wss://angeles-preston-focus-dimensional.trycloudflare.com/ws") ?: "wss://angeles-preston-focus-dimensional.trycloudflare.com/ws"
+            prefs.getString("server_url", "wss://english-memories-opens-judicial.trycloudflare.com/ws") ?: "wss://english-memories-opens-judicial.trycloudflare.com/ws"
         )
     }
     var driveAutoBackup by remember {

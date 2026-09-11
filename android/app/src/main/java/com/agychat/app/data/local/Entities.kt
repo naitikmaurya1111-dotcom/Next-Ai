@@ -20,5 +20,6 @@ data class MessageEntity(
     val timestamp: Long,
     val attachmentUri: String? = null,
     val attachmentName: String? = null,
-    val attachmentIsImage: Boolean = false
+    val attachmentIsImage: Boolean = false,
+    val feedback: String? = null
 )

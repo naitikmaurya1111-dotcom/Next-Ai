@@ -29,6 +29,7 @@ fun HistoryScreen(
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var showClearAllDialog by remember { mutableStateOf(false) }
     val conversations by chatViewModel.conversations.collectAsState(initial = emptyList())
 
     val filteredConversations = remember(conversations, searchQuery) {
@@ -58,10 +59,103 @@ fun HistoryScreen(
                     }) {
                         Icon(Icons.Default.AddComment, contentDescription = "New Chat")
                     }
+                    if (conversations.isNotEmpty()) {
+                        IconButton(onClick = { showClearAllDialog = true }) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = "Clear All Chats", tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
                 }
             )
         }
     ) { padding ->
+        var conversationToRename by remember { mutableStateOf<ConversationEntity?>(null) }
+        var renameText by remember { mutableStateOf("") }
+        var conversationToDelete by remember { mutableStateOf<ConversationEntity?>(null) }
+
+        // Clear All Dialog
+        if (showClearAllDialog) {
+            AlertDialog(
+                onDismissRequest = { showClearAllDialog = false },
+                title = { Text("Clear All History?") },
+                text = { Text("This will permanently delete all conversation history. This action cannot be undone.") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            chatViewModel.clearAllConversations()
+                            showClearAllDialog = false
+                        }
+                    ) {
+                        Text("Delete All", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showClearAllDialog = false }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // Rename Dialog
+        if (conversationToRename != null) {
+            AlertDialog(
+                onDismissRequest = { conversationToRename = null },
+                title = { Text("Rename Chat") },
+                text = {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it },
+                        label = { Text("Title") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            conversationToRename?.let {
+                                chatViewModel.renameConversation(it.id, renameText)
+                            }
+                            conversationToRename = null
+                        }
+                    ) {
+                        Text("Save")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { conversationToRename = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
+        // Delete Single Confirmation Dialog
+        if (conversationToDelete != null) {
+            AlertDialog(
+                onDismissRequest = { conversationToDelete = null },
+                title = { Text("Delete Conversation?") },
+                text = { Text("Are you sure you want to delete \"${conversationToDelete?.title}\"?") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            conversationToDelete?.let {
+                                chatViewModel.deleteConversation(it.id)
+                            }
+                            conversationToDelete = null
+                        }
+                    ) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { conversationToDelete = null }) {
+                        Text("Cancel")
+                    }
+                }
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -123,8 +217,12 @@ fun HistoryScreen(
                                 onRestoreConversation(conv.id)
                                 onBack()
                             },
+                            onRename = {
+                                renameText = conv.title
+                                conversationToRename = conv
+                            },
                             onDelete = {
-                                chatViewModel.deleteConversation(conv.id)
+                                conversationToDelete = conv
                             }
                         )
                     }
@@ -138,6 +236,7 @@ fun HistoryScreen(
 fun ConversationCard(
     conversation: ConversationEntity,
     onClick: () -> Unit,
+    onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
     val dateFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
@@ -160,7 +259,7 @@ fun ConversationCard(
             Icon(
                 Icons.Default.ChatBubbleOutline,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = ClaudeTerracotta,
                 modifier = Modifier.size(20.dp)
             )
 
@@ -169,7 +268,7 @@ fun ConversationCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = conversation.title.ifBlank { "Untitled Conversation" },
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -179,6 +278,20 @@ fun ConversationCard(
                     color = MaterialTheme.colorScheme.outline
                 )
             }
+
+            IconButton(
+                onClick = onRename,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "Rename",
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Spacer(Modifier.width(4.dp))
 
             IconButton(
                 onClick = onDelete,

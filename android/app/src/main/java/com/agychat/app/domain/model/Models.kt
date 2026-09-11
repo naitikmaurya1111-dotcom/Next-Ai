@@ -15,7 +15,8 @@ data class Message(
     val isThinkingExpanded: Boolean = false,
     val attachmentUri: String? = null,
     val attachmentName: String? = null,
-    val attachmentIsImage: Boolean = false
+    val attachmentIsImage: Boolean = false,
+    val feedback: String? = null // "like", "dislike", null
 )
 
 data class AttachmentItem(

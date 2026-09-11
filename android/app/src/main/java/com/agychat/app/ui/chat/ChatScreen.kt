@@ -4,11 +4,16 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.speech.RecognizerIntent
+import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
+import java.io.FileOutputStream
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -85,9 +90,14 @@ fun ChatScreen(
     val currentStatus by viewModel.currentStatus.collectAsState()
     val conversations by viewModel.conversations.collectAsState(initial = emptyList())
     val selectedAttachment by viewModel.selectedAttachment.collectAsState()
+    val reasoningEffort by viewModel.reasoningEffort.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showPluginBottomSheet by remember { mutableStateOf(false) }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
+    var showEffortMenu by remember { mutableStateOf(false) }
+    var speakingMessageId by remember { mutableStateOf<String?>(null) }
+    var tts: TextToSpeech? by remember { mutableStateOf(null) }
 
     val listState = rememberLazyListState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -95,7 +105,93 @@ fun ChatScreen(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
 
-    // File and Image picker launcher
+    // Initialize TextToSpeech engine
+    DisposableEffect(context) {
+        val textToSpeech = TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.US
+            }
+        }
+        tts = textToSpeech
+        onDispose {
+            textToSpeech.stop()
+            textToSpeech.shutdown()
+        }
+    }
+
+    // Toggle speech for a message
+    val toggleSpeak: (String, String) -> Unit = { id, text ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (speakingMessageId == id) {
+            tts?.stop()
+            speakingMessageId = null
+        } else {
+            tts?.stop()
+            val cleanText = text.replace(Regex("[#*`_~>\\[\\]]"), " ").trim()
+            tts?.speak(cleanText, TextToSpeech.QUEUE_FLUSH, null, id)
+            speakingMessageId = id
+        }
+    }
+
+    // Voice Dictation / Speech-to-Text launcher
+    val speechRecognizerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spokenMatches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val text = spokenMatches?.firstOrNull()
+            if (!text.isNullOrBlank()) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                inputText = if (inputText.isBlank()) text else "$inputText $text"
+                Toast.makeText(context, "Transcribed speech", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Camera launcher
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            try {
+                val photoFile = File(context.cacheDir, "camera_photo_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(photoFile).use { out ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                }
+                viewModel.setAttachment(
+                    AttachmentItem(
+                        uri = Uri.fromFile(photoFile).toString(),
+                        name = photoFile.name,
+                        isImage = true
+                    )
+                )
+                Toast.makeText(context, "Photo attached!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to capture photo", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Gallery / Photo picker launcher
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            val fileName = queryFileName(context, uri)
+            viewModel.setAttachment(
+                AttachmentItem(
+                    uri = uri.toString(),
+                    name = fileName,
+                    isImage = true
+                )
+            )
+            Toast.makeText(context, "Image attached: $fileName", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // General File picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -116,7 +212,7 @@ fun ChatScreen(
                     isImage = isImg
                 )
             )
-            Toast.makeText(context, "Attached: $fileName", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "File attached: $fileName", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -240,6 +336,60 @@ fun ChatScreen(
                                 }
                             },
                             actions = {
+                                // Quick Reasoning Effort Selector
+                                Box {
+                                    Surface(
+                                        onClick = { showEffortMenu = true },
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.ElectricBolt,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(13.dp),
+                                                tint = ClaudeTerracotta
+                                            )
+                                            Spacer(Modifier.width(3.dp))
+                                            Text(
+                                                text = reasoningEffort.replaceFirstChar { it.uppercase() },
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                    DropdownMenu(
+                                        expanded = showEffortMenu,
+                                        onDismissRequest = { showEffortMenu = false }
+                                    ) {
+                                        listOf("high", "medium", "low").forEach { effortOption ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        Text(
+                                                            text = effortOption.replaceFirstChar { it.uppercase() },
+                                                            fontWeight = if (reasoningEffort == effortOption) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (reasoningEffort == effortOption) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                                        )
+                                                        if (reasoningEffort == effortOption) {
+                                                            Spacer(Modifier.width(8.dp))
+                                                            Icon(Icons.Default.Check, null, modifier = Modifier.size(15.dp), tint = ClaudeTerracotta)
+                                                        }
+                                                    }
+                                                },
+                                                onClick = {
+                                                    viewModel.setReasoningEffort(effortOption)
+                                                    showEffortMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
                                 IconButton(onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.startNewConversation()
@@ -304,7 +454,7 @@ fun ChatScreen(
 
                     Spacer(Modifier.height(6.dp))
 
-                    // Claude Web Floating Input Box with File Attachment Support
+                    // Claude Web Floating Input Box with File/Image Attachment & Speech Input
                     ClaudeFloatingInputBar(
                         text = inputText,
                         onTextChange = { inputText = it },
@@ -319,7 +469,19 @@ fun ChatScreen(
                         },
                         onAttachFile = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            filePickerLauncher.launch("*/*")
+                            showAttachmentMenu = true
+                        },
+                        onVoiceInput = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to Next AI...")
+                            }
+                            try {
+                                speechRecognizerLauncher.launch(intent)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Voice input not available", Toast.LENGTH_SHORT).show()
+                            }
                         },
                         attachment = selectedAttachment,
                         onRemoveAttachment = {
@@ -356,19 +518,34 @@ fun ChatScreen(
                         contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp)
                     ) {
                         items(messages, key = { it.id }) { msg ->
+                            val isLastAssistant = msg.id == messages.lastOrNull { it.role == "assistant" }?.id
+                            val isSpeaking = speakingMessageId == msg.id
                             MessageItem(
                                 message = msg,
+                                isSpeaking = isSpeaking,
+                                isLastAssistant = isLastAssistant,
                                 onToggleThinking = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.toggleThinkingExpanded(msg.id)
                                 },
                                 onRetry = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    viewModel.sendMessage(msg.content)
+                                    viewModel.regenerateLastResponse()
                                 },
                                 onEditMessage = { text ->
                                     inputText = text
                                     Toast.makeText(context, "Editing prompt...", Toast.LENGTH_SHORT).show()
+                                },
+                                onDeleteMessage = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.deleteMessage(msg.id)
+                                    Toast.makeText(context, "Message deleted", Toast.LENGTH_SHORT).show()
+                                },
+                                onToggleSpeak = {
+                                    toggleSpeak(msg.id, msg.content)
+                                },
+                                onFeedback = { type ->
+                                    viewModel.toggleFeedback(msg.id, type)
                                 }
                             )
                         }
@@ -427,6 +604,116 @@ fun ChatScreen(
             onDismiss = { showPluginBottomSheet = false }
         )
     }
+
+    if (showAttachmentMenu) {
+        ModalBottomSheet(
+            onDismissRequest = { showAttachmentMenu = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 14.dp)
+                    .navigationBarsPadding(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Add Attachment",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    AttachmentOptionCard(
+                        icon = Icons.Default.PhotoCamera,
+                        title = "Camera",
+                        subtitle = "Take photo",
+                        onClick = {
+                            showAttachmentMenu = false
+                            try {
+                                cameraLauncher.launch(null)
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Camera not available", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    )
+
+                    AttachmentOptionCard(
+                        icon = Icons.Default.PhotoLibrary,
+                        title = "Gallery",
+                        subtitle = "Choose photo",
+                        onClick = {
+                            showAttachmentMenu = false
+                            imagePickerLauncher.launch("image/*")
+                        }
+                    )
+
+                    AttachmentOptionCard(
+                        icon = Icons.Default.Description,
+                        title = "Document",
+                        subtitle = "Pick file",
+                        onClick = {
+                            showAttachmentMenu = false
+                            filePickerLauncher.launch("*/*")
+                        }
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun AttachmentOptionCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.width(96.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(vertical = 16.dp, horizontal = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .background(ClaudeTerracotta.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = title,
+                    tint = ClaudeTerracotta,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable
@@ -466,9 +753,14 @@ fun ConnectionStatusBadge(state: ConnectionState, onClick: () -> Unit) {
 @Composable
 fun MessageItem(
     message: Message,
+    isSpeaking: Boolean = false,
+    isLastAssistant: Boolean = false,
     onToggleThinking: () -> Unit,
     onRetry: () -> Unit = {},
-    onEditMessage: (String) -> Unit = {}
+    onEditMessage: (String) -> Unit = {},
+    onDeleteMessage: () -> Unit = {},
+    onToggleSpeak: () -> Unit = {},
+    onFeedback: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -548,7 +840,7 @@ fun MessageItem(
                 AnimatedVisibility(visible = showUserActions) {
                     Row(
                         modifier = Modifier.padding(top = 4.dp, end = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         TextButton(
                             onClick = {
@@ -577,6 +869,20 @@ fun MessageItem(
                             Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.width(4.dp))
                             Text("Copy", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+
+                        TextButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onDeleteMessage()
+                                showUserActions = false
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", modifier = Modifier.size(13.dp), tint = MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Delete", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -647,12 +953,13 @@ fun MessageItem(
                         MarkdownContent(text = message.content)
                     }
 
-                    // 4. Subtle Action Bar below assistant message
+                    // 4. Subtle Action Bar below assistant message (ChatGPT & Gemini style)
                     if (!message.isStreaming) {
                         Row(
                             modifier = Modifier.padding(top = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Copy
                             IconButton(
                                 onClick = {
                                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -664,11 +971,27 @@ fun MessageItem(
                                 Icon(
                                     Icons.Default.ContentCopy,
                                     contentDescription = "Copy message",
-                                    modifier = Modifier.size(14.dp),
+                                    modifier = Modifier.size(15.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
-                            Spacer(Modifier.width(4.dp))
+                            Spacer(Modifier.width(2.dp))
+
+                            // Read Aloud / Stop (TTS)
+                            IconButton(
+                                onClick = onToggleSpeak,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    if (isSpeaking) Icons.Default.Stop else Icons.Default.VolumeUp,
+                                    contentDescription = if (isSpeaking) "Stop reading" else "Read aloud",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (isSpeaking) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
+
+                            // Share
                             IconButton(
                                 onClick = {
                                     val intent = Intent().apply {
@@ -683,20 +1006,74 @@ fun MessageItem(
                                 Icon(
                                     Icons.Default.Share,
                                     contentDescription = "Share",
-                                    modifier = Modifier.size(14.dp),
+                                    modifier = Modifier.size(15.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
-                            Spacer(Modifier.width(4.dp))
+                            Spacer(Modifier.width(2.dp))
+
+                            // Thumbs Up (Feedback)
                             IconButton(
-                                onClick = onRetry,
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onFeedback("like")
+                                    Toast.makeText(context, if (message.feedback == "like") "Feedback removed" else "Thanks for the feedback!", Toast.LENGTH_SHORT).show()
+                                },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.Refresh,
-                                    contentDescription = "Regenerate / Retry",
-                                    modifier = Modifier.size(14.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    Icons.Default.ThumbUp,
+                                    contentDescription = "Good response",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = if (message.feedback == "like") ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
+
+                            // Thumbs Down (Feedback)
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onFeedback("dislike")
+                                    Toast.makeText(context, if (message.feedback == "dislike") "Feedback removed" else "Feedback recorded", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.ThumbDown,
+                                    contentDescription = "Bad response",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = if (message.feedback == "dislike") ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
+
+                            // Regenerate / Retry (if last assistant response)
+                            if (isLastAssistant) {
+                                IconButton(
+                                    onClick = onRetry,
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        contentDescription = "Regenerate response",
+                                        modifier = Modifier.size(15.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                                Spacer(Modifier.width(2.dp))
+                            }
+
+                            // Delete message
+                            IconButton(
+                                onClick = onDeleteMessage,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = "Delete message",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
                             }
                         }
@@ -871,6 +1248,7 @@ fun ClaudeFloatingInputBar(
     onSend: () -> Unit,
     onOpenPlugins: () -> Unit,
     onAttachFile: () -> Unit,
+    onVoiceInput: () -> Unit = {},
     attachment: AttachmentItem?,
     onRemoveAttachment: () -> Unit,
     isConnected: Boolean,
@@ -1029,6 +1407,7 @@ fun ClaudeFloatingInputBar(
                     )
                 )
 
+                // Voice Dictation (Mic) or Clear (✕)
                 if (text.isNotBlank()) {
                     IconButton(
                         onClick = { onTextChange("") },
@@ -1039,6 +1418,18 @@ fun ClaudeFloatingInputBar(
                             contentDescription = "Clear input",
                             tint = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.size(16.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onVoiceInput,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = "Voice dictation",
+                            tint = ClaudeTerracotta,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -1084,7 +1475,7 @@ fun EmptyChatGreeting(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 32.dp),
+            .padding(horizontal = 24.dp, vertical = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -1123,21 +1514,21 @@ fun EmptyChatGreeting(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(Modifier.height(30.dp))
+        Spacer(Modifier.height(26.dp))
 
-        // Claude Starter Prompt Cards
+        // ChatGPT / Gemini Style Suggestion Cards
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             val starterPrompts = listOf(
-                Pair("⚡ Deep Reasoning", "/boost inspect the codebase architecture and suggest performance improvements"),
-                Pair("🎯 Autonomous Goal", "/goal write automated tests and fix edge cases"),
-                Pair("📋 Phased Roadmap", "/plan design next sprint features with phased execution"),
-                Pair("🌐 Real-time Web Search", "/browser find latest documentation for modern Jetpack Compose")
+                Triple("💡 Brainstorm Ideas", "Explore creative concepts and solutions", "/boost brainstorm creative project ideas"),
+                Triple("💻 Write & Debug Code", "Inspect codebase, find bugs, or optimize", "/boost analyze codebase architecture and improve it"),
+                Triple("📋 Phased Roadmap", "Plan feature delivery with step-by-step phases", "/plan design next sprint features step by step"),
+                Triple("🌐 Real-time Web Search", "Search latest docs, releases, and information", "/browser search for latest Jetpack Compose features")
             )
 
-            for ((title, prompt) in starterPrompts) {
+            for ((title, subtitle, prompt) in starterPrompts) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1145,18 +1536,24 @@ fun EmptyChatGreeting(
                         .clickable { onPromptCardClick(prompt) },
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = title,
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = title,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Icon(
                             Icons.Default.ArrowForward,
                             contentDescription = null,
