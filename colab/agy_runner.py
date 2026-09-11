@@ -4,13 +4,12 @@ import logging
 import os
 import shutil
 import time
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
-SLASH_COMMANDS = [
-    "/goal", "/plan", "/boost", "/schedule",
-    "/browser", "/learn", "/grill-me", "/teamwork-preview"
-]
+# Map Android client conversation IDs to agy conversation IDs
+conversation_map: Dict[str, str] = {}
 
 def _make_event(event_type: str, content: str = "", **kwargs) -> str:
     """Create a JSON-framed WebSocket event for the Android client."""
@@ -38,10 +37,11 @@ def get_agy_path() -> str:
             return c
     return "agy"
 
-async def run_agy_command(message: str, conversation_id: str = ""):
+async def run_agy_command(message: str, client_conv_id: str = ""):
     """
     Runs agy command asynchronously with native stream-json output
     and yields real-time JSON-framed tokens directly to the Android app.
+    Maintains clean conversation continuity per client conversation ID.
     """
     message_trimmed = message.strip()
     if not message_trimmed:
@@ -50,17 +50,21 @@ async def run_agy_command(message: str, conversation_id: str = ""):
 
     agy_bin = get_agy_path()
 
-    # Build command args
-    # -c / --continue keeps conversation continuity
-    cmd_args = [
-        agy_bin,
-        "-c",
+    # Determine if we have an existing agy conversation ID for this client
+    agy_conv_id = conversation_map.get(client_conv_id) if client_conv_id else None
+
+    cmd_args = [agy_bin]
+
+    if agy_conv_id:
+        cmd_args.extend(["--conversation", agy_conv_id])
+
+    cmd_args.extend([
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
         "-p", message_trimmed
-    ]
+    ])
 
-    logger.info(f"Executing: {' '.join(cmd_args[:4])} -p ...")
+    logger.info(f"Executing: {' '.join(cmd_args[:3])} ... -p '{message_trimmed[:40]}'")
     yield _make_event("info", "AGY thinking...")
 
     try:
@@ -72,7 +76,6 @@ async def run_agy_command(message: str, conversation_id: str = ""):
 
         accumulated_text = ""
 
-        # Process stream-json lines from agy
         while True:
             if process.stdout is None:
                 break
@@ -89,7 +92,13 @@ async def run_agy_command(message: str, conversation_id: str = ""):
                 data = json.loads(raw_line)
                 event_type = data.get("event")
 
-                if event_type == "step_update":
+                if event_type == "init":
+                    new_conv_id = data.get("conversation_id")
+                    if new_conv_id and client_conv_id:
+                        conversation_map[client_conv_id] = new_conv_id
+                        logger.info(f"Mapped {client_conv_id} -> {new_conv_id}")
+
+                elif event_type == "step_update":
                     step_update = data.get("step_update", {})
                     text_delta = step_update.get("text_delta")
                     if text_delta:
@@ -99,10 +108,9 @@ async def run_agy_command(message: str, conversation_id: str = ""):
                 elif event_type == "result":
                     result = data.get("result", {})
                     final_response = result.get("response", accumulated_text)
-                    yield _make_event("done", final_response)
+                    yield _make_event("done", final_response.strip())
 
             except json.JSONDecodeError:
-                # In case plain text or log messages leak into stdout
                 yield _make_event("chunk", raw_line)
 
         await process.wait()
@@ -113,9 +121,9 @@ async def run_agy_command(message: str, conversation_id: str = ""):
                 err_bytes = await process.stderr.read()
                 stderr_out = err_bytes.decode("utf-8", errors="replace").strip()
             if not accumulated_text:
-                yield _make_event("error", f"AGY CLI exited ({process.returncode}): {stderr_out}")
+                yield _make_event("error", f"AGY CLI error ({process.returncode}): {stderr_out}")
             else:
-                yield _make_event("done", accumulated_text)
+                yield _make_event("done", accumulated_text.strip())
         else:
             if not accumulated_text:
                 yield _make_event("done", "")

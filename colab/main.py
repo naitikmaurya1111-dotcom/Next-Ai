@@ -141,14 +141,16 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.info(f"Received: {raw[:200]}")
 
             # Parse incoming message
+            conv_id = ""
             try:
                 payload = json.loads(raw)
                 user_message = payload.get("message", raw)
+                conv_id = payload.get("conversation_id", "")
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
 
             # Stream agy command output back to client
-            async for event in run_agy_command(user_message):
+            async for event in run_agy_command(user_message, conv_id):
                 await manager.send(event, websocket)
 
     except WebSocketDisconnect:
