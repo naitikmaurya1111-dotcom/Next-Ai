@@ -9,10 +9,10 @@ pkill -f "drive_sync_manager.py daemon" 2>/dev/null || true
 cd /content/Next-Ai/colab
 
 echo "Starting Next AI Auto-Backup Daemon (Google Drive sync every 5 min)..."
-nohup python3 drive_sync_manager.py daemon 300 > /tmp/nextai_backup_daemon.log 2>&1 &
+setsid python3 drive_sync_manager.py daemon 300 > /tmp/nextai_backup_daemon.log 2>&1 < /dev/null &
 
 echo "Starting AGY Colab Bridge Server on port 8000..."
-nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/agy_bridge.log 2>&1 &
+setsid python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/agy_bridge.log 2>&1 < /dev/null &
 
 # Wait up to 10s for server to start
 SERVER_UP=false
@@ -33,7 +33,7 @@ fi
 echo "Server running locally. Starting Cloudflare Tunnel to generate public WebSocket URL..."
 rm -f /tmp/cloudflared.log
 
-nohup cloudflared tunnel --url http://127.0.0.1:8000 > /tmp/cloudflared.log 2>&1 &
+setsid cloudflared tunnel --url http://127.0.0.1:8000 > /tmp/cloudflared.log 2>&1 < /dev/null &
 
 # Wait for URL to appear in logs
 TUNNEL_URL=""

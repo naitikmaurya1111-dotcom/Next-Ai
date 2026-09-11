@@ -87,7 +87,7 @@ class ChatViewModel @Inject constructor(
         val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
         _reasoningEffort.value = savedEffort
 
-        val savedUrl = prefs.getString("server_url", "wss://computational-really-dish-div.trycloudflare.com/ws")
+        val savedUrl = prefs.getString("server_url", "wss://weather-manitoba-derek-intensive.trycloudflare.com/ws")
         if (!savedUrl.isNullOrBlank()) {
             connectToServer(savedUrl)
         }
