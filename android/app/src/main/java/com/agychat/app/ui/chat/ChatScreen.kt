@@ -269,6 +269,46 @@ fun ChatScreen(
         }
     }
 
+    val showPinnedOnly by viewModel.showPinnedOnly.collectAsState()
+    var isInChatSearchOpen by remember { mutableStateOf(false) }
+    var inChatSearchQuery by remember { mutableStateOf("") }
+    var currentSearchMatchIndex by remember { mutableIntStateOf(0) }
+
+    val pinnedCount = remember(messages) { messages.count { it.isPinned } }
+    val displayedMessages = remember(messages, showPinnedOnly) {
+        if (showPinnedOnly) messages.filter { it.isPinned } else messages
+    }
+
+    val matchingIndices = remember(displayedMessages, inChatSearchQuery) {
+        if (inChatSearchQuery.isBlank()) emptyList()
+        else displayedMessages.mapIndexedNotNull { index, msg ->
+            if (msg.content.contains(inChatSearchQuery, ignoreCase = true) ||
+                (msg.thinking?.contains(inChatSearchQuery, ignoreCase = true) == true)
+            ) index else null
+        }
+    }
+
+    val navigateSearchMatch: (Boolean) -> Unit = { forward ->
+        if (matchingIndices.isNotEmpty()) {
+            val nextIdx = if (forward) {
+                (currentSearchMatchIndex + 1) % matchingIndices.size
+            } else {
+                (currentSearchMatchIndex - 1 + matchingIndices.size) % matchingIndices.size
+            }
+            currentSearchMatchIndex = nextIdx
+            scope.launch {
+                listState.animateScrollToItem(matchingIndices[nextIdx])
+            }
+        }
+    }
+
+    LaunchedEffect(inChatSearchQuery) {
+        currentSearchMatchIndex = 0
+        if (matchingIndices.isNotEmpty()) {
+            listState.animateScrollToItem(matchingIndices[0])
+        }
+    }
+
     val configuration = LocalConfiguration.current
     val screenWidthDp = configuration.screenWidthDp
     val isTablet = screenWidthDp >= 600
@@ -390,6 +430,18 @@ fun ChatScreen(
                                     )
                                 }
 
+                                IconButton(onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    isInChatSearchOpen = !isInChatSearchOpen
+                                    if (!isInChatSearchOpen) inChatSearchQuery = ""
+                                }) {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = "Search in conversation",
+                                        tint = if (isInChatSearchOpen) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
                                 Box {
                                     IconButton(onClick = { showMoreMenu = true }) {
                                         Icon(
@@ -489,6 +541,44 @@ fun ChatScreen(
                                             }
                                         )
 
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Default.PushPin,
+                                                    contentDescription = null,
+                                                    tint = if (showPinnedOnly) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            },
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        if (showPinnedOnly) "Show All Messages" else "Pinned Messages",
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        color = if (showPinnedOnly) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (pinnedCount > 0) {
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Surface(
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            color = Color(0xFFFFB300).copy(alpha = 0.15f)
+                                                        ) {
+                                                            Text(
+                                                                "$pinnedCount",
+                                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                                                color = Color(0xFFFFB300),
+                                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                viewModel.toggleShowPinnedOnly()
+                                            }
+                                        )
+
                                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
                                         DropdownMenuItem(
@@ -535,6 +625,147 @@ fun ChatScreen(
                                 containerColor = MaterialTheme.colorScheme.surface
                             )
                         )
+
+                        // Expandable In-Chat Search Bar (Ctrl+F for mobile)
+                        AnimatedVisibility(
+                            visible = isInChatSearchOpen,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Search,
+                                        contentDescription = null,
+                                        tint = ClaudeTerracotta,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    OutlinedTextField(
+                                        value = inChatSearchQuery,
+                                        onValueChange = { inChatSearchQuery = it },
+                                        placeholder = {
+                                            Text(
+                                                "Find in conversation...",
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                            )
+                                        },
+                                        singleLine = true,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedBorderColor = Color.Transparent,
+                                            unfocusedBorderColor = Color.Transparent,
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent
+                                        ),
+                                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
+                                        modifier = Modifier.weight(1f)
+                                    )
+
+                                    if (inChatSearchQuery.isNotBlank()) {
+                                        val matchCount = matchingIndices.size
+                                        Text(
+                                            text = if (matchCount > 0) "${currentSearchMatchIndex + 1}/$matchCount" else "0/0",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+                                            color = if (matchCount > 0) ClaudeTerracotta else MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
+
+                                        IconButton(
+                                            onClick = { navigateSearchMatch(false) },
+                                            enabled = matchCount > 1,
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.KeyboardArrowUp,
+                                                contentDescription = "Previous match",
+                                                tint = if (matchCount > 1) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = { navigateSearchMatch(true) },
+                                            enabled = matchCount > 1,
+                                            modifier = Modifier.size(28.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "Next match",
+                                                tint = if (matchCount > 1) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            isInChatSearchOpen = false
+                                            inChatSearchQuery = ""
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Close search",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Pinned Filter Active Notice Banner
+                        AnimatedVisibility(
+                            visible = showPinnedOnly,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Surface(
+                                color = Color(0xFFFFB300).copy(alpha = 0.12f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.PushPin,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFFB300),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "Viewing $pinnedCount pinned message${if (pinnedCount == 1) "" else "s"}",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = Color(0xFFFFB300),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = { viewModel.toggleShowPinnedOnly() },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            "Show All",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = Color(0xFFFFB300)
+                                        )
+                                    }
+                                }
+                            }
+                        }
 
                         // If effort dropdown is opened from More menu
                         if (selectedModel.supportsEffort) {
@@ -810,19 +1041,54 @@ fun ChatScreen(
                     .widthIn(max = 840.dp)
                     .fillMaxWidth()
             ) {
-                if (messages.isEmpty()) {
-                    EmptyChatGreeting(
-                        plugins = pluginManager.plugins,
-                        onPromptCardClick = { prompt ->
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.sendMessage(prompt)
-                        },
-                        selectedModelName = selectedModel.name,
-                        memoriesCount = enabledMemoriesCount,
-                        hasCustomInstructions = customInstructions.isEnabled && (customInstructions.aboutUser.isNotBlank() || customInstructions.responsePreferences.isNotBlank()),
-                        onOpenMemorySheet = { showMemorySheet = true },
-                        onOpenCustomInstructions = { showCustomInstructionsSheet = true }
-                    )
+                if (displayedMessages.isEmpty()) {
+                    if (showPinnedOnly) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFB300).copy(alpha = 0.5f),
+                                    modifier = Modifier.size(52.dp)
+                                )
+                                Spacer(Modifier.height(14.dp))
+                                Text(
+                                    "No pinned messages in this chat",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    "Tap the pin icon on any message to keep it bookmarked here.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                OutlinedButton(onClick = { viewModel.toggleShowPinnedOnly() }) {
+                                    Text("Show All Messages")
+                                }
+                            }
+                        }
+                    } else {
+                        EmptyChatGreeting(
+                            plugins = pluginManager.plugins,
+                            onPromptCardClick = { prompt ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.sendMessage(prompt)
+                            },
+                            selectedModelName = selectedModel.name,
+                            memoriesCount = enabledMemoriesCount,
+                            hasCustomInstructions = customInstructions.isEnabled && (customInstructions.aboutUser.isNotBlank() || customInstructions.responsePreferences.isNotBlank()),
+                            onOpenMemorySheet = { showMemorySheet = true },
+                            onOpenCustomInstructions = { showCustomInstructionsSheet = true }
+                        )
+                    }
                 } else {
                     LazyColumn(
                         state = listState,
@@ -832,14 +1098,23 @@ fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                         contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp)
                     ) {
-                        items(messages, key = { it.id }) { msg ->
-                            val isLastAssistant = msg.id == messages.lastOrNull { it.role == "assistant" }?.id
+                        items(displayedMessages, key = { it.id }) { msg ->
+                            val isLastAssistant = msg.id == displayedMessages.lastOrNull { it.role == "assistant" }?.id
                             val isSpeaking = speakingMessageId == msg.id
+                            val isSearchMatch = inChatSearchQuery.isNotBlank() && (
+                                msg.content.contains(inChatSearchQuery, ignoreCase = true) ||
+                                (msg.thinking?.contains(inChatSearchQuery, ignoreCase = true) == true)
+                            )
                             MessageItem(
                                 message = msg,
                                 isSpeaking = isSpeaking,
                                 isLastAssistant = isLastAssistant,
+                                isSearchMatch = isSearchMatch,
                                 onOpenMemory = { showMemorySheet = true },
+                                onTogglePin = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.togglePinMessage(msg.id)
+                                },
                                 onToggleThinking = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.toggleThinkingExpanded(msg.id)
@@ -1322,12 +1597,14 @@ fun MessageItem(
     message: Message,
     isSpeaking: Boolean = false,
     isLastAssistant: Boolean = false,
+    isSearchMatch: Boolean = false,
     onToggleThinking: () -> Unit,
     onToggleTools: () -> Unit = {},
     onRetry: () -> Unit = {},
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: () -> Unit = {},
     onToggleSpeak: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
     onFeedback: (String) -> Unit = {},
     onOpenMemory: () -> Unit = {}
 ) {
@@ -1354,11 +1631,35 @@ fun MessageItem(
                         .widthIn(max = 320.dp)
                         .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
+                        .border(
+                            width = if (isSearchMatch) 2.dp else 1.dp,
+                            color = if (isSearchMatch) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant,
+                            shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+                        )
                         .clickable { showUserActions = !showUserActions }
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Column {
+                        if (message.isPinned) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = "Pinned",
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    "Pinned",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                    color = Color(0xFFFFB300)
+                                )
+                            }
+                        }
                         // Display attached images and files (multi-attachment support)
                         val allAtts = message.allAttachments
                         if (allAtts.isNotEmpty()) {
@@ -1475,6 +1776,29 @@ fun MessageItem(
                         TextButton(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onTogglePin()
+                                showUserActions = false
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = if (message.isPinned) "Unpin" else "Pin",
+                                modifier = Modifier.size(13.dp),
+                                tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                if (message.isPinned) "Unpin" else "Pin",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        TextButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onEditMessage(message.content)
                                 showUserActions = false
                             },
@@ -1541,7 +1865,43 @@ fun MessageItem(
 
                 Spacer(Modifier.width(12.dp))
 
-                Column(modifier = Modifier.weight(1f)) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            if (isSearchMatch) Modifier
+                                .border(1.5.dp, ClaudeTerracotta.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                .padding(6.dp)
+                            else Modifier
+                        )
+                ) {
+                    if (message.isPinned) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0xFFFFB300).copy(alpha = 0.12f),
+                            border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFFFFB300).copy(alpha = 0.35f)),
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "Pinned Answer",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                    color = Color(0xFFFFB300)
+                                )
+                            }
+                        }
+                    }
+
                     // 1. Thinking Process Card (Claude 3.7 / Gemini Thinking Style)
                     if (!message.thinking.isNullOrBlank()) {
                         ThinkingAccordionCard(
@@ -1616,13 +1976,45 @@ fun MessageItem(
                             modifier = Modifier.padding(top = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val wordCount = remember(message.content) {
+                                if (message.content.isBlank()) 0
+                                else message.content.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+                            }
+                            val estTokens = (wordCount * 1.33).toInt()
+
                             // Timestamp inline
                             Text(
                                 text = formatRelativeTime(message.timestamp),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                             )
-                            Spacer(Modifier.width(8.dp))
+                            if (wordCount > 0) {
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "• $wordCount w (~$estTokens t)",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                                )
+                            }
+                            Spacer(Modifier.width(6.dp))
+
+                            // Pin / Star
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onTogglePin()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = if (message.isPinned) "Unpin message" else "Pin message",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
+
                             // Copy with checkmark animation
                             IconButton(
                                 onClick = {
@@ -2679,12 +3071,14 @@ fun ClaudeFloatingInputBar(
                     )
                 )
 
-                // Character count hint (shows when typing a long message)
-                if (text.length > 100) {
+                // Live Word & Token Counter in Composer
+                if (text.isNotBlank()) {
+                    val words = remember(text) { text.trim().split(Regex("\\s+")).count { it.isNotBlank() } }
+                    val estTokens = (words * 1.33).toInt()
                     Text(
-                        text = "${text.length}",
+                        text = if (words >= 15) "$words w · ~$estTokens t" else "${text.length}",
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                        color = if (text.length > 2000) MaterialTheme.colorScheme.error
+                        color = if (text.length > 4000) MaterialTheme.colorScheme.error
                                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                         modifier = Modifier.padding(end = 2.dp, bottom = 8.dp)
                     )

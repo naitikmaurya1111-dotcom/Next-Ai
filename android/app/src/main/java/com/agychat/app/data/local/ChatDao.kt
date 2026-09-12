@@ -52,4 +52,10 @@ interface ChatDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAllMessages(messages: List<MessageEntity>)
+
+    @Query("UPDATE messages SET isPinned = :isPinned WHERE id = :messageId")
+    suspend fun updateMessagePinned(messageId: String, isPinned: Boolean)
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND isPinned = 1 ORDER BY timestamp ASC")
+    fun getPinnedMessagesForConversation(conversationId: String): Flow<List<MessageEntity>>
 }

@@ -104,6 +104,7 @@ class GoogleDriveManager @Inject constructor(
                 put("attachmentIsImage", msg.attachmentIsImage)
                 put("attachmentsJson", msg.attachmentsJson ?: JSONObject.NULL)
                 put("feedback", msg.feedback ?: JSONObject.NULL)
+                put("isPinned", msg.isPinned)
             }
             msgArray.put(msgObj)
         }
@@ -223,7 +224,8 @@ class GoogleDriveManager @Inject constructor(
                             attachmentName = if (obj.isNull("attachmentName")) null else obj.optString("attachmentName"),
                             attachmentIsImage = obj.optBoolean("attachmentIsImage", false),
                             attachmentsJson = if (obj.isNull("attachmentsJson")) null else obj.optString("attachmentsJson"),
-                            feedback = if (obj.isNull("feedback")) null else obj.optString("feedback")
+                            feedback = if (obj.isNull("feedback")) null else obj.optString("feedback"),
+                            isPinned = obj.optBoolean("isPinned", false)
                         )
                     )
                 }

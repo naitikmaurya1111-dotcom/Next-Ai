@@ -22,7 +22,8 @@ data class MessageEntity(
     val attachmentName: String? = null,
     val attachmentIsImage: Boolean = false,
     val attachmentsJson: String? = null,
-    val feedback: String? = null
+    val feedback: String? = null,
+    val isPinned: Boolean = false
 )
 
 @Entity(tableName = "memories")

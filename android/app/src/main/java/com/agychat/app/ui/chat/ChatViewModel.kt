@@ -65,6 +65,13 @@ class ChatViewModel @Inject constructor(
     private val _isTemporaryChat = MutableStateFlow(false)
     val isTemporaryChat: StateFlow<Boolean> = _isTemporaryChat.asStateFlow()
 
+    private val _showPinnedOnly = MutableStateFlow(false)
+    val showPinnedOnly: StateFlow<Boolean> = _showPinnedOnly.asStateFlow()
+
+    fun toggleShowPinnedOnly() {
+        _showPinnedOnly.value = !_showPinnedOnly.value
+    }
+
     fun setMemoryEnabled(enabled: Boolean) {
         _isMemoryEnabled.value = enabled
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
@@ -1216,7 +1223,8 @@ class ChatViewModel @Inject constructor(
                     attachmentName = message.attachmentName ?: firstAtt?.name,
                     attachmentIsImage = message.attachmentIsImage || (firstAtt?.isImage ?: false),
                     attachmentsJson = attachmentsJson,
-                    feedback = message.feedback
+                    feedback = message.feedback,
+                    isPinned = message.isPinned
                 )
             )
         }
@@ -1226,6 +1234,18 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             _messages.value = _messages.value.filterNot { it.id == messageId }
             chatDao.deleteMessage(messageId)
+        }
+    }
+
+    fun togglePinMessage(messageId: String) {
+        val list = _messages.value.toMutableList()
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx >= 0) {
+            val cur = list[idx]
+            val updated = cur.copy(isPinned = !cur.isPinned)
+            list[idx] = updated
+            _messages.value = list
+            saveMessageToDb(updated)
         }
     }
 
@@ -1358,7 +1378,8 @@ class ChatViewModel @Inject constructor(
                         attachmentName = entity.attachmentName,
                         attachmentIsImage = entity.attachmentIsImage,
                         attachments = parsedAttachments,
-                        feedback = entity.feedback
+                        feedback = entity.feedback,
+                        isPinned = entity.isPinned
                     )
                 }
             }
