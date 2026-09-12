@@ -47,6 +47,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -271,20 +272,6 @@ fun ChatScreen(
         }
     }
 
-    // Detect if user has scrolled up to show "Scroll to Bottom" FAB
-    val showScrollToBottom by remember {
-        derivedStateOf {
-            listState.firstVisibleItemIndex > 1 || listState.firstVisibleItemScrollOffset > 300
-        }
-    }
-
-    // Auto-scroll on new messages
-    LaunchedEffect(messages.size, messages.lastOrNull()?.content?.length) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
-        }
-    }
-
     val showPinnedOnly by viewModel.showPinnedOnly.collectAsState()
     var isInChatSearchOpen by remember { mutableStateOf(false) }
     var inChatSearchQuery by remember { mutableStateOf("") }
@@ -293,6 +280,42 @@ fun ChatScreen(
     val pinnedCount = remember(messages) { messages.count { it.isPinned } }
     val displayedMessages = remember(messages, showPinnedOnly) {
         if (showPinnedOnly) messages.filter { it.isPinned } else messages
+    }
+
+    // Determine if user is currently at the bottom of the conversation list
+    val isScrolledToBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            if (totalItems == 0) return@derivedStateOf true
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+            lastVisible != null && lastVisible.index >= totalItems - 1
+        }
+    }
+
+    // Show "Scroll to Bottom" FAB only when user has scrolled up away from bottom
+    val showScrollToBottom by remember {
+        derivedStateOf {
+            !isScrolledToBottom && displayedMessages.size > 1
+        }
+    }
+
+    // Smooth auto-scroll when a new message is appended
+    LaunchedEffect(displayedMessages.size) {
+        if (displayedMessages.isNotEmpty()) {
+            listState.animateScrollToItem(displayedMessages.size - 1)
+        }
+    }
+
+    // Smooth jitter-free follow-scroll during streaming (only if user was already at bottom)
+    val lastStreamingMsg = displayedMessages.lastOrNull()
+    val isStreamingActive = lastStreamingMsg?.isStreaming == true
+    val streamContentLength = lastStreamingMsg?.content?.length ?: 0
+
+    LaunchedEffect(streamContentLength) {
+        if (isStreamingActive && isScrolledToBottom && !listState.isScrollInProgress && displayedMessages.isNotEmpty()) {
+            listState.scrollToItem(displayedMessages.size - 1)
+        }
     }
 
     val matchingIndices = remember(displayedMessages, inChatSearchQuery) {
@@ -703,46 +726,78 @@ fun ChatScreen(
                             )
                         )
 
-                        // Connection Resilience Banner
+                        // Discrete, Elegant Connection Status Banner
                         AnimatedVisibility(
-                            visible = connectionState == ConnectionState.ERROR || connectionState == ConnectionState.DISCONNECTED,
+                            visible = connectionState != ConnectionState.CONNECTED,
                             enter = expandVertically() + fadeIn(),
                             exit = shrinkVertically() + fadeOut()
                         ) {
+                            val isError = connectionState == ConnectionState.ERROR || connectionState == ConnectionState.DISCONNECTED
+                            val bannerBg = if (isError) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f)
+                                           else ClaudeTerracotta.copy(alpha = 0.12f)
+                            val bannerTextColor = if (isError) MaterialTheme.colorScheme.onErrorContainer else ClaudeTerracotta
+                            val bannerBorderColor = if (isError) MaterialTheme.colorScheme.error.copy(alpha = 0.25f) else ClaudeTerracotta.copy(alpha = 0.25f)
+
                             Surface(
-                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f),
+                                color = bannerBg,
+                                border = androidx.compose.foundation.BorderStroke(0.6.dp, bannerBorderColor),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                                        .padding(horizontal = 16.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                        Icon(
-                                            Icons.Default.CloudOff,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onErrorContainer,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(Modifier.width(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        if (connectionState == ConnectionState.CONNECTING) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(13.dp),
+                                                strokeWidth = 2.dp,
+                                                color = bannerTextColor
+                                            )
+                                        } else {
+                                            Icon(
+                                                Icons.Default.CloudOff,
+                                                contentDescription = null,
+                                                tint = bannerTextColor,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.width(9.dp))
+                                        val statusText = when (connectionState) {
+                                            ConnectionState.CONNECTING -> "Connecting to Colab Bridge…"
+                                            ConnectionState.ERROR -> "Disconnected from Colab Bridge"
+                                            ConnectionState.DISCONNECTED -> "Bridge Offline"
+                                            ConnectionState.CONNECTED -> ""
+                                        }
                                         Text(
-                                            text = if (connectionState == ConnectionState.ERROR) "Disconnected from Colab Bridge" else "Bridge Offline",
-                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                            text = statusText,
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
+                                            color = bannerTextColor
                                         )
                                     }
-                                    TextButton(
-                                        onClick = { viewModel.reconnect() },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            "Reconnect",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                            color = MaterialTheme.colorScheme.onErrorContainer
-                                        )
+
+                                    if (isError) {
+                                        Surface(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                viewModel.reconnect()
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = bannerTextColor.copy(alpha = 0.15f)
+                                        ) {
+                                            Text(
+                                                text = "Reconnect",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                                color = bannerTextColor,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -965,55 +1020,25 @@ fun ChatScreen(
                             color = MaterialTheme.colorScheme.outlineVariant
                         )
 
-                        // Subtle Status Strip / Connection Notice
-                        if (!currentStatus.isNullOrBlank() || connectionState != ConnectionState.CONNECTED) {
+                        // Subtle Status Strip (only when actively performing action while connected)
+                        if (!currentStatus.isNullOrBlank() && connectionState == ConnectionState.CONNECTED) {
                             Surface(
-                                color = if (connectionState == ConnectionState.CONNECTED) ClaudeTerracotta.copy(alpha = 0.08f)
-                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                color = ClaudeTerracotta.copy(alpha = 0.08f),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 16.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                        if (connectionState != ConnectionState.CONNECTED) {
-                                            val statusText = when (connectionState) {
-                                                ConnectionState.CONNECTING -> "Connecting to Colab bridge…"
-                                                ConnectionState.ERROR -> "Bridge disconnected"
-                                                ConnectionState.DISCONNECTED -> "Bridge offline"
-                                                ConnectionState.CONNECTED -> ""
-                                            }
-                                            Text(
-                                                text = statusText,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = if (connectionState == ConnectionState.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        } else {
-                                            Text(
-                                                text = currentStatus ?: "",
-                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                                                color = ClaudeTerracotta,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-
-                                    if (connectionState == ConnectionState.DISCONNECTED || connectionState == ConnectionState.ERROR) {
-                                        Text(
-                                            text = "Reconnect",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                            color = ClaudeTerracotta,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(4.dp))
-                                                .clickable { viewModel.reconnect() }
-                                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
+                                    Text(
+                                        text = currentStatus ?: "",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                        color = ClaudeTerracotta,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
                             }
                         }
@@ -1853,15 +1878,15 @@ fun MessageItem(
                 SelectionContainer {
                     Box(
                         modifier = Modifier
-                            .widthIn(max = 320.dp)
-                            .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
+                            .widthIn(min = 48.dp, max = 560.dp)
+                            .clip(RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
                             .border(
-                                width = if (isSearchMatch) 2.dp else 1.dp,
-                                color = if (isSearchMatch) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant,
-                                shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+                                width = if (isSearchMatch) 2.dp else 0.8.dp,
+                                color = if (isSearchMatch) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                shape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
                             )
-                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                            .padding(horizontal = 16.dp, vertical = 11.dp)
                     ) {
                         Column {
                             if (!message.replyToContent.isNullOrBlank()) {
@@ -2304,15 +2329,35 @@ fun MessageItem(
                             )
                         }
                     }
-                    // Streaming blinking cursor
-                    if (message.isStreaming && message.content.isNotBlank()) {
-                        StreamingCursorBlink()
+
+                    // Initial streaming state before first token arrives
+                    if (message.isStreaming && message.content.isBlank() && message.thinking.isNullOrBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        ) {
+                            StreamingCursorBlink()
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Thinking…",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    } else if (message.isStreaming && message.content.isNotBlank()) {
+                        // Trailing cursor during active streaming
+                        Box(modifier = Modifier.padding(top = 4.dp)) {
+                            StreamingCursorBlink()
+                        }
                     }
 
                     // 4. Subtle Action Bar below assistant message (ChatGPT & Gemini style)
                     if (!message.isStreaming) {
                         Row(
-                            modifier = Modifier.padding(top = 8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .horizontalScroll(rememberScrollState()),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             val wordCount = remember(message.content) {
@@ -3089,21 +3134,17 @@ fun ClaudeTypingBubble() {
 fun StreamingCursorBlink() {
     val infiniteTransition = rememberInfiniteTransition(label = "cursor")
     val alpha by infiniteTransition.animateFloat(
-        initialValue = 1f, targetValue = 0f,
+        initialValue = 1f,
+        targetValue = 0.15f,
         animationSpec = infiniteRepeatable(
-            animation = keyframes {
-                durationMillis = 900
-                1f at 0
-                1f at 400
-                0f at 500
-                0f at 900
-            },
-            repeatMode = RepeatMode.Restart
-        ), label = "cursorAlpha"
+            animation = tween(durationMillis = 550, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "cursorAlpha"
     )
     Box(
         modifier = Modifier
-            .size(width = 2.dp, height = 16.dp)
+            .size(width = 2.5.dp, height = 15.dp)
             .clip(RoundedCornerShape(1.dp))
             .background(ClaudeTerracotta.copy(alpha = alpha))
     )
@@ -4577,17 +4618,27 @@ fun FileViewerBottomSheet(
     onShare: () -> Unit,
     onCopy: () -> Unit
 ) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val ext = remember(fileData.filename) {
+        fileData.filename.substringAfterLast(".", "").lowercase()
+    }
+    val isMarkdown = ext in setOf("md", "markdown", "txt")
+    var viewMode by remember(fileData.filename) {
+        mutableStateOf(if (isMarkdown) "rendered" else "code")
+    }
+
     ModalBottomSheet(
         onDismissRequest = onClose,
         containerColor = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
         dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.85f)
-                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .fillMaxHeight(0.88f)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
             // Header Bar
             Row(
@@ -4599,28 +4650,60 @@ fun FileViewerBottomSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
+                    val (headerIcon, iconBg, iconTint) = when {
+                        isMarkdown -> Triple(Icons.Default.Article, ClaudeTerracotta.copy(alpha = 0.15f), ClaudeTerracotta)
+                        ext in setOf("py", "kt", "js", "ts", "java", "c", "cpp", "rs", "go", "html", "css") ->
+                            Triple(Icons.Default.Code, ChatGptBlue.copy(alpha = 0.15f), ChatGptBlue)
+                        ext in setOf("json", "csv", "tsv", "sql", "xml", "yaml", "yml") ->
+                            Triple(Icons.Default.TableChart, ChatGptEmerald.copy(alpha = 0.15f), ChatGptEmerald)
+                        ext in setOf("sh", "bash") ->
+                            Triple(Icons.Default.Terminal, ChatGptEmerald.copy(alpha = 0.15f), ChatGptEmerald)
+                        else -> Triple(Icons.Default.Description, ClaudeTerracotta.copy(alpha = 0.15f), ClaudeTerracotta)
+                    }
+
                     Box(
                         modifier = Modifier
                             .size(38.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                            .background(iconBg),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.Description,
+                            headerIcon,
                             contentDescription = null,
-                            tint = ClaudeTerracotta,
+                            tint = iconTint,
                             modifier = Modifier.size(20.dp)
                         )
                     }
                     Spacer(Modifier.width(10.dp))
                     Column {
-                        Text(
-                            text = fileData.filename,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = fileData.filename,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (ext.isNotBlank()) {
+                                Spacer(Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = iconTint.copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        text = ext.uppercase(),
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        ),
+                                        color = iconTint,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                            }
+                        }
+
                         val sizeStr = if (fileData.size > 0) {
                             val kb = fileData.size / 1024.0
                             String.format(java.util.Locale.US, "%.1f KB", kb)
@@ -4638,50 +4721,82 @@ fun FileViewerBottomSheet(
                     }
                 }
 
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (isMarkdown) {
+                        // Toggle between Rendered preview and Raw code
+                        Surface(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewMode = if (viewMode == "rendered") "code" else "rendered"
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Text(
+                                text = if (viewMode == "rendered") "Raw" else "Preview",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                color = ClaudeTerracotta,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(4.dp))
+                    }
+
+                    IconButton(onClick = onClose) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
                 }
             }
 
             Spacer(Modifier.height(10.dp))
 
-            // Quick Actions Bar
+            // Quick Actions Bar: Save to Phone, Copy, Share
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = onSaveToPhone,
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onSaveToPhone()
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1.2f),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Save to Phone", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                    Text("Save to Phone", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
                 }
 
                 OutlinedButton(
-                    onClick = onCopy,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.weight(0.7f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onCopy()
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(0.8f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                 ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Copy", style = MaterialTheme.typography.labelMedium)
+                    Text("Copy", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
                 }
 
                 OutlinedButton(
-                    onClick = onShare,
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.weight(0.7f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onShare()
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(0.8f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                 ) {
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Share", style = MaterialTheme.typography.labelMedium)
+                    Text("Share", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
                 }
             }
 
@@ -4705,7 +4820,7 @@ fun FileViewerBottomSheet(
                             CircularProgressIndicator(color = ClaudeTerracotta, modifier = Modifier.size(36.dp))
                             Spacer(Modifier.height(12.dp))
                             Text(
-                                "Loading file from Colab server...",
+                                "Loading file from Colab bridge…",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -4735,16 +4850,32 @@ fun FileViewerBottomSheet(
                         }
                     }
                     else -> {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(bottom = 24.dp)
-                        ) {
-                            SelectionContainer {
-                                MarkdownContent(
-                                    text = fileData.content,
-                                    textColor = MaterialTheme.colorScheme.onSurface
+                        if (isMarkdown && viewMode == "rendered") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(bottom = 24.dp)
+                            ) {
+                                SelectionContainer {
+                                    MarkdownContent(
+                                        text = fileData.content,
+                                        textColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        } else {
+                            // Syntax-highlighted code editor viewer with line numbers
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(bottom = 24.dp)
+                            ) {
+                                CodeBlockView(
+                                    language = if (isMarkdown) "markdown" else ext,
+                                    code = fileData.content,
+                                    showLineNumbers = true
                                 )
                             }
                         }
@@ -4769,17 +4900,19 @@ fun SessionArtifactsBottomSheet(
     onOpenFile: (String) -> Unit,
     onCopyPath: (String) -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
+
     ModalBottomSheet(
         onDismissRequest = onClose,
         containerColor = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
         dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.75f)
-                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .fillMaxHeight(0.78f)
+                .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
             // Header
             Row(
@@ -4870,7 +5003,7 @@ fun SessionArtifactsBottomSheet(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "When you ask Next AI to create scripts, derivations, notes, or physics formula sheets, they will appear here for instant preview and download.",
+                        text = "When you ask Next AI to create scripts, derivations, notes, or code files, they will appear here for instant preview and download.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         textAlign = TextAlign.Center,
@@ -4884,15 +5017,17 @@ fun SessionArtifactsBottomSheet(
                 ) {
                     items(sessionFiles) { filePath ->
                         val fileName = filePath.substringAfterLast('/')
-                        val ext = fileName.substringAfterLast('.', "")
-                        val icon = when (ext.lowercase()) {
-                            "md", "txt" -> Icons.Default.Description
-                            "py", "kt", "js", "html", "sh" -> Icons.Default.Code
-                            else -> Icons.Default.Description
+                        val ext = fileName.substringAfterLast('.', "").lowercase()
+                        val (icon, tint) = when (ext) {
+                            "md", "txt" -> Icons.Default.Article to ClaudeTerracotta
+                            "py", "kt", "js", "ts", "java", "cpp", "c", "rs", "go" -> Icons.Default.Code to ChatGptBlue
+                            "json", "csv", "tsv", "sql", "xml", "yaml", "yml" -> Icons.Default.TableChart to ChatGptEmerald
+                            "sh", "bash" -> Icons.Default.Terminal to ChatGptEmerald
+                            else -> Icons.Default.Description to ClaudeTerracotta
                         }
                         Surface(
                             shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                             border = androidx.compose.foundation.BorderStroke(
                                 0.8.dp,
                                 MaterialTheme.colorScheme.outlineVariant
@@ -4907,26 +5042,46 @@ fun SessionArtifactsBottomSheet(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(36.dp)
+                                        .size(38.dp)
                                         .clip(RoundedCornerShape(8.dp))
-                                        .background(ClaudeTerracotta.copy(alpha = 0.12f)),
+                                        .background(tint.copy(alpha = 0.12f)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
                                         imageVector = icon,
                                         contentDescription = null,
-                                        tint = ClaudeTerracotta,
-                                        modifier = Modifier.size(18.dp)
+                                        tint = tint,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                                 Spacer(Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = fileName,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = fileName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (ext.isNotBlank()) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = tint.copy(alpha = 0.12f)
+                                            ) {
+                                                Text(
+                                                    text = ext.uppercase(),
+                                                    style = MaterialTheme.typography.labelSmall.copy(
+                                                        fontFamily = FontFamily.Monospace,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 8.5.sp
+                                                    ),
+                                                    color = tint,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    }
                                     Text(
                                         text = filePath,
                                         style = MaterialTheme.typography.labelSmall,
@@ -4937,7 +5092,10 @@ fun SessionArtifactsBottomSheet(
                                 }
                                 Spacer(Modifier.width(8.dp))
                                 IconButton(
-                                    onClick = { onCopyPath(filePath) },
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onCopyPath(filePath)
+                                    },
                                     modifier = Modifier.size(32.dp)
                                 ) {
                                     Icon(
@@ -4948,7 +5106,10 @@ fun SessionArtifactsBottomSheet(
                                     )
                                 }
                                 Button(
-                                    onClick = { onOpenFile(filePath) },
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onOpenFile(filePath)
+                                    },
                                     colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),

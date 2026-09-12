@@ -683,13 +683,156 @@ fun KaTeXDisplayView(
 }
 
 /**
- * Modern ChatGPT Code Block with language badge, copy action, and monospace font.
+ * Ultra-fast, zero-overhead syntax highlighter for Compose AnnotatedString.
+ * Highlights keywords, types, strings, numbers, comments, and annotations
+ * across Kotlin, Python, JavaScript, TypeScript, Bash, Java, C/C++, Rust, Go, SQL, JSON, etc.
+ */
+object SyntaxHighlighter {
+    private val keywords = setOf(
+        "abstract", "as", "async", "await", "break", "case", "catch", "class", "const", "continue",
+        "data", "default", "def", "delete", "do", "elif", "else", "enum", "export", "extends", "false",
+        "fi", "final", "finally", "fn", "for", "from", "fun", "function", "if", "implements", "import",
+        "in", "inline", "instanceof", "interface", "internal", "is", "let", "match", "mut", "new",
+        "nil", "none", "null", "object", "open", "operator", "out", "override", "package", "private",
+        "protected", "public", "return", "sealed", "select", "self", "static", "struct", "super",
+        "suspend", "switch", "then", "this", "throw", "true", "try", "type", "typeof", "val", "var",
+        "void", "when", "where", "while", "yield", "echo", "printf", "select", "insert", "update",
+        "delete", "from", "create", "table", "alter", "drop", "join"
+    )
+
+    private val commonTypes = setOf(
+        "Int", "Long", "Float", "Double", "String", "Boolean", "Char", "Byte", "Short",
+        "Unit", "Any", "List", "Map", "Set", "Array", "int", "float", "double", "bool",
+        "char", "void", "Promise", "Observable", "Flow", "StateFlow", "Composable",
+        "Modifier", "Box", "Row", "Column", "Text", "Image", "Surface", "Button",
+        "dict", "str", "list", "set", "tuple", "Exception", "Throwable"
+    )
+
+    enum class TokenType {
+        COMMENT, STRING, NUMBER, KEYWORD, TYPE, ANNOTATION, PLAIN
+    }
+
+    data class TokenSpan(val start: Int, val end: Int, val type: TokenType)
+
+    fun highlight(code: String, language: String, isDark: Boolean): androidx.compose.ui.text.AnnotatedString {
+        if (code.isBlank()) return androidx.compose.ui.text.AnnotatedString("")
+
+        val commentColor = if (isDark) Color(0xFF8B949E) else Color(0xFF6E7781)
+        val stringColor = if (isDark) Color(0xFF7EE787) else Color(0xFF116329)
+        val numberColor = if (isDark) Color(0xFF79C0FF) else Color(0xFF0550AE)
+        val keywordColor = if (isDark) Color(0xFFFF7B72) else Color(0xFFCF222E)
+        val typeColor = if (isDark) Color(0xFFFFA657) else Color(0xFF953800)
+        val annotationColor = if (isDark) Color(0xFFD2A8FF) else Color(0xFF8250DF)
+        val defaultTextColor = if (isDark) Color(0xFFE6EDF3) else Color(0xFF1F2328)
+
+        val langLower = language.lowercase()
+        val isHashCommentLang = langLower in setOf("python", "py", "bash", "sh", "shell", "yaml", "yml", "dockerfile", "r")
+
+        val commentRegex = if (isHashCommentLang) {
+            Regex("""(#.*)""")
+        } else {
+            Regex("""(//.*|/\*[\s\S]*?\*/|#.*)""")
+        }
+
+        val stringRegex = Regex(""""(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`""")
+        val annotationRegex = Regex("""@[A-Za-z0-9_]+""")
+        val numberRegex = Regex("""\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\b""")
+        val wordRegex = Regex("""\b[A-Za-z_][A-Za-z0-9_]*\b""")
+
+        val spans = mutableListOf<TokenSpan>()
+        val taken = java.util.BitSet(code.length)
+
+        fun markRange(start: Int, end: Int, type: TokenType) {
+            for (idx in start until end) taken.set(idx)
+            spans.add(TokenSpan(start, end, type))
+        }
+
+        for (m in commentRegex.findAll(code)) {
+            val s = m.range.first
+            val e = m.range.last + 1
+            if (!taken.get(s)) markRange(s, e, TokenType.COMMENT)
+        }
+
+        for (m in stringRegex.findAll(code)) {
+            val s = m.range.first
+            val e = m.range.last + 1
+            if (!taken.get(s)) markRange(s, e, TokenType.STRING)
+        }
+
+        for (m in annotationRegex.findAll(code)) {
+            val s = m.range.first
+            val e = m.range.last + 1
+            if (!taken.get(s)) markRange(s, e, TokenType.ANNOTATION)
+        }
+
+        for (m in numberRegex.findAll(code)) {
+            val s = m.range.first
+            val e = m.range.last + 1
+            if (!taken.get(s)) markRange(s, e, TokenType.NUMBER)
+        }
+
+        for (m in wordRegex.findAll(code)) {
+            val s = m.range.first
+            val e = m.range.last + 1
+            if (!taken.get(s)) {
+                val w = m.value
+                when {
+                    w in keywords -> markRange(s, e, TokenType.KEYWORD)
+                    w in commonTypes || (w.firstOrNull()?.isUpperCase() == true && w.length > 1) -> markRange(s, e, TokenType.TYPE)
+                }
+            }
+        }
+
+        spans.sortBy { it.start }
+
+        return buildAnnotatedString {
+            var cursor = 0
+            for (span in spans) {
+                if (span.start > cursor) {
+                    withStyle(SpanStyle(color = defaultTextColor)) {
+                        append(code.substring(cursor, span.start))
+                    }
+                }
+                val chunk = code.substring(span.start, span.end)
+                val style = when (span.type) {
+                    TokenType.COMMENT -> SpanStyle(color = commentColor, fontStyle = FontStyle.Italic)
+                    TokenType.STRING -> SpanStyle(color = stringColor)
+                    TokenType.NUMBER -> SpanStyle(color = numberColor)
+                    TokenType.KEYWORD -> SpanStyle(color = keywordColor, fontWeight = FontWeight.Bold)
+                    TokenType.TYPE -> SpanStyle(color = typeColor)
+                    TokenType.ANNOTATION -> SpanStyle(color = annotationColor)
+                    TokenType.PLAIN -> SpanStyle(color = defaultTextColor)
+                }
+                withStyle(style) {
+                    append(chunk)
+                }
+                cursor = span.end
+            }
+            if (cursor < code.length) {
+                withStyle(SpanStyle(color = defaultTextColor)) {
+                    append(code.substring(cursor))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Modern ChatGPT Code Block with language badge, copy action, line numbers, and syntax highlighting.
  */
 @Composable
-fun CodeBlockView(language: String, code: String) {
+fun CodeBlockView(
+    language: String,
+    code: String,
+    modifier: Modifier = Modifier,
+    showLineNumbers: Boolean = true
+) {
     val context = LocalContext.current
-    val displayLang = if (language.isNotBlank()) language.lowercase() else "code"
+    val haptic = LocalHapticFeedback.current
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val displayLang = if (language.isNotBlank()) language.uppercase() else "CODE"
     var isCopied by remember { mutableStateOf(false) }
+    var isWrapped by remember { mutableStateOf(false) }
 
     LaunchedEffect(isCopied) {
         if (isCopied) {
@@ -698,80 +841,180 @@ fun CodeBlockView(language: String, code: String) {
         }
     }
 
+    val lines = remember(code) { code.lines() }
+    val lineCount = lines.size
+    val highlightedCode = remember(code, language, isDark) {
+        SyntaxHighlighter.highlight(code, language, isDark)
+    }
+
+    val headerBg = if (isDark) Color(0xFF1B1B20) else Color(0xFFEAE8E2)
+    val bodyBg = if (isDark) Color(0xFF101014) else Color(0xFFF9F9F8)
+    val borderColor = if (isDark) Color(0xFF2C2C34) else Color(0xFFDDDCD5)
+    val lineNumColor = if (isDark) Color(0xFF555562) else Color(0xFFA0A0A8)
+
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(CodeBlockBg)
-            .border(1.dp, CodeBlockBorder, RoundedCornerShape(12.dp))
+            .background(bodyBg)
+            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
     ) {
         // Modern ChatGPT Code Header Bar
         DisableSelection {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(CodeBlockHeader)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                    .background(headerBg)
+                    .padding(horizontal = 14.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = displayLang,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.5.sp
-                    ),
-                    color = Color(0xFFA6A6B0),
-                    fontWeight = FontWeight.Medium
-                )
-
-                Surface(
-                    onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("Code", code))
-                        isCopied = true
-                        Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color(0xFF2B2B32).copy(alpha = 0.7f),
-                    border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFF3E3E48))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (isDark) Color(0xFF282830) else Color(0xFFDEDBD4))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Icon(
-                            if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                            contentDescription = if (isCopied) "Copied" else "Copy code",
-                            modifier = Modifier.size(13.dp),
-                            tint = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
-                        )
                         Text(
-                            text = if (isCopied) "Copied!" else "Copy code",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                            color = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                            text = displayLang,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                letterSpacing = 0.6.sp
+                            ),
+                            color = if (isDark) Color(0xFFD0D0D8) else Color(0xFF404048)
                         )
+                    }
+
+                    if (lineCount > 1) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "$lineCount lines",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                color = if (isDark) Color(0xFF7E7E8A) else Color(0xFF888892)
+                            )
+                        )
+                    }
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Wrap / Scroll toggle
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            isWrapped = !isWrapped
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isWrapped) ClaudeTerracotta.copy(alpha = 0.15f) else Color.Transparent
+                    ) {
+                        Text(
+                            text = if (isWrapped) "Wrap" else "Scroll",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = if (isWrapped) ClaudeTerracotta else if (isDark) Color(0xFFA6A6B0) else Color(0xFF606068),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
+
+                    // Copy code button
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("Code", code))
+                            isCopied = true
+                            Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f)
+                                else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = if (isCopied) "Copied" else "Copy code",
+                                modifier = Modifier.size(12.dp),
+                                tint = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058)
+                            )
+                            Text(
+                                text = if (isCopied) "Copied!" else "Copy",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058)
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Code Content with Horizontal Scroll and full text selection
+        // Code Content with Line Numbers and Selection
         SelectionContainer {
-            Text(
-                text = code,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 19.sp,
-                    fontSize = 12.5.sp
-                ),
-                color = Color(0xFFEDEDF0),
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(14.dp)
-            )
+                    .padding(vertical = 10.dp)
+            ) {
+                if (showLineNumbers && lineCount > 1) {
+                    DisableSelection {
+                        val lineNumsText = (1..lineCount).joinToString("\n")
+                        Text(
+                            text = lineNumsText,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                lineHeight = 20.sp,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.End
+                            ),
+                            color = lineNumColor,
+                            modifier = Modifier
+                                .padding(start = 10.dp, end = 8.dp)
+                                .widthIn(min = 22.dp)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .fillMaxHeight()
+                            .background(borderColor.copy(alpha = 0.6f))
+                    )
+                }
+
+                val codeModifier = if (isWrapped) {
+                    Modifier
+                        .weight(1f)
+                        .padding(horizontal = 12.dp)
+                } else {
+                    Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp)
+                }
+
+                Text(
+                    text = highlightedCode,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp,
+                        fontSize = 12.sp
+                    ),
+                    modifier = codeModifier
+                )
+            }
         }
     }
 }
