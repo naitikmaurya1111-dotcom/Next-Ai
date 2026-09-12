@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import os
 import json
+import time
 import logging
 from aiofiles import open as aio_open
-from agy_runner import run_agy_command
+from agy_runner import run_agy_command, cancel_agy_command
 
 # Configure logging
 logging.basicConfig(
@@ -155,12 +156,26 @@ async def websocket_endpoint(websocket: WebSocket):
             conv_id = ""
             effort = "high"
             model = ""
+            memories = []
             try:
                 payload = json.loads(raw)
+                # Handle stream cancellation request
+                if payload.get("type") == "cancel":
+                    cancel_id = payload.get("conversation_id", "")
+                    logger.info(f"Cancellation requested for conversation: {cancel_id}")
+                    cancelled = cancel_agy_command(cancel_id)
+                    await manager.send(json.dumps({
+                        "type": "done",
+                        "content": "[Generation stopped by user]",
+                        "timestamp": time.time() if "time" in globals() else 0
+                    }), websocket)
+                    continue
+
                 user_message = payload.get("message", raw)
                 conv_id = payload.get("conversation_id", "")
                 effort = payload.get("effort", "high")
                 model = payload.get("model", "")
+                memories = payload.get("memories", [])
                 file_name = payload.get("file_name")
                 file_data = payload.get("file_data")
                 if file_name and file_data:
@@ -178,8 +193,8 @@ async def websocket_endpoint(websocket: WebSocket):
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
 
-            # Stream agy command output back to client with model and effort
-            async for event in run_agy_command(user_message, conv_id, effort, model):
+            # Stream agy command output back to client with model, effort, and memories
+            async for event in run_agy_command(user_message, conv_id, effort, model, memories):
                 await manager.send(event, websocket)
 
     except WebSocketDisconnect:

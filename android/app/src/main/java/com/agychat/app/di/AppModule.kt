@@ -57,6 +57,12 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideMemoryDao(database: AppDatabase): com.agychat.app.data.local.MemoryDao {
+        return database.memoryDao()
+    }
+
+    @Provides
+    @Singleton
     fun provideGoogleDriveManager(): GoogleDriveManager {
         return GoogleDriveManager()
     }

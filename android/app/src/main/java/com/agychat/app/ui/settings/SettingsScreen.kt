@@ -28,7 +28,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.agychat.app.domain.model.AiModel
 import com.agychat.app.domain.model.ConnectionState
 import com.agychat.app.domain.model.ModelRegistry
+import com.agychat.app.domain.model.ThinkingLevel
 import com.agychat.app.ui.chat.ChatViewModel
+import com.agychat.app.ui.chat.ManageMemorySheet
+import com.agychat.app.ui.theme.ClaudeTerracotta
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +43,10 @@ fun SettingsScreen(
     val prefs = remember { context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE) }
     val connectionState by chatViewModel.connectionState.collectAsState()
     val selectedModel by chatViewModel.selectedModel.collectAsState()
+    val isMemoryEnabled by chatViewModel.isMemoryEnabled.collectAsState()
+    val enabledMemoriesCount by chatViewModel.enabledMemoriesCount.collectAsState(initial = 0)
+    val allMemories by chatViewModel.memories.collectAsState(initial = emptyList())
+    var showMemorySheet by remember { mutableStateOf(false) }
 
     var serverUrl by remember {
         mutableStateOf(
@@ -241,35 +248,66 @@ fun SettingsScreen(
                 Spacer(Modifier.height(14.dp))
 
                 Text(
-                    text = "Reasoning Depth:",
+                    text = "Thinking Level (Reasoning Effort):",
                     style = MaterialTheme.typography.titleSmall
                 )
 
                 if (selectedModel.supportsEffort) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("low", "medium", "high").forEach { effort ->
-                            val isSelected = reasoningEffort == effort
-                            OutlinedButton(
+                        ThinkingLevel.entries.forEach { level ->
+                            val isSelected = reasoningEffort.equals(level.id, ignoreCase = true)
+                            Surface(
                                 onClick = {
-                                    reasoningEffort = effort
-                                    chatViewModel.setReasoningEffort(effort)
+                                    reasoningEffort = level.id
+                                    chatViewModel.setReasoningEffort(level.id)
                                 },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(10.dp),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
-                                )
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    if (isSelected) 1.5.dp else 0.6.dp,
+                                    if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(
-                                    text = effort.uppercase(),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = level.displayName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                text = level.badge,
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                        }
+                                        Text(
+                                            text = level.description,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = ClaudeTerracotta,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -302,7 +340,64 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 3: Backup & Export ────────────────────────────────
+            // ── Section 3: Personalization & Memory (ChatGPT Style) ───────
+            SettingsCard(
+                title = "Personalization & Memory",
+                icon = Icons.Default.Psychology,
+                badge = if (isMemoryEnabled) "ACTIVE ($enabledMemoriesCount)" to ClaudeTerracotta else "DISABLED" to Color.Gray
+            ) {
+                Text(
+                    text = "Next AI remembers details across all conversations to give more relevant, personalized responses.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Persistent Memory",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (isMemoryEnabled) "Enabled · Injecting $enabledMemoriesCount active memories into prompts" else "Disabled · Past memories won't be referenced",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isMemoryEnabled,
+                        onCheckedChange = {
+                            chatViewModel.setMemoryEnabled(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                Button(
+                    onClick = { showMemorySheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                ) {
+                    Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Manage Memories (${allMemories.size})")
+                }
+            }
+
+            // ── Section 4: Backup & Cloud Storage ─────────────────────────
             SettingsCard(
                 title = "Backup & Cloud Storage",
                 icon = Icons.Default.CloudSync
@@ -358,7 +453,7 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 4: About & System ─────────────────────────────────
+            // ── Section 5: About & System ─────────────────────────────────
             SettingsCard(
                 title = "About Next AI",
                 icon = Icons.Default.Info
@@ -378,6 +473,13 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showMemorySheet) {
+        ManageMemorySheet(
+            viewModel = chatViewModel,
+            onDismiss = { showMemorySheet = false }
+        )
     }
 }
 

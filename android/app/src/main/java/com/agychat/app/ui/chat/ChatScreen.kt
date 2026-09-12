@@ -101,6 +101,8 @@ fun ChatScreen(
     var showAttachmentMenu by remember { mutableStateOf(false) }
     var showEffortMenu by remember { mutableStateOf(false) }
     var showModelSheet by remember { mutableStateOf(false) }
+    var showMemorySheet by remember { mutableStateOf(false) }
+    val enabledMemoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
     var speakingMessageId by remember { mutableStateOf<String?>(null) }
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
 
@@ -478,6 +480,31 @@ fun ChatScreen(
                                     }
                                 }
 
+                                // ChatGPT-Style Persistent Memory Button
+                                IconButton(onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showMemorySheet = true
+                                }) {
+                                    BadgedBox(
+                                        badge = {
+                                            if (enabledMemoriesCount > 0) {
+                                                Badge(
+                                                    containerColor = ClaudeTerracotta,
+                                                    contentColor = Color.White
+                                                ) {
+                                                    Text(text = enabledMemoriesCount.toString(), fontSize = 9.sp)
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Psychology,
+                                            contentDescription = "Manage Memories",
+                                            tint = if (enabledMemoriesCount > 0) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
                                 IconButton(onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.startNewConversation()
@@ -599,6 +626,10 @@ fun ChatScreen(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.sendMessage(inputText)
                             inputText = ""
+                        },
+                        onStop = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            viewModel.stopGenerating()
                         },
                         onOpenPlugins = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -818,6 +849,13 @@ fun ChatScreen(
                 Toast.makeText(context, "Active model: ${model.name}", Toast.LENGTH_SHORT).show()
             },
             onDismiss = { showModelSheet = false }
+        )
+    }
+
+    if (showMemorySheet) {
+        ManageMemorySheet(
+            viewModel = viewModel,
+            onDismiss = { showMemorySheet = false }
         )
     }
 }
@@ -1722,6 +1760,7 @@ fun ClaudeFloatingInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit = {},
     onOpenPlugins: () -> Unit,
     onAttachFile: () -> Unit,
     onVoiceInput: () -> Unit = {},
@@ -1912,24 +1951,34 @@ fun ClaudeFloatingInputBar(
 
                 Spacer(Modifier.width(4.dp))
 
-                // Claude Circular Send Button
-                val canSend = (text.isNotBlank() || attachment != null) && isConnected && !isLoading
-                FilledIconButton(
-                    onClick = onSend,
-                    enabled = canSend,
-                    modifier = Modifier.size(38.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = ClaudeTerracotta,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = ClaudeTerracotta
+                // Claude Circular Send Button or Stop Generation Button
+                if (isLoading) {
+                    FilledIconButton(
+                        onClick = onStop,
+                        modifier = Modifier.size(38.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = Color.White
                         )
-                    } else {
+                    ) {
+                        Icon(
+                            Icons.Default.Stop,
+                            contentDescription = "Stop Generating",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    val canSend = (text.isNotBlank() || attachment != null) && isConnected
+                    FilledIconButton(
+                        onClick = onSend,
+                        enabled = canSend,
+                        modifier = Modifier.size(38.dp),
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = ClaudeTerracotta,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    ) {
                         Icon(
                             Icons.Default.ArrowUpward,
                             contentDescription = "Send",

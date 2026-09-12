@@ -23,3 +23,13 @@ data class MessageEntity(
     val attachmentIsImage: Boolean = false,
     val feedback: String? = null
 )
+
+@Entity(tableName = "memories")
+data class MemoryEntity(
+    @PrimaryKey val id: String,
+    val content: String,
+    val category: String = "general", // "preference", "project", "personal", "general"
+    val isEnabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)

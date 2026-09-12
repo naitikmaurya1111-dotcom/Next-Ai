@@ -50,6 +50,47 @@ data class Conversation(
 )
 
 @Serializable
+data class MemoryItem(
+    val id: String,
+    val content: String,
+    val category: String = "general", // "preference", "project", "personal", "general"
+    val isEnabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+enum class ThinkingLevel(
+    val id: String,
+    val displayName: String,
+    val badge: String,
+    val description: String
+) {
+    HIGH(
+        id = "high",
+        displayName = "High Thinking",
+        badge = "🧠 Deep",
+        description = "Maximum cognitive depth & comprehensive multi-step reasoning"
+    ),
+    MEDIUM(
+        id = "medium",
+        displayName = "Medium Thinking",
+        badge = "⚡ Balanced",
+        description = "Balanced speed and reasoning depth for standard coding"
+    ),
+    LOW(
+        id = "low",
+        displayName = "Low Thinking",
+        badge = "🚀 Fast",
+        description = "Minimal thinking latency for quick answers and brief edits"
+    );
+
+    companion object {
+        fun fromId(id: String?): ThinkingLevel {
+            return entries.find { it.id.equals(id, ignoreCase = true) } ?: HIGH
+        }
+    }
+}
+
+@Serializable
 data class AiModel(
     val id: String,
     val name: String,

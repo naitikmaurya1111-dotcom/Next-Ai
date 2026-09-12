@@ -34,7 +34,7 @@ RESUME_FILE_NAME = "SESSION_RESUME.md"
 SNAPSHOT_FILE_NAME = "session_snapshot.json"
 ARCHIVE_FILE_NAME = "nextai_session_latest.tar.gz"
 
-CONVERSATION_ID = "045d867f-f060-4d70-b425-c2f6b980df73"
+CONVERSATION_ID = os.environ.get("CONVERSATION_ID", "78283619-3d26-416e-ba19-d4590d6c440a")
 
 def is_drive_mounted() -> bool:
     """Check if Google Drive is mounted at /content/drive/MyDrive."""
@@ -61,7 +61,7 @@ def flush_sqlite_wal(db_path: Path):
     except Exception as e:
         print(f"  ⚠️ Warning flushing {db_path.name}: {e}")
 
-def generate_session_resume_md(target_path: Path, git_sha: str = "42700e0"):
+def generate_session_resume_md(target_path: Path, git_sha: str = "7da0dd9"):
     """Generate comprehensive markdown summary for the model to resume instantly."""
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     
@@ -69,32 +69,39 @@ def generate_session_resume_md(target_path: Path, git_sha: str = "42700e0"):
 > **Last Synced**: `{now_str}`  
 > **Conversation ID**: `{CONVERSATION_ID}`  
 > **Git Head SHA**: `{git_sha}`  
-> **Active App Version**: `v1.0.10`  
+> **Active App Version**: `v1.1.0`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
 
 ## 🎯 Executive Summary & Mission
-You are pair programming on **Next AI**, a premium, Claude-like Android Chat App integrated with Google Colab running the **Antigravity CLI** (`agy`) bridge server via WebSocket.
+You are pair programming on **Next AI**, a premium Android Chat App inspired by ChatGPT, Claude, and Gemini, integrated with Google Colab running the **Antigravity CLI** (`agy`) bridge server via WebSocket.
 
 ### 🔑 Critical User Rules & Instructions
 1. **GitHub Pushes**: **ALWAYS ask the user for explicit confirmation before pushing to GitHub (`git push`). NEVER push automatically without permission.**
 2. **Drive Persistence**: When a session restarts, resume context seamlessly from this Google Drive backup (`SESSION_RESUME.md`).
-3. **Reasoning Effort**: Defaults to `high`.
+3. **Reasoning Effort / Thinking Level**: User controls Low, Medium, High via UI; bridge auto-maps without CLI flag conflicts.
 
 ---
 
-## 📱 Android App Architecture & Current Status
+## 📱 Android App Architecture & Features
 - **Package**: `com.agychat.app`
-- **UI Framework**: Jetpack Compose (Material 3 Dynamic Theme)
+- **UI Framework**: Jetpack Compose (Material 3 Dynamic Theme, Claude Terracotta styling)
 - **Dependency Injection**: Hilt
-- **Local DB**: SQLite via Room (`ChatDao`, `ConversationEntity`, `MessageEntity`)
-- **Network**: OkHttp WebSocket client (`AgyWebSocketClient`) with 20s ping intervals and auto-reconnect
-- **Navigation & ViewModel Scoping**:
-  - `sharedChatViewModel: ChatViewModel = hiltViewModel()` is hoisted to the root `AGYChatNavHost` level in `MainActivity.kt`.
-  - All screens (`ChatScreen`, `SettingsScreen`, `HistoryScreen`) share the exact same ViewModel instance so the WebSocket connection remains active when switching screens.
-  - Auto-connects on startup to the saved bridge URL via `SharedPreferences("next_ai_prefs")`.
-- **Slash Command Plugins** (all 8 implemented as cards in `PluginDrawer` and chips):
+- **Local DB**: SQLite via Room (`ChatDao`, `MemoryDao`, `ConversationEntity`, `MessageEntity`, `MemoryEntity`)
+- **Network**: OkHttp WebSocket client (`AgyWebSocketClient`) with 20s ping intervals, auto-reconnect, and cancellation support (cancel events)
+- **Persistent ChatGPT-Style Memory**:
+  - `MemoryEntity` and `MemoryDao` with CRUD, toggle, search, and category tags.
+  - `ManageMemorySheet.kt`: modal bottom sheet for adding, searching, filtering, toggling, and clearing memories.
+  - Automatic memory injection into WebSocket payloads and prompt formatting in `agy_runner.py`.
+  - `/remember <fact>` shortcut in chat for instant memory persistence.
+- **Thinking Level & Model Configuration**:
+  - Full support for Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.1 Pro, Claude Sonnet 4.6, Claude Opus 4.6, and GPT-OSS 120B.
+  - CLI flag conflict resolved via canonical suffix mapping in `resolve_model_and_effort()`.
+- **Active Stop Generation**:
+  - Claude/ChatGPT style red stop square in `ClaudeFloatingInputBar` when streaming is in progress.
+  - Subprocess cancellation via `active_processes` tracking in `agy_runner.py`.
+- **Slash Command Plugins** (8 implemented in `PluginDrawer`):
   1. `/goal` — Run long-running tasks autonomously until done
   2. `/plan` — Multi-step planning before execution
   3. `/boost` — Deep thinking and rigorous multi-perspective review
@@ -297,6 +304,22 @@ def restore():
             shutil.copy2(str(resume_md), str(PROJECT_DIR / RESUME_FILE_NAME))
 
     shutil.rmtree(tmp_restore_dir, ignore_errors=True)
+
+    # Restore GitHub token if present in backup dir
+    token_file = source_dir / ".github_token"
+    if token_file.exists():
+        try:
+            token = token_file.read_text().strip()
+            os.environ["GITHUB_TOKEN"] = token
+            if PROJECT_DIR.exists():
+                subprocess.run(
+                    ["git", "remote", "set-url", "origin", f"https://naitikmaurya1111-dotcom:{token}@github.com/naitikmaurya1111-dotcom/Next-Ai.git"],
+                    cwd=str(PROJECT_DIR),
+                    check=False
+                )
+            print("🔑 GitHub Personal Access Token restored and git remote configured!")
+        except Exception as e:
+            print(f"⚠️ Note loading GitHub token: {e}")
 
     print("✅ Antigravity CLI state, conversations, and brain artifacts restored successfully!")
 

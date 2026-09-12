@@ -11,6 +11,89 @@ logger = logging.getLogger(__name__)
 
 # Map Android client conversation IDs to agy conversation IDs
 conversation_map: Dict[str, str] = {}
+# Track active processes for cancellation
+active_processes: Dict[str, asyncio.subprocess.Process] = {}
+
+def cancel_agy_command(client_conv_id: str) -> bool:
+    """Terminate the currently active subprocess for a conversation."""
+    proc = active_processes.get(client_conv_id)
+    if proc and proc.returncode is None:
+        try:
+            proc.terminate()
+            logger.info(f"Terminated active agy process for conv {client_conv_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to terminate process: {e}")
+            try:
+                proc.kill()
+                return True
+            except Exception:
+                pass
+    return False
+
+def resolve_model_and_effort(model: str, effort: str) -> tuple[str, str | None]:
+    """
+    Resolve model name and thinking effort so there are ZERO flag conflicts in Antigravity CLI.
+    In agy, Gemini models accept -high/-medium/-low suffixes directly.
+    Claude and GPT-OSS models reject --effort.
+    """
+    clean_model = (model or "").strip()
+    effort_clean = (effort or "high").lower()
+    if effort_clean not in ("low", "medium", "high"):
+        effort_clean = "high"
+
+    # Default to Gemini 3.8 Flash with requested effort
+    if not clean_model:
+        return f"gemini-3.8-flash-{effort_clean}", None
+
+    # Claude models (no effort flag allowed)
+    if "claude" in clean_model.lower():
+        if "opus" in clean_model.lower():
+            return "claude-opus-4-6-thinking", None
+        return "claude-sonnet-4-6", None
+
+    # GPT-OSS model
+    if "gpt-oss" in clean_model.lower():
+        return "gpt-oss-120b-medium", None
+
+    # Gemini Flash models
+    for base in ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"):
+        if base in clean_model:
+            return f"{base}-{effort_clean}", None
+
+    # Gemini Pro models (3.1 Pro only supports high or low)
+    if "gemini-3.1-pro" in clean_model:
+        pro_effort = "low" if effort_clean == "low" else "high"
+        return f"gemini-3.1-pro-{pro_effort}", None
+
+    return clean_model, None
+
+def format_prompt_with_memories(message: str, memories: list = None) -> str:
+    """Inject persistent user memories into context as system instructions (ChatGPT Memory style)."""
+    if not memories:
+        return message
+
+    # Save memories backup to Drive if available
+    try:
+        backup_dir = "/content/drive/MyDrive/NextAI_Backup"
+        if os.path.exists(backup_dir):
+            with open(os.path.join(backup_dir, "user_memories.json"), "w") as f:
+                json.dump(memories, f, indent=2)
+    except Exception:
+        pass
+
+    memory_lines = "\n".join([f"• {str(m).strip()}" for m in memories if str(m).strip()])
+    if not memory_lines:
+        return message
+
+    context_header = (
+        f"<user_memory>\n"
+        f"The user has saved the following persistent memories & preferences across chats:\n"
+        f"{memory_lines}\n"
+        f"Always respect and incorporate these memories when answering.\n"
+        f"</user_memory>\n\n"
+    )
+    return context_header + message
 
 # Regular expressions to strip ANSI escape codes, terminal probes, and control characters
 ANSI_REGEX = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -118,7 +201,7 @@ AVAILABLE_MODELS = [
     }
 ]
 
-async def run_agy_command(message: str, client_conv_id: str = "", effort: str = "high", model: str = ""):
+async def run_agy_command(message: str, client_conv_id: str = "", effort: str = "high", model: str = "", memories: list = None):
     """
     Runs agy command asynchronously with native stream-json output
     and yields real-time JSON-framed tokens (thinking, tool_event, chunk, done, error)
@@ -132,31 +215,25 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
     agy_bin = get_agy_path()
     agy_conv_id = conversation_map.get(client_conv_id) if client_conv_id else None
 
-    cmd_args = [agy_bin]
+    # Resolve exact model name and thinking effort to prevent any CLI flag conflict
+    resolved_model, _ = resolve_model_and_effort(model, effort)
+
+    cmd_args = [agy_bin, "--model", resolved_model]
 
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
-    # Model flag selection
-    clean_model = model.strip() if model else ""
-    if clean_model:
-        cmd_args.extend(["--model", clean_model])
-        # Antigravity CLI strictly disallows --effort for Claude and GPT-OSS models
-        if "claude" not in clean_model.lower() and "gpt-oss" not in clean_model.lower():
-            if effort in ("low", "medium", "high"):
-                cmd_args.extend(["--effort", effort])
-    else:
-        if effort in ("low", "medium", "high"):
-            cmd_args.extend(["--effort", effort])
+    # Inject persistent user memories into prompt
+    full_prompt = format_prompt_with_memories(message_trimmed, memories or [])
 
     cmd_args.extend([
         "--dangerously-skip-permissions",
         "--output-format", "stream-json",
-        "-p", message_trimmed
+        "-p", full_prompt
     ])
 
     logger.info(f"Executing: {' '.join(cmd_args[:6])} ... -p '{message_trimmed[:40]}'")
-    yield _make_event("info", f"AGY running with {clean_model or 'default model'}...")
+    yield _make_event("info", f"Next AI running with {resolved_model}...")
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -164,6 +241,8 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
+        if client_conv_id:
+            active_processes[client_conv_id] = process
 
         accumulated_text = ""
 
@@ -262,4 +341,7 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
     except Exception as e:
         logger.exception(f"Error in run_agy_command: {e}")
         yield _make_event("error", f"Bridge error: {str(e)}")
+    finally:
+        if client_conv_id:
+            active_processes.pop(client_conv_id, None)
 

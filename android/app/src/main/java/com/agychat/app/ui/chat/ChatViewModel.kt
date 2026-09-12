@@ -17,6 +17,9 @@ import com.agychat.app.domain.model.ModelRegistry
 import com.agychat.app.domain.model.SlashCommand
 import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.domain.model.WsEvent
+import com.agychat.app.data.local.MemoryDao
+import com.agychat.app.data.local.MemoryEntity
+import com.agychat.app.domain.model.ThinkingLevel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -34,8 +37,54 @@ import javax.inject.Inject
 class ChatViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val webSocketClient: AgyWebSocketClient,
-    private val chatDao: ChatDao
+    private val chatDao: ChatDao,
+    private val memoryDao: MemoryDao
 ) : ViewModel() {
+
+    // ChatGPT-Style Persistent Memory System
+    val memories = memoryDao.getAllMemoriesFlow()
+    val enabledMemoriesCount = memoryDao.getEnabledCountFlow()
+
+    private val _isMemoryEnabled = MutableStateFlow(true)
+    val isMemoryEnabled: StateFlow<Boolean> = _isMemoryEnabled.asStateFlow()
+
+    fun setMemoryEnabled(enabled: Boolean) {
+        _isMemoryEnabled.value = enabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("memory_enabled", enabled).apply()
+    }
+
+    fun addMemory(content: String, category: String = "general") {
+        viewModelScope.launch {
+            val memory = MemoryEntity(
+                id = UUID.randomUUID().toString(),
+                content = content.trim(),
+                category = category,
+                isEnabled = true,
+                createdAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis()
+            )
+            memoryDao.insertMemory(memory)
+        }
+    }
+
+    fun toggleMemory(id: String, isEnabled: Boolean) {
+        viewModelScope.launch {
+            memoryDao.updateMemoryEnabled(id, isEnabled)
+        }
+    }
+
+    fun deleteMemory(id: String) {
+        viewModelScope.launch {
+            memoryDao.deleteMemoryById(id)
+        }
+    }
+
+    fun clearAllMemories() {
+        viewModelScope.launch {
+            memoryDao.clearAllMemories()
+        }
+    }
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
@@ -104,6 +153,9 @@ class ChatViewModel @Inject constructor(
 
         val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
         _reasoningEffort.value = savedEffort
+
+        val savedMemoryEnabled = prefs.getBoolean("memory_enabled", true)
+        _isMemoryEnabled.value = savedMemoryEnabled
 
         val savedUrl = prefs.getString("server_url", "wss://fell-worldwide-mistakes-asks.trycloudflare.com/ws")
         if (!savedUrl.isNullOrBlank()) {
@@ -418,6 +470,22 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun stopGenerating() {
+        if (!_isLoading.value) return
+        viewModelScope.launch {
+            val cancelPayload = JSONObject().apply {
+                put("type", "cancel")
+                put("conversation_id", currentConversationId)
+            }
+            webSocketClient.sendMessage(cancelPayload.toString())
+            finalizeStreamingMessage()
+            _isLoading.value = false
+            _currentStatus.value = "Generation stopped"
+            delay(1200)
+            _currentStatus.value = null
+        }
+    }
+
     fun sendMessage(text: String) {
         val trimmed = text.trim()
         val attachment = _selectedAttachment.value
@@ -426,6 +494,15 @@ class ChatViewModel @Inject constructor(
         if (_connectionState.value != ConnectionState.CONNECTED) {
             appendSystemMessage("⚠️ Not connected to Colab Bridge. Tap reconnect or open Settings.")
             return
+        }
+
+        // Automatic Memory Detection: If user starts with /remember
+        if (trimmed.startsWith("/remember", ignoreCase = true)) {
+            val memContent = trimmed.removePrefix("/remember").removePrefix(":").trim()
+            if (memContent.isNotBlank()) {
+                addMemory(memContent, "preference")
+                appendSystemMessage("🧠 Saved to Memory: \"$memContent\"")
+            }
         }
 
         val userMessage = Message(
@@ -456,26 +533,44 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
-        val effort = prefs.getString("reasoning_effort", "high") ?: "high"
+        viewModelScope.launch {
+            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+            val effort = prefs.getString("reasoning_effort", "high") ?: "high"
 
-        val payload = JSONObject().apply {
-            put("message", trimmed.ifBlank { "Please inspect the attached file: ${attachment?.name}" })
-            put("conversation_id", currentConversationId)
-            put("effort", effort)
-            put("model", _selectedModel.value.id)
-            if (attachment != null) {
-                put("file_name", attachment.name)
-                put("file_is_image", attachment.isImage)
-                if (fileBase64 != null) {
-                    put("file_data", fileBase64)
+            // Collect enabled memories to include in context
+            val memoryList = if (_isMemoryEnabled.value) {
+                try {
+                    memoryDao.getAllEnabledMemories().map { it.content }
+                } catch (e: Exception) {
+                    emptyList()
                 }
+            } else {
+                emptyList()
             }
-        }.toString()
 
-        webSocketClient.sendMessage(payload)
-        _isLoading.value = true
-        _currentStatus.value = "Sending to AGY..."
+            val payload = JSONObject().apply {
+                put("message", trimmed.ifBlank { "Please inspect the attached file: ${attachment?.name}" })
+                put("conversation_id", currentConversationId)
+                put("effort", effort)
+                put("model", _selectedModel.value.id)
+                if (memoryList.isNotEmpty()) {
+                    val memArray = org.json.JSONArray()
+                    memoryList.forEach { memArray.put(it) }
+                    put("memories", memArray)
+                }
+                if (attachment != null) {
+                    put("file_name", attachment.name)
+                    put("file_is_image", attachment.isImage)
+                    if (fileBase64 != null) {
+                        put("file_data", fileBase64)
+                    }
+                }
+            }.toString()
+
+            webSocketClient.sendMessage(payload)
+            _isLoading.value = true
+            _currentStatus.value = "Next AI thinking..."
+        }
     }
 
     fun sendSlashCommand(command: SlashCommand, extraPrompt: String = "") {
