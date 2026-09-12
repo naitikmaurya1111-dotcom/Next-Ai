@@ -515,8 +515,35 @@ fun MathEquationBlockView(
 }
 
 /**
+ * Public JavaScript bridge for KaTeX HTML container communication.
+ * Handles Double, Float, Int, and String height measurements safely without reflection errors.
+ */
+class KaTeXBridge(private val onHeightChanged: (Int) -> Unit) {
+    @JavascriptInterface
+    fun onHeight(h: Double) {
+        onHeightChanged(h.toInt())
+    }
+
+    @JavascriptInterface
+    fun onHeight(h: Float) {
+        onHeightChanged(h.toInt())
+    }
+
+    @JavascriptInterface
+    fun onHeight(h: Int) {
+        onHeightChanged(h)
+    }
+
+    @JavascriptInterface
+    fun onHeight(h: String) {
+        h.toDoubleOrNull()?.let { onHeightChanged(it.toInt()) }
+    }
+}
+
+/**
  * Transparent, borderless KaTeX WebView display engine.
  * Renders publication-quality mathematical notation seamlessly inline on canvas.
+ * Guaranteed to fail gracefully to mathematical Unicode typography if WebView is unavailable.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -528,55 +555,79 @@ fun KaTeXDisplayView(
     modifier: Modifier = Modifier
 ) {
     var isLoaded by remember { mutableStateOf(false) }
+    var webViewFailed by remember { mutableStateOf(false) }
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        AndroidView(
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    setBackgroundColor(0) // Transparent background
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.allowFileAccess = true
-                    settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
-                    isVerticalScrollBarEnabled = false
-                    isHorizontalScrollBarEnabled = true
-                    isNestedScrollingEnabled = false
+        if (!webViewFailed) {
+            DisableSelection {
+                AndroidView(
+                    factory = { ctx ->
+                        try {
+                            WebView(ctx).apply {
+                                setBackgroundColor(0) // Transparent background
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.allowFileAccess = true
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
+                                isVerticalScrollBarEnabled = false
+                                isHorizontalScrollBarEnabled = true
+                                isNestedScrollingEnabled = false
 
-                    addJavascriptInterface(object {
-                        @JavascriptInterface
-                        fun onHeight(h: Float) {
-                            post { onHeightMeasured(h.toInt()) }
+                                val bridge = KaTeXBridge { heightPx ->
+                                    post { onHeightMeasured(heightPx) }
+                                }
+                                addJavascriptInterface(bridge, "AndroidBridge")
+
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageFinished(view: WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        isLoaded = true
+                                        try {
+                                            evaluateJavascript(
+                                                "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                                                null
+                                            )
+                                        } catch (_: Throwable) {}
+                                    }
+
+                                    override fun onReceivedError(
+                                        view: WebView?,
+                                        errorCode: Int,
+                                        description: String?,
+                                        failingUrl: String?
+                                    ) {
+                                        webViewFailed = true
+                                    }
+                                }
+
+                                loadUrl("file:///android_asset/katex/katex_container.html")
+                            }
+                        } catch (t: Throwable) {
+                            android.util.Log.e("KaTeXDisplayView", "WebView creation failed, using unicode fallback", t)
+                            webViewFailed = true
+                            android.view.View(ctx)
                         }
-                    }, "AndroidBridge")
-
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            super.onPageFinished(view, url)
-                            isLoaded = true
-                            evaluateJavascript(
-                                "renderMath(${JSONObject.quote(formula)}, $isDark);",
-                                null
-                            )
+                    },
+                    update = { view ->
+                        if (isLoaded && !webViewFailed && view is WebView) {
+                            try {
+                                view.evaluateJavascript(
+                                    "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                                    null
+                                )
+                            } catch (t: Throwable) {
+                                android.util.Log.w("KaTeXDisplayView", "evaluateJavascript failed", t)
+                            }
                         }
-                    }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
 
-                    loadUrl("file:///android_asset/katex/katex_container.html")
-                }
-            },
-            update = { webView ->
-                if (isLoaded) {
-                    webView.evaluateJavascript(
-                        "renderMath(${JSONObject.quote(formula)}, $isDark);",
-                        null
-                    )
-                }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
-
-        // Instant mathematical Serif preview while WebView is evaluating KaTeX
-        if (!isLoaded) {
+        // Instant mathematical Serif preview while WebView is evaluating KaTeX or if WebView fails
+        if (!isLoaded || webViewFailed) {
             Text(
                 text = unicodeFallback,
                 style = MaterialTheme.typography.bodyLarge.copy(

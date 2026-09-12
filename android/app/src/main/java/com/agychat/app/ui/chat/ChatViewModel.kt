@@ -22,8 +22,12 @@ import com.agychat.app.domain.model.Personalization
 import com.agychat.app.data.local.MemoryDao
 import com.agychat.app.data.local.MemoryEntity
 import com.agychat.app.domain.model.ThinkingLevel
+import com.agychat.app.data.network.UrlSanitizer
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import android.util.Log
 import org.json.JSONObject
 import java.util.UUID
 import javax.inject.Inject
@@ -473,57 +478,87 @@ class ChatViewModel @Inject constructor(
             memories.collectLatest { currentMemoriesList = it }
         }
 
-        val savedUrl = prefs.getString("server_url", "wss://ends-acid-risks-revised.trycloudflare.com/ws")
-        if (!savedUrl.isNullOrBlank()) {
-            connectToServer(savedUrl)
+        val rawSavedUrl = prefs.getString("server_url", "wss://olympic-understood-heater-angel.trycloudflare.com/ws")
+        val validUrl = UrlSanitizer.normalizeWebSocketUrl(rawSavedUrl)
+            ?: UrlSanitizer.normalizeWebSocketUrl("wss://olympic-understood-heater-angel.trycloudflare.com/ws")
+        if (!validUrl.isNullOrBlank()) {
+            connectToServer(validUrl)
         }
     }
 
+    private val connectionExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e("ChatViewModel", "WebSocket connection coroutine caught error", throwable)
+        _connectionState.value = ConnectionState.ERROR
+        _isLoading.value = false
+        _currentStatus.value = "Connection error: ${throwable.message ?: "Check server URL"}"
+        scheduleAutoReconnect()
+    }
+
     fun connectToServer(url: String) {
-        val trimmed = url.trim()
-        if (trimmed.isBlank()) return
+        val cleanUrl = UrlSanitizer.normalizeWebSocketUrl(url)
+        if (cleanUrl == null) {
+            Log.w("ChatViewModel", "connectToServer called with invalid URL: '$url'")
+            _connectionState.value = ConnectionState.ERROR
+            _isLoading.value = false
+            _currentStatus.value = "Invalid WebSocket URL. Please check Settings."
+            return
+        }
 
-        // Persist URL so it survives app restarts
+        // Persist ONLY validated, normalized URL so it survives app restarts safely
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("server_url", trimmed).apply()
+        prefs.edit().putString("server_url", cleanUrl).apply()
 
-        _serverUrl.value = trimmed
+        _serverUrl.value = cleanUrl
         _connectionState.value = ConnectionState.CONNECTING
         _currentStatus.value = "Connecting to Colab bridge..."
 
         connectionJob?.cancel()
-        connectionJob = viewModelScope.launch {
-            webSocketClient.connect(trimmed).collectLatest { event ->
-                when (event) {
-                    is WsEvent.Connected -> {
-                        _connectionState.value = ConnectionState.CONNECTED
-                        _currentStatus.value = null
-                        reconnectAttempts = 0
-                        reconnectJob?.cancel()
-                    }
-                    is WsEvent.Message -> handleIncomingMessage(event.text)
-                    is WsEvent.Error -> {
-                        _connectionState.value = ConnectionState.ERROR
-                        _isLoading.value = false
-                        _currentStatus.value = "Connection lost. Retrying..."
-                        scheduleAutoReconnect()
-                    }
-                    is WsEvent.Closed -> {
-                        _connectionState.value = ConnectionState.DISCONNECTED
-                        _isLoading.value = false
-                        _currentStatus.value = null
-                        scheduleAutoReconnect()
+        connectionJob = viewModelScope.launch(Dispatchers.IO + connectionExceptionHandler) {
+            try {
+                webSocketClient.connect(cleanUrl).collectLatest { event ->
+                    when (event) {
+                        is WsEvent.Connected -> {
+                            _connectionState.value = ConnectionState.CONNECTED
+                            _currentStatus.value = null
+                            reconnectAttempts = 0
+                            reconnectJob?.cancel()
+                        }
+                        is WsEvent.Message -> handleIncomingMessage(event.text)
+                        is WsEvent.Error -> {
+                            _connectionState.value = ConnectionState.ERROR
+                            _isLoading.value = false
+                            _currentStatus.value = "Connection lost. Retrying..."
+                            scheduleAutoReconnect()
+                        }
+                        is WsEvent.Closed -> {
+                            _connectionState.value = ConnectionState.DISCONNECTED
+                            _isLoading.value = false
+                            _currentStatus.value = null
+                            scheduleAutoReconnect()
+                        }
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                Log.e("ChatViewModel", "Exception in WebSocket event stream", t)
+                _connectionState.value = ConnectionState.ERROR
+                _isLoading.value = false
+                _currentStatus.value = "Connection failed: ${t.message ?: "Retrying..."}"
+                scheduleAutoReconnect()
             }
         }
     }
 
     fun reconnect() {
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
-        val url = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
-        if (url.isNotBlank()) {
-            connectToServer(url)
+        val rawUrl = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+        val cleanUrl = UrlSanitizer.normalizeWebSocketUrl(rawUrl)
+        if (cleanUrl != null) {
+            connectToServer(cleanUrl)
+        } else {
+            _connectionState.value = ConnectionState.ERROR
+            _currentStatus.value = "No valid URL configured"
         }
     }
 
@@ -540,7 +575,7 @@ class ChatViewModel @Inject constructor(
         }
         val delayMs = minOf(2000L * (1 shl reconnectAttempts), 30_000L) // 2s, 4s, 8s, 16s, 30s
         reconnectAttempts++
-        reconnectJob = viewModelScope.launch {
+        reconnectJob = viewModelScope.launch(Dispatchers.IO + connectionExceptionHandler) {
             _currentStatus.value = "Reconnecting in ${delayMs / 1000}s... (attempt $reconnectAttempts)"
             delay(delayMs)
             if (_connectionState.value != ConnectionState.CONNECTED) {

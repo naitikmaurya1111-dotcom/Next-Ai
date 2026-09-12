@@ -41,6 +41,7 @@ import com.agychat.app.domain.model.ThinkingLevel
 import com.agychat.app.ui.chat.ChatViewModel
 import com.agychat.app.ui.chat.ManageMemorySheet
 import com.agychat.app.ui.theme.ClaudeTerracotta
+import com.agychat.app.data.network.UrlSanitizer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -181,12 +182,49 @@ fun SettingsScreen(
 
                 Spacer(Modifier.height(10.dp))
 
+                val isUrlValid = remember(serverUrl) {
+                    serverUrl.isBlank() || UrlSanitizer.isValidWebSocketUrl(serverUrl)
+                }
+
                 OutlinedTextField(
                     value = serverUrl,
                     onValueChange = { serverUrl = it },
                     label = { Text("WebSocket URL") },
                     placeholder = { Text("wss://xxxx.trycloudflare.com/ws") },
                     singleLine = true,
+                    isError = serverUrl.isNotBlank() && !isUrlValid,
+                    supportingText = {
+                        if (serverUrl.isNotBlank()) {
+                            if (isUrlValid) {
+                                Text("✓ Valid WebSocket endpoint", color = Color(0xFF4CAF50), fontSize = 11.sp)
+                            } else {
+                                Text("⚠️ Format: wss://xxxx.trycloudflare.com/ws", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+                            }
+                        }
+                    },
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (serverUrl.isNotBlank()) {
+                                IconButton(onClick = { serverUrl = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(18.dp))
+                                }
+                            }
+                            IconButton(onClick = {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                val clip = cm?.primaryClip
+                                if (clip != null && clip.itemCount > 0) {
+                                    val rawClip = clip.getItemAt(0).text?.toString() ?: ""
+                                    val cleaned = UrlSanitizer.normalizeWebSocketUrl(rawClip) ?: rawClip.trim()
+                                    serverUrl = cleaned
+                                    Toast.makeText(context, "Pasted and sanitized URL", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                                }
+                            }) {
+                                Icon(Icons.Default.ContentPaste, contentDescription = "Paste from clipboard", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 )
@@ -195,10 +233,15 @@ fun SettingsScreen(
 
                 Button(
                     onClick = {
-                        val trimmed = serverUrl.trim()
-                        prefs.edit().putString("server_url", trimmed).apply()
-                        chatViewModel.connectToServer(trimmed)
-                        Toast.makeText(context, "Connecting to $trimmed...", Toast.LENGTH_SHORT).show()
+                        val cleanUrl = UrlSanitizer.normalizeWebSocketUrl(serverUrl)
+                        if (cleanUrl != null) {
+                            serverUrl = cleanUrl
+                            prefs.edit().putString("server_url", cleanUrl).apply()
+                            chatViewModel.connectToServer(cleanUrl)
+                            Toast.makeText(context, "Connecting to bridge...", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Please enter a valid WebSocket URL (e.g. wss://xxxx.trycloudflare.com/ws)", Toast.LENGTH_LONG).show()
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
