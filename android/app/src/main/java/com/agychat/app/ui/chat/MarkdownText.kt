@@ -65,9 +65,6 @@ fun MarkdownContent(
     ) {
         for (section in sections) {
             when (section) {
-                is MarkdownBlock.Math -> {
-                    MathFormulaBlockView(formula = section.formula)
-                }
                 is MarkdownBlock.Code -> {
                     CodeBlockView(language = section.language, code = section.code)
                 }
@@ -378,30 +375,190 @@ fun CodeBlockView(language: String, code: String) {
 }
 
 /**
+ * Converts raw LaTeX math expressions and symbols into clean, human-readable Unicode text
+ * seamlessly inline without boxes, cards, or webviews.
+ */
+fun formatLatexToReadableMath(raw: String): String {
+    if (raw.isBlank() || (!raw.contains('\\') && !raw.contains('$') && !raw.contains("frac{") && !raw.contains("sqrt{"))) {
+        return raw
+    }
+
+    var text = raw
+
+    // Strip LaTeX equation and align environments
+    text = text.replace(Regex("""\\begin\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
+    text = text.replace(Regex("""\\end\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
+
+    // Quantum physics bras and kets: \ket{\psi} -> |ψ⟩, \bra{\phi} -> ⟨ϕ|, \braket{a}{b} -> ⟨a|b⟩
+    text = text.replace(Regex("""\\braket\{([^{}]+)\}\{([^{}]+)\}""")) { "⟨${it.groupValues[1]}|${it.groupValues[2]}⟩" }
+    text = text.replace(Regex("""\\ket\{([^{}]+)\}""")) { "|${it.groupValues[1]}⟩" }
+    text = text.replace(Regex("""\\bra\{([^{}]+)\}""")) { "⟨${it.groupValues[1]}|" }
+    text = text.replace("\\langle", "⟨").replace("\\rangle", "⟩")
+
+    // Vectors and accents: \vec{r} -> r⃗, \hat{H} -> Ĥ, \dot{x} -> ẋ
+    text = text.replace(Regex("""\\vec\{([^{}]+)\}""")) { "${it.groupValues[1]}⃗" }
+    text = text.replace(Regex("""\\dot\{([^{}]+)\}""")) { "${it.groupValues[1]}̇" }
+    text = text.replace(Regex("""\\ddot\{([^{}]+)\}""")) { "${it.groupValues[1]}̈" }
+    text = text.replace(Regex("""\\bar\{([^{}]+)\}""")) { "${it.groupValues[1]}̄" }
+    text = text.replace(Regex("""\\tilde\{([^{}]+)\}""")) { "${it.groupValues[1]}̃" }
+
+    // Remove \left and \right
+    text = text.replace("\\left", "").replace("\\right", "")
+
+    // Remove \text{...}, \mathrm{...}, \mathbf{...}, \boldsymbol{...}
+    text = text.replace(Regex("""\\text\{([^}]+)\}""")) { it.groupValues[1] }
+    text = text.replace(Regex("""\\mathrm\{([^}]+)\}""")) { it.groupValues[1] }
+    text = text.replace(Regex("""\\mathbf\{([^}]+)\}""")) { it.groupValues[1] }
+    text = text.replace(Regex("""\\boldsymbol\{([^}]+)\}""")) { it.groupValues[1] }
+
+    // Blackboard bold: \mathbb{R} -> ℝ, \mathbb{C} -> ℂ, etc.
+    val bbMap = mapOf("R" to "ℝ", "C" to "ℂ", "N" to "ℕ", "Z" to "ℤ", "Q" to "ℚ", "H" to "ℍ")
+    for ((k, v) in bbMap) {
+        text = text.replace("\\mathbb{$k}", v).replace("\\mathbb $k", v)
+    }
+
+    // Calligraphic: \mathcal{H} -> ℋ
+    val calMap = mapOf(
+        "H" to "ℋ", "E" to "ℰ", "L" to "ℒ", "M" to "ℳ", "F" to "ℱ",
+        "O" to "𝒪", "P" to "𝒫", "D" to "𝒟", "C" to "𝒞", "N" to "𝒩",
+        "B" to "ℬ", "A" to "𝒜"
+    )
+    for ((k, v) in calMap) {
+        text = text.replace("\\mathcal{$k}", v).replace("\\mathcal $k", v)
+    }
+
+    // Hats and operators: \hat{H} -> Ĥ, \hat{\rho} -> ρ̂
+    val hats = mapOf(
+        "H" to "Ĥ", "A" to "Â", "B" to "B̂", "p" to "p̂", "x" to "x̂", "y" to "ŷ", "z" to "ẑ",
+        "\\rho" to "ρ̂", "rho" to "ρ̂", "\\psi" to "ψ̂", "psi" to "ψ̂", "\\phi" to "ϕ̂", "phi" to "ϕ̂"
+    )
+    for ((k, v) in hats) {
+        text = text.replace("\\hat{$k}", v).replace("\\hat $k", v)
+    }
+
+    // Fractions: \frac{a}{b} or frac{a}{b}
+    val fracRegex = Regex("""\\?frac\{([^{}]+)\}\{([^{}]+)\}""")
+    var safety = 0
+    var m = fracRegex.find(text)
+    while (m != null && safety < 15) {
+        safety++
+        val num = m.groupValues[1].trim()
+        val den = m.groupValues[2].trim()
+        val rep = when {
+            num == "1" && den == "2" -> "½"
+            num == "1" && den == "4" -> "¼"
+            num == "3" && den == "4" -> "¾"
+            num == "1" && den == "3" -> "⅓"
+            num == "2" && den == "3" -> "⅔"
+            num == "1" && den == "8" -> "⅛"
+            num.contains("+") || num.contains("-") -> "($num)/$den"
+            den.contains("+") || den.contains("-") -> "$num/($den)"
+            else -> "$num/$den"
+        }
+        text = text.replaceRange(m.range, rep)
+        m = fracRegex.find(text)
+    }
+
+    // Square roots: \sqrt{x} -> √(x)
+    text = text.replace(Regex("""\\?sqrt\{([^{}]+)\}""")) { "√(${it.groupValues[1]})" }
+
+    // Greek letters and math symbols
+    val symbols = listOf(
+        "\\hbar" to "ℏ", "\\dagger" to "†", "\\partial" to "∂", "\\nabla" to "∇", "\\infty" to "∞",
+        "\\sum" to "∑", "\\prod" to "∏", "\\int" to "∫", "\\iint" to "∬", "\\iiint" to "∭", "\\oint" to "∮",
+        "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ", "\\epsilon" to "ε",
+        "\\varepsilon" to "ε", "\\zeta" to "ζ", "\\eta" to "η", "\\theta" to "θ", "\\vartheta" to "ϑ",
+        "\\iota" to "ι", "\\kappa" to "κ", "\\lambda" to "λ", "\\mu" to "μ", "\\nu" to "ν",
+        "\\xi" to "ξ", "\\pi" to "π", "\\varpi" to "ϖ", "\\rho" to "ρ", "\\varrho" to "ϱ",
+        "\\sigma" to "σ", "\\varsigma" to "ς", "\\tau" to "τ", "\\upsilon" to "υ", "\\phi" to "ϕ",
+        "\\varphi" to "φ", "\\chi" to "χ", "\\psi" to "ψ", "\\omega" to "ω",
+        "\\Gamma" to "Γ", "\\Delta" to "Δ", "\\Theta" to "Θ", "\\Lambda" to "Λ", "\\Xi" to "Ξ",
+        "\\Pi" to "Π", "\\Sigma" to "Σ", "\\Upsilon" to "Υ", "\\Phi" to "Φ", "\\Psi" to "Ψ",
+        "\\Omega" to "Ω",
+        "\\pm" to "±", "\\mp" to "∓", "\\times" to "×", "\\cdot" to "·", "\\div" to "÷",
+        "\\approx" to "≈", "\\equiv" to "≡", "\\neq" to "≠", "\\ne" to "≠", "\\le" to "≤",
+        "\\leq" to "≤", "\\ge" to "≥", "\\geq" to "≥", "\\ll" to "≪", "\\gg" to "≫",
+        "\\sim" to "∼", "\\simeq" to "≃", "\\cong" to "≅", "\\propto" to "∝",
+        "\\to" to "→", "\\rightarrow" to "→", "\\leftarrow" to "←", "\\Rightarrow" to "⇒",
+        "\\Leftarrow" to "⇐", "\\Leftrightarrow" to "⇔", "\\iff" to "⇔", "\\implies" to "⇒",
+        "\\in" to "∈", "\\notin" to "∉", "\\ni" to "∋", "\\subset" to "⊂", "\\supset" to "⊃",
+        "\\subseteq" to "⊆", "\\supseteq" to "⊇", "\\cup" to "∪", "\\cap" to "∩", "\\emptyset" to "∅",
+        "\\forall" to "∀", "\\exists" to "∃", "\\nexists" to "∄",
+        "\\circ" to "°", "\\degree" to "°", "\\prime" to "′",
+        "\\ldots" to "…", "\\cdots" to "⋯", "\\dots" to "…",
+        "\\{" to "{", "\\}" to "}", "\\," to " ", "\\;" to " ", "\\quad" to " ", "\\qquad" to "  "
+    )
+    for ((k, v) in symbols) {
+        text = text.replace(k, v)
+    }
+
+    // Superscripts: ^{content} or ^char
+    val supsMap = mapOf(
+        '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
+        '5' to '⁵', '6' to '⁶', '7' to '⁷', '8' to '⁸', '9' to '⁹',
+        '+' to '⁺', '-' to '⁻', '=' to '⁼', '(' to '⁽', ')' to '⁾',
+        'a' to 'ᵃ', 'b' to 'ᵇ', 'c' to 'ᶜ', 'd' to 'ᵈ', 'e' to 'ᵉ',
+        'f' to 'ᶠ', 'g' to 'ᵍ', 'h' to 'ʰ', 'i' to 'ⁱ', 'j' to 'ʲ',
+        'k' to 'ᵏ', 'l' to 'ˡ', 'm' to 'ᵐ', 'n' to 'ⁿ', 'o' to 'ᵒ',
+        'p' to 'ᵖ', 'r' to 'ʳ', 's' to 'ˢ', 't' to 'ᵗ', 'u' to 'ᵘ',
+        'v' to 'ᵛ', 'w' to 'ʷ', 'x' to 'ˣ', 'y' to 'ʸ', 'z' to 'ᶻ',
+        '†' to '†'
+    )
+    text = text.replace(Regex("""\^\{([^{}]+)\}|\^([0-9a-zA-Z\+\-†])""")) { matchResult ->
+        val content = matchResult.groupValues[1].ifEmpty { matchResult.groupValues[2] }
+        content.map { supsMap[it] ?: it }.joinToString("")
+    }
+
+    // Subscripts: _{content} or _char
+    val subsMap = mapOf(
+        '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
+        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '⁸', '9' to '₉',
+        '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
+        'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ',
+        'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
+        'p' to 'ₚ', 'r' to 'ᵣ', 's' to 'ₛ', 't' to 'ₜ', 'u' to 'ᵤ',
+        'v' to 'ᵥ', 'x' to 'ₓ'
+    )
+    text = text.replace(Regex("""_\{([^{}]+)\}|_([0-9a-zA-Z\+\-])""")) { matchResult ->
+        val content = matchResult.groupValues[1].ifEmpty { matchResult.groupValues[2] }
+        content.map { subsMap[it] ?: it }.joinToString("")
+    }
+
+    // Strip inline and display math delimiter markers $$ or $ or \[ or \]
+    text = text.replace("$$", "").replace("$", "")
+    text = text.replace("\\[", "").replace("\\]", "")
+
+    // Clean up remaining dangling backslashes before plain words
+    text = text.replace(Regex("""\\+([a-zA-Z]+)""")) { it.groupValues[1] }
+    text = text.replace("\\", "")
+
+    return text.trim()
+}
+
+/**
  * Parses markdown inline styles like **bold**, *italic*, ~~strikethrough~~, `inline code`, and [link](url).
  */
 @Composable
 fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui.text.AnnotatedString {
+    val clean = remember(raw) { formatLatexToReadableMath(raw) }
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val inlineCodeBg = if (isDark) Color(0xFF2C2B27) else Color(0xFFEFECE5)
     val inlineCodeText = if (isDark) Color(0xFFF0EBE1) else Color(0xFF9C4927)
-    val inlineMathBg = if (isDark) Color(0xFF1E1E28) else Color(0xFFECECF6)
-    val inlineMathText = ClaudeTerracotta
 
     val pattern = remember {
-        Regex("""(\*\*([^\*]+?)\*\*|\*([^\*]+?)\*|~~([^~]+?)~~|`([^`]+?)`|\[([^\]]+?)\]\(([^)]+?)\)|\$\$([^\$]+?)\$\$|\$([^\$\n]+?)\$|\\\((.+?)\\\))""")
+        Regex("(\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|`(.+?)`|\\[(.+?)\\]\\((.+?)\\))")
     }
 
     return buildAnnotatedString {
         var cursor = 0
-        val matches = pattern.findAll(raw)
+        val matches = pattern.findAll(clean)
 
         for (match in matches) {
             val start = match.range.first
             val end = match.range.last + 1
 
             if (start > cursor) {
-                append(raw.substring(cursor, start))
+                append(clean.substring(cursor, start))
             }
 
             val fullMatch = match.value
@@ -449,51 +606,6 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                         append(linkText)
                     }
                 }
-                fullMatch.startsWith("$$") -> {
-                    val content = match.groupValues.getOrNull(8) ?: ""
-                    val unicode = formatLatexToUnicode(content)
-                    withStyle(
-                        SpanStyle(
-                            fontStyle = FontStyle.Italic,
-                            fontWeight = FontWeight.SemiBold,
-                            background = inlineMathBg,
-                            color = inlineMathText,
-                            fontSize = 14.5.sp
-                        )
-                    ) {
-                        append(" $unicode ")
-                    }
-                }
-                fullMatch.startsWith("$") -> {
-                    val content = match.groupValues.getOrNull(9) ?: ""
-                    val unicode = formatLatexToUnicode(content)
-                    withStyle(
-                        SpanStyle(
-                            fontStyle = FontStyle.Italic,
-                            fontWeight = FontWeight.SemiBold,
-                            background = inlineMathBg,
-                            color = inlineMathText,
-                            fontSize = 14.sp
-                        )
-                    ) {
-                        append(" $unicode ")
-                    }
-                }
-                fullMatch.startsWith("\\(") -> {
-                    val content = match.groupValues.getOrNull(10) ?: ""
-                    val unicode = formatLatexToUnicode(content)
-                    withStyle(
-                        SpanStyle(
-                            fontStyle = FontStyle.Italic,
-                            fontWeight = FontWeight.SemiBold,
-                            background = inlineMathBg,
-                            color = inlineMathText,
-                            fontSize = 14.sp
-                        )
-                    ) {
-                        append(" $unicode ")
-                    }
-                }
                 else -> {
                     append(fullMatch)
                 }
@@ -501,8 +613,8 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
             cursor = end
         }
 
-        if (cursor < raw.length) {
-            append(raw.substring(cursor))
+        if (cursor < clean.length) {
+            append(clean.substring(cursor))
         }
     }
 }
@@ -514,7 +626,6 @@ sealed class MarkdownBlock {
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
     data class Blockquote(val text: String) : MarkdownBlock()
     data class ListItem(val isOrdered: Boolean, val index: Int, val text: String) : MarkdownBlock()
-    data class Math(val formula: String) : MarkdownBlock()
     object Divider : MarkdownBlock()
 }
 
@@ -531,11 +642,7 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (paraBuffer.isNotEmpty()) {
             val content = paraBuffer.toString().trim()
             if (content.isNotEmpty()) {
-                if (isLikelyMathBlock(content)) {
-                    blocks.add(MarkdownBlock.Math(content))
-                } else {
-                    blocks.add(MarkdownBlock.Paragraph(content))
-                }
+                blocks.add(MarkdownBlock.Paragraph(content))
             }
             paraBuffer.clear()
         }
@@ -548,11 +655,7 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
         if (trimmed.startsWith("```")) {
             if (inCodeBlock) {
-                if (codeLang.equals("math", ignoreCase = true) || codeLang.equals("latex", ignoreCase = true) || codeLang.equals("katex", ignoreCase = true)) {
-                    blocks.add(MarkdownBlock.Math(codeBuffer.toString().trimEnd()))
-                } else {
-                    blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
-                }
+                blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
                 codeBuffer.clear()
                 codeLang = ""
                 inCodeBlock = false
@@ -568,78 +671,6 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (inCodeBlock) {
             codeBuffer.append(line).append("\n")
             i++
-            continue
-        }
-
-        // Display Math Block $$ ... $$
-        if (trimmed.startsWith("$$")) {
-            flushPara()
-            if (trimmed.length > 2 && trimmed.endsWith("$$")) {
-                val formula = trimmed.removePrefix("$$").removeSuffix("$$").trim()
-                if (formula.isNotEmpty()) {
-                    blocks.add(MarkdownBlock.Math(formula))
-                }
-                i++
-                continue
-            } else {
-                val mathBuffer = StringBuilder()
-                val first = trimmed.removePrefix("$$").trim()
-                if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
-                i++
-                while (i < lines.size && !lines[i].trim().startsWith("$$")) {
-                    mathBuffer.append(lines[i]).append("\n")
-                    i++
-                }
-                blocks.add(MarkdownBlock.Math(mathBuffer.toString().trimEnd()))
-                i++
-                continue
-            }
-        }
-
-        // Display Math Block \[ ... \]
-        if (trimmed.startsWith("\\[")) {
-            flushPara()
-            if (trimmed.length > 2 && trimmed.endsWith("\\]")) {
-                val formula = trimmed.removePrefix("\\[").removeSuffix("\\]").trim()
-                if (formula.isNotEmpty()) {
-                    blocks.add(MarkdownBlock.Math(formula))
-                }
-                i++
-                continue
-            } else {
-                val mathBuffer = StringBuilder()
-                val first = trimmed.removePrefix("\\[").trim()
-                if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
-                i++
-                while (i < lines.size && !lines[i].trim().contains("\\]")) {
-                    mathBuffer.append(lines[i]).append("\n")
-                    i++
-                }
-                if (i < lines.size) {
-                    val last = lines[i].trim().substringBefore("\\]").trim()
-                    if (last.isNotEmpty()) mathBuffer.append(last).append("\n")
-                    i++
-                }
-                blocks.add(MarkdownBlock.Math(mathBuffer.toString().trimEnd()))
-                continue
-            }
-        }
-
-        // LaTeX environment blocks \begin{...} ... \end{...}
-        if (trimmed.startsWith("\\begin{")) {
-            flushPara()
-            val env = trimmed.substringAfter("\\begin{").substringBefore("}")
-            val mathBuffer = StringBuilder(line).append("\n")
-            i++
-            while (i < lines.size && !lines[i].contains("\\end{$env}")) {
-                mathBuffer.append(lines[i]).append("\n")
-                i++
-            }
-            if (i < lines.size) {
-                mathBuffer.append(lines[i]).append("\n")
-                i++
-            }
-            blocks.add(MarkdownBlock.Math(mathBuffer.toString().trimEnd()))
             continue
         }
 
@@ -659,14 +690,6 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 blocks.add(MarkdownBlock.Table(headers, rows))
                 continue
             }
-        }
-
-        // Bare mathematical equation detection
-        if (isLikelyMathBlock(trimmed)) {
-            flushPara()
-            blocks.add(MarkdownBlock.Math(trimmed))
-            i++
-            continue
         }
 
         when {
@@ -720,11 +743,7 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
     }
 
     if (inCodeBlock && codeBuffer.isNotEmpty()) {
-        if (codeLang.equals("math", ignoreCase = true) || codeLang.equals("latex", ignoreCase = true) || codeLang.equals("katex", ignoreCase = true)) {
-            blocks.add(MarkdownBlock.Math(codeBuffer.toString().trimEnd()))
-        } else {
-            blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
-        }
+        blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
     } else {
         flushPara()
     }

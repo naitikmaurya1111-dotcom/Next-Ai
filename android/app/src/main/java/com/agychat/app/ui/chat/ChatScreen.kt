@@ -1614,7 +1614,6 @@ fun MessageItem(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    var showUserActions by remember { mutableStateOf(false) }
     var isCopied by remember { mutableStateOf(false) }
 
     LaunchedEffect(isCopied) {
@@ -1630,82 +1629,117 @@ fun MessageItem(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.End
             ) {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = 320.dp)
-                        .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(
-                            width = if (isSearchMatch) 2.dp else 1.dp,
-                            color = if (isSearchMatch) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant,
-                            shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
-                        )
-                        .clickable { showUserActions = !showUserActions }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    Column {
-                        if (message.isPinned) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                                horizontalArrangement = Arrangement.End,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.PushPin,
-                                    contentDescription = "Pinned",
-                                    tint = Color(0xFFFFB300),
-                                    modifier = Modifier.size(12.dp)
-                                )
-                                Spacer(Modifier.width(3.dp))
-                                Text(
-                                    "Pinned",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-                                    color = Color(0xFFFFB300)
-                                )
-                            }
-                        }
-                        // Display attached images and files (multi-attachment support)
-                        val allAtts = message.allAttachments
-                        if (allAtts.isNotEmpty()) {
-                            val images = allAtts.filter { it.isImage }
-                            val files = allAtts.filter { !it.isImage }
-
-                            if (images.isNotEmpty()) {
-                                if (images.size == 1) {
-                                    AsyncImage(
-                                        model = images[0].uri,
-                                        contentDescription = "Attached image",
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(max = 240.dp)
-                                            .clip(RoundedCornerShape(14.dp)),
-                                        contentScale = ContentScale.Crop
+                SelectionContainer {
+                    Box(
+                        modifier = Modifier
+                            .widthIn(max = 320.dp)
+                            .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .border(
+                                width = if (isSearchMatch) 2.dp else 1.dp,
+                                color = if (isSearchMatch) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+                            )
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Column {
+                            if (message.isPinned) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.PushPin,
+                                        contentDescription = "Pinned",
+                                        tint = Color(0xFFFFB300),
+                                        modifier = Modifier.size(12.dp)
                                     )
-                                    Spacer(Modifier.height(8.dp))
-                                } else {
+                                    Spacer(Modifier.width(3.dp))
+                                    Text(
+                                        "Pinned",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                        color = Color(0xFFFFB300)
+                                    )
+                                }
+                            }
+                            // Display attached images and files (multi-attachment support)
+                            val allAtts = message.allAttachments
+                            if (allAtts.isNotEmpty()) {
+                                val images = allAtts.filter { it.isImage }
+                                val files = allAtts.filter { !it.isImage }
+
+                                if (images.isNotEmpty()) {
+                                    if (images.size == 1) {
+                                        AsyncImage(
+                                            model = images[0].uri,
+                                            contentDescription = "Attached image",
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 240.dp)
+                                                .clip(RoundedCornerShape(14.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                    } else {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            images.chunked(2).forEach { rowImages ->
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    rowImages.forEach { img ->
+                                                        AsyncImage(
+                                                            model = img.uri,
+                                                            contentDescription = img.name,
+                                                            modifier = Modifier
+                                                                .weight(1f)
+                                                                .height(115.dp)
+                                                                .clip(RoundedCornerShape(12.dp)),
+                                                            contentScale = ContentScale.Crop
+                                                        )
+                                                    }
+                                                    if (rowImages.size == 1) {
+                                                        Spacer(Modifier.weight(1f))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                }
+
+                                if (files.isNotEmpty()) {
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        images.chunked(2).forEach { rowImages ->
+                                        files.forEach { file ->
                                             Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(MaterialTheme.colorScheme.surface)
+                                                    .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                                verticalAlignment = Alignment.CenterVertically
                                             ) {
-                                                rowImages.forEach { img ->
-                                                    AsyncImage(
-                                                        model = img.uri,
-                                                        contentDescription = img.name,
-                                                        modifier = Modifier
-                                                            .weight(1f)
-                                                            .height(115.dp)
-                                                            .clip(RoundedCornerShape(12.dp)),
-                                                        contentScale = ContentScale.Crop
-                                                    )
-                                                }
-                                                if (rowImages.size == 1) {
-                                                    Spacer(Modifier.weight(1f))
-                                                }
+                                                Icon(
+                                                    Icons.Default.InsertDriveFile,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp),
+                                                    tint = ClaudeTerracotta
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    text = file.name,
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
                                             }
                                         }
                                     }
@@ -1713,43 +1747,7 @@ fun MessageItem(
                                 }
                             }
 
-                            if (files.isNotEmpty()) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    files.forEach { file ->
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .background(MaterialTheme.colorScheme.surface)
-                                                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-                                                .padding(horizontal = 10.dp, vertical = 7.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Default.InsertDriveFile,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp),
-                                                tint = ClaudeTerracotta
-                                            )
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                text = file.name,
-                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-                        }
-
-                        if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:") && !message.content.startsWith("Sent ")) {
-                            SelectionContainer {
+                            if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:") && !message.content.startsWith("Sent ")) {
                                 MarkdownContent(
                                     text = message.content,
                                     textColor = MaterialTheme.colorScheme.onSurface
@@ -1760,86 +1758,77 @@ fun MessageItem(
                 }
 
                 // Interactive Quick Actions for User Message
-                // Timestamp — tap bubble to reveal
-                AnimatedVisibility(visible = showUserActions) {
+                Row(
+                    modifier = Modifier.padding(top = 4.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
                         text = formatMessageTime(message.timestamp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp, end = 6.dp)
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(end = 4.dp)
                     )
-                }
 
-                AnimatedVisibility(visible = showUserActions) {
-                    Row(
-                        modifier = Modifier.padding(top = 4.dp, end = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    IconButton(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("User Prompt", message.content))
+                            Toast.makeText(context, "Copied prompt", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(24.dp)
                     ) {
-                        TextButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onTogglePin()
-                                showUserActions = false
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.PushPin,
-                                contentDescription = if (message.isPinned) "Unpin" else "Pin",
-                                modifier = Modifier.size(13.dp),
-                                tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                if (message.isPinned) "Unpin" else "Pin",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = "Copy",
+                            modifier = Modifier.size(13.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                    }
 
-                        TextButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onEditMessage(message.content)
-                                showUserActions = false
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit", modifier = Modifier.size(13.dp), tint = ClaudeTerracotta)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Edit", style = MaterialTheme.typography.labelSmall, color = ClaudeTerracotta)
-                        }
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onEditMessage(message.content)
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            modifier = Modifier.size(13.dp),
+                            tint = ClaudeTerracotta.copy(alpha = 0.75f)
+                        )
+                    }
 
-                        TextButton(
-                            onClick = {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("User Prompt", message.content))
-                                Toast.makeText(context, "Copied prompt", Toast.LENGTH_SHORT).show()
-                                showUserActions = false
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(13.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Copy", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onTogglePin()
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.PushPin,
+                            contentDescription = if (message.isPinned) "Unpin" else "Pin",
+                            modifier = Modifier.size(13.dp),
+                            tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                    }
 
-                        TextButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onDeleteMessage()
-                                showUserActions = false
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier.height(28.dp)
-                        ) {
-                            Icon(Icons.Default.DeleteOutline, contentDescription = "Delete", modifier = Modifier.size(13.dp), tint = MaterialTheme.colorScheme.error)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Delete", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
-                        }
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onDeleteMessage()
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = "Delete",
+                            modifier = Modifier.size(13.dp),
+                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.65f)
+                        )
                     }
                 }
             }

@@ -8,6 +8,3 @@
 -dontwarn okio.**
 -dontwarn com.google.api.**
 
--keepclassmembers class * {
-    @android.webkit.JavascriptInterface <methods>;
-}
