@@ -427,6 +427,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 auto_memory = payload.get("auto_memory", True)
                 is_temporary = payload.get("is_temporary", False)
                 history = payload.get("history", [])  # Multi-turn conversation turns for full context retention
+                client_metadata = payload.get("client_metadata")  # Device, OS version, app version, screen, theme
 
                 # Multi-attachment files processing
                 attached_files = payload.get("files", [])
@@ -464,6 +465,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 auto_memory = True
                 is_temporary = False
                 history = []
+                client_metadata = None
 
             # Cancel any previous in-flight task for this connection before starting new one
             if current_generation_task and not current_generation_task.done():
@@ -474,7 +476,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             current_conv_id = conv_id
 
-            async def stream_worker(msg, cid, eff, mdl, mems, c_inst, pers, a_mem, is_temp, hist):
+            async def stream_worker(msg, cid, eff, mdl, mems, c_inst, pers, a_mem, is_temp, hist, c_meta):
                 try:
                     async for event in run_agy_command(
                         msg,
@@ -486,7 +488,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         personalization=pers,
                         is_auto_memory=a_mem,
                         is_temporary=is_temp,
-                        history=hist
+                        history=hist,
+                        client_metadata=c_meta
                     ):
                         await manager.send(event, websocket)
                 except asyncio.CancelledError:
@@ -513,7 +516,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     personalization,
                     auto_memory,
                     is_temporary,
-                    history
+                    history,
+                    client_metadata
                 )
             )
 

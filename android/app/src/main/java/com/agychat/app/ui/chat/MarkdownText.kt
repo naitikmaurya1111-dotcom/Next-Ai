@@ -548,6 +548,7 @@ fun MathEquationBlockView(
 
     val cardBg = if (isDark) Color(0xFF141418) else Color(0xFFF7F7F6)
     val borderColor = if (isDark) Color(0xFF26262E) else Color(0xFFE4E4DE)
+    var showRawLatex by remember { mutableStateOf(false) }
 
     Surface(
         shape = RoundedCornerShape(12.dp),
@@ -562,7 +563,7 @@ fun MathEquationBlockView(
                 .fillMaxWidth()
                 .padding(vertical = 4.dp)
         ) {
-            // Header with LaTeX indicator and copy action
+            // Header with LaTeX indicator, toggle view, and copy action
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -570,16 +571,41 @@ fun MathEquationBlockView(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "MATH / LATEX",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 9.sp,
-                        letterSpacing = 0.5.sp
-                    ),
-                    color = if (isDark) Color(0xFF7E7E8E) else Color(0xFF8A8A94)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "MATH / LATEX",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 9.sp,
+                            letterSpacing = 0.5.sp
+                        ),
+                        color = if (isDark) Color(0xFF7E7E8E) else Color(0xFF8A8A94)
+                    )
+
+                    // Toggle Rendered vs Raw LaTeX
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showRawLatex = !showRawLatex
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (showRawLatex) ClaudeTerracotta.copy(alpha = 0.15f) else Color.Transparent
+                    ) {
+                        Text(
+                            text = if (showRawLatex) "Raw LaTeX" else "Rendered",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = if (showRawLatex) ClaudeTerracotta else if (isDark) Color(0xFFA0A0AC) else Color(0xFF606068),
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
+                    }
+                }
 
                 Surface(
                     onClick = {
@@ -615,25 +641,43 @@ fun MathEquationBlockView(
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 52.dp, max = 650.dp)
-                    .height(measuredHeightDp),
-                contentAlignment = Alignment.Center
-            ) {
-                KaTeXDisplayView(
-                    formula = normalizedFormula,
-                    unicodeFallback = unicodePreview,
-                    isDark = isDark,
-                    onHeightMeasured = { cssPixels ->
-                        val dpVal = (cssPixels + 12).dp
-                        if (dpVal in 48.dp..650.dp) {
-                            measuredHeightDp = dpVal
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
+            if (showRawLatex) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isDark) Color(0xFF0C0C10) else Color(0xFFEFEFEF))
+                        .padding(10.dp)
+                ) {
+                    Text(
+                        text = normalizedFormula,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24)
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp, max = 650.dp)
+                        .height(measuredHeightDp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    KaTeXDisplayView(
+                        formula = normalizedFormula,
+                        unicodeFallback = unicodePreview,
+                        isDark = isDark,
+                        onHeightMeasured = { cssPixels ->
+                            val dpVal = (cssPixels + 12).dp
+                            if (dpVal in 48.dp..650.dp) {
+                                measuredHeightDp = dpVal
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }

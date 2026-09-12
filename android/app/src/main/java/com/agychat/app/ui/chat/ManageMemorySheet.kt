@@ -54,10 +54,26 @@ fun ManageMemorySheet(
 
     val categories = MemoryCategory.ALL_CATEGORIES
 
+    fun normalizeMemoryCategory(cat: String): String = when (cat.lowercase().trim()) {
+        "prefs", "preferences", "preference", "style" -> MemoryCategory.PREFERENCES
+        "facts", "fact" -> MemoryCategory.FACTS
+        "project", "projects" -> MemoryCategory.PROJECT
+        "goals", "goal" -> MemoryCategory.GOALS
+        "personal" -> MemoryCategory.PERSONAL
+        "skills", "skill" -> MemoryCategory.SKILLS
+        "feedback" -> MemoryCategory.FEEDBACK
+        else -> MemoryCategory.GENERAL
+    }
+
     val filteredMemories = remember(memories, searchQuery, selectedCategory) {
         memories.filter { mem ->
-            val matchesQuery = searchQuery.isBlank() || mem.content.contains(searchQuery, ignoreCase = true)
-            val matchesCategory = selectedCategory == "All" || mem.category.equals(selectedCategory, ignoreCase = true)
+            val matchesQuery = searchQuery.isBlank() ||
+                mem.content.contains(searchQuery, ignoreCase = true) ||
+                mem.category.contains(searchQuery, ignoreCase = true) ||
+                MemoryCategory.getDisplayName(mem.category).contains(searchQuery, ignoreCase = true)
+            val matchesCategory = selectedCategory == MemoryCategory.ALL ||
+                selectedCategory == "All" ||
+                normalizeMemoryCategory(mem.category) == normalizeMemoryCategory(selectedCategory)
             matchesQuery && matchesCategory
         }
     }
@@ -268,7 +284,7 @@ fun ManageMemorySheet(
             ) {
                 items(categories) { cat ->
                     val isSelected = selectedCategory == cat
-                    val count = if (cat == MemoryCategory.ALL) memories.size else memories.count { it.category.equals(cat, ignoreCase = true) }
+                    val count = if (cat == MemoryCategory.ALL) memories.size else memories.count { normalizeMemoryCategory(it.category) == normalizeMemoryCategory(cat) }
                     val label = if (cat == MemoryCategory.ALL) "All ($count)" else "${MemoryCategory.getIconEmoji(cat)} ${MemoryCategory.getDisplayName(cat).substringAfter(" ")} ($count)"
                     FilterChip(
                         selected = isSelected,
@@ -428,15 +444,15 @@ fun ManageMemorySheet(
                     )
 
                     Text("Category:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                    Row(
+                    LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        listOf("project", "preference", "personal", "style", "general").forEach { cat ->
+                        items(MemoryCategory.ALL_CATEGORIES.drop(1)) { cat ->
                             FilterChip(
-                                selected = category == cat,
+                                selected = normalizeMemoryCategory(category) == cat,
                                 onClick = { category = cat },
-                                label = { Text(cat.replaceFirstChar { it.uppercase() }, fontSize = 11.sp) }
+                                label = { Text("${MemoryCategory.getIconEmoji(cat)} ${MemoryCategory.getDisplayName(cat).substringAfter(" ")}", fontSize = 11.sp) }
                             )
                         }
                     }
@@ -489,15 +505,15 @@ fun ManageMemorySheet(
                     )
 
                     Text("Category:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                    Row(
+                    LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        listOf("project", "preference", "personal", "style", "general").forEach { cat ->
+                        items(MemoryCategory.ALL_CATEGORIES.drop(1)) { cat ->
                             FilterChip(
-                                selected = editCategory.equals(cat, ignoreCase = true),
+                                selected = normalizeMemoryCategory(editCategory) == cat,
                                 onClick = { editCategory = cat },
-                                label = { Text(cat.replaceFirstChar { it.uppercase() }, fontSize = 11.sp) }
+                                label = { Text("${MemoryCategory.getIconEmoji(cat)} ${MemoryCategory.getDisplayName(cat).substringAfter(" ")}", fontSize = 11.sp) }
                             )
                         }
                     }

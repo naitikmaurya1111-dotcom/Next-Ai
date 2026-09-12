@@ -21,8 +21,10 @@ import com.agychat.app.domain.model.CustomInstructions
 import com.agychat.app.domain.model.Personalization
 import com.agychat.app.data.local.MemoryDao
 import com.agychat.app.data.local.MemoryEntity
+import com.agychat.app.domain.model.MemoryCategory
 import com.agychat.app.domain.model.ThinkingLevel
 import com.agychat.app.data.network.UrlSanitizer
+import java.util.Locale
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -228,9 +230,14 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun editMemory(id: String, content: String, category: String) {
+    fun editMemory(id: String, content: String, category: String, importance: Int? = null) {
         viewModelScope.launch {
-            memoryDao.updateMemoryContent(id, content.trim(), category, updatedAt = System.currentTimeMillis())
+            val existing = memoryDao.getAllMemoriesList().firstOrNull { it.id == id }
+            val imp = importance ?: existing?.importance ?: 5
+            val normCat = if (category.equals("preference", ignoreCase = true) || category.equals("style", ignoreCase = true)) {
+                MemoryCategory.PREFERENCES
+            } else category
+            memoryDao.updateMemoryContent(id, content.trim(), normCat, importance = imp, updatedAt = System.currentTimeMillis())
         }
     }
 
@@ -456,7 +463,27 @@ class ChatViewModel @Inject constructor(
 
     // Stream tracking
     private var streamingMessageId: String? = null
+    private var isGenerationCancelled = false
+    private val pendingMemoryUpdates = mutableListOf<String>()
     private var connectionJob: Job? = null
+
+    private fun buildClientMetadata(): JSONObject {
+        val dm = context.resources.displayMetrics
+        val isLandscape = context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val isDark = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val appVersion = try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "v1.1.0"
+        } catch (_: Exception) { "v1.1.0" }
+
+        return JSONObject().apply {
+            put("os", "Android ${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
+            put("device", "${android.os.Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} ${android.os.Build.MODEL}")
+            put("app_version", appVersion)
+            put("screen", "${dm.widthPixels}x${dm.heightPixels} @ ${dm.densityDpi}dpi (${if (isLandscape) "Landscape" else "Portrait"})")
+            put("theme", if (isDark) "Dark Theme" else "Light Theme")
+            put("locale", Locale.getDefault().toLanguageTag())
+        }
+    }
 
     // Real-time conversations list from Room DB
     val conversations = chatDao.getAllConversations().catch { t ->
@@ -850,9 +877,15 @@ class ChatViewModel @Inject constructor(
                     appendContentChunk(content)
                 }
                 "done" -> {
-                    finalizeStreamingMessage(content)
-                    _isLoading.value = false
-                    _currentStatus.value = null
+                    if (isGenerationCancelled) {
+                        isGenerationCancelled = false
+                        _isLoading.value = false
+                        _currentStatus.value = null
+                    } else {
+                        finalizeStreamingMessage(content)
+                        _isLoading.value = false
+                        _currentStatus.value = null
+                    }
                 }
                 "error" -> {
                     finalizeStreamingMessage()
@@ -927,12 +960,22 @@ class ChatViewModel @Inject constructor(
                 }
                 // Attach memory update tag to the currently active assistant message
                 val currentMessages = _messages.value.toMutableList()
-                val targetIndex = currentMessages.indexOfLast { it.role == "assistant" }
+                val targetIndex = if (streamingMessageId != null) {
+                    currentMessages.indexOfFirst { it.id == streamingMessageId }
+                } else {
+                    currentMessages.indexOfLast { it.role == "assistant" }
+                }
                 if (targetIndex != -1) {
                     val target = currentMessages[targetIndex]
                     if (!target.memoryUpdates.contains(content)) {
                         currentMessages[targetIndex] = target.copy(memoryUpdates = target.memoryUpdates + content)
                         _messages.value = currentMessages
+                    }
+                } else {
+                    synchronized(pendingMemoryUpdates) {
+                        if (!pendingMemoryUpdates.contains(content)) {
+                            pendingMemoryUpdates.add(content)
+                        }
                     }
                 }
             } else if (action == "delete") {
@@ -1044,6 +1087,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun appendContentChunk(chunk: String) {
+        if (isGenerationCancelled) return
         val cleanChunk = sanitizeChunk(chunk)
         if (cleanChunk.isEmpty()) return
 
@@ -1057,14 +1101,20 @@ class ChatViewModel @Inject constructor(
                 isStreaming = true,
                 isThinking = false
             )
-        } else {
+        } else if (_isLoading.value) {
             val newId = UUID.randomUUID().toString()
             streamingMessageId = newId
+            val initialUpdates = synchronized(pendingMemoryUpdates) {
+                val copy = pendingMemoryUpdates.toList()
+                pendingMemoryUpdates.clear()
+                copy
+            }
             list.add(
                 Message(
                     id = newId,
                     role = "assistant",
                     content = cleanChunk,
+                    memoryUpdates = initialUpdates,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true,
                     isThinking = false
@@ -1076,6 +1126,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun appendThinkingChunk(chunk: String) {
+        if (isGenerationCancelled) return
         val cleanChunk = sanitizeChunk(chunk)
         if (cleanChunk.isEmpty()) return
 
@@ -1090,15 +1141,21 @@ class ChatViewModel @Inject constructor(
                 isStreaming = true,
                 isThinking = true
             )
-        } else {
+        } else if (_isLoading.value) {
             val newId = UUID.randomUUID().toString()
             streamingMessageId = newId
+            val initialUpdates = synchronized(pendingMemoryUpdates) {
+                val copy = pendingMemoryUpdates.toList()
+                pendingMemoryUpdates.clear()
+                copy
+            }
             list.add(
                 Message(
                     id = newId,
                     role = "assistant",
                     content = "",
                     thinking = cleanChunk,
+                    memoryUpdates = initialUpdates,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true,
                     isThinking = true
@@ -1178,6 +1235,7 @@ class ChatViewModel @Inject constructor(
 
     fun stopGenerating() {
         if (!_isLoading.value) return
+        isGenerationCancelled = true
         viewModelScope.launch {
             val cancelPayload = JSONObject().apply {
                 put("type", "cancel")
@@ -1202,19 +1260,48 @@ class ChatViewModel @Inject constructor(
             return
         }
 
+        if (_isLoading.value) {
+            finalizeStreamingMessage()
+        }
+        isGenerationCancelled = false
+
         // Natural language & slash commands for memory management
         if (trimmed.startsWith("/remember", ignoreCase = true)) {
             val memContent = trimmed.removePrefix("/remember").removePrefix(":").trim()
             if (memContent.isNotBlank()) {
-                addMemory(memContent, "preference")
+                addMemory(memContent, "prefs")
                 appendSystemMessage("🧠 Saved to Memory: \"$memContent\"")
+            } else {
+                appendSystemMessage("ℹ️ Usage: /remember <fact or preference to save>")
             }
+            _selectedAttachments.value = emptyList()
+            _selectedAttachment.value = null
+            return
         } else if (trimmed.startsWith("/forget", ignoreCase = true)) {
             val query = trimmed.removePrefix("/forget").removePrefix(":").trim()
             if (query.isNotBlank()) {
                 forgetMemory(query)
-                return
+            } else {
+                appendSystemMessage("ℹ️ Usage: /forget <keyword to remove>")
             }
+            _selectedAttachments.value = emptyList()
+            _selectedAttachment.value = null
+            return
+        } else if (trimmed.equals("/memory", ignoreCase = true) || trimmed.equals("/memories", ignoreCase = true)) {
+            viewModelScope.launch {
+                val count = memoryDao.getTotalCount()
+                val enabled = memoryDao.getAllEnabledMemories()
+                val summary = if (count == 0) {
+                    "🧠 Memory is currently empty. Use `/remember <fact>` to save preferences."
+                } else {
+                    val preview = enabled.take(5).joinToString("\n") { "• [${it.category.uppercase()}] ${it.content}" }
+                    "🧠 Active Memories: ${enabled.size}/$count\n$preview${if (enabled.size > 5) "\n...and ${enabled.size - 5} more." else ""}"
+                }
+                appendSystemMessage(summary)
+            }
+            _selectedAttachments.value = emptyList()
+            _selectedAttachment.value = null
+            return
         }
 
         val firstAtt = attachments.firstOrNull()
@@ -1399,6 +1486,7 @@ class ChatViewModel @Inject constructor(
                 }
                 put("auto_memory", _isAutoMemoryEnabled.value && !_isTemporaryChat.value)
                 put("is_temporary", _isTemporaryChat.value)
+                put("client_metadata", buildClientMetadata())
 
                 // Multi-files payload
                 if (filesArray.length() > 0) {

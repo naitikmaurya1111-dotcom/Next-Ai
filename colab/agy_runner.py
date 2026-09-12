@@ -267,7 +267,8 @@ def format_prompt_with_personalization(
     is_temporary: bool = False,
     history: list = None,
     model_name: str = "",
-    effort_level: str = "high"
+    effort_level: str = "high",
+    client_metadata: dict = None
 ) -> str:
     """
     Build the complete AI system context from environment awareness, user Personalization profile,
@@ -278,10 +279,21 @@ def format_prompt_with_personalization(
     # ── 0. Environment Awareness & System Context ──────────────────────────────
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     drive_mounted = os.path.exists("/content/drive/MyDrive")
+
+    client_desc = "Next AI Android Mobile App (Material 3 Dynamic Theme, Jetpack Compose)"
+    if client_metadata and isinstance(client_metadata, dict):
+        dev = client_metadata.get("device", "Android Device")
+        os_ver = client_metadata.get("os", "Android")
+        app_v = client_metadata.get("app_version", "v1.1.0")
+        scr = client_metadata.get("screen", "")
+        thm = client_metadata.get("theme", "")
+        loc = client_metadata.get("locale", "en")
+        client_desc = f"{dev} | {os_ver} | Next AI {app_v} | Screen: {scr} | Theme: {thm} | Locale: {loc}"
+
     env_lines = [
         f"• Current Date & Time: {now_utc}",
         "• Host OS & Environment: Google Colab (Linux Ubuntu x86_64, Python 3.12, bash shell)",
-        "• Connected Client: Next AI Android Mobile App (Material 3 Dynamic Theme, Jetpack Compose)",
+        f"• Connected Client Device: {client_desc}",
         f"• Storage & Persistence: Google Drive is {'MOUNTED at /content/drive/MyDrive' if drive_mounted else 'NOT MOUNTED'}; local scratch at /content and /tmp",
         "• Web Search Tool: /usr/local/bin/websearch utility is installed and ready for real-time web querying",
         f"• Active Model: {model_name or 'Gemini 3.8 Flash'} (Thinking Effort: {effort_level.upper()})",
@@ -592,7 +604,8 @@ async def run_agy_command(
     personalization: dict = None,
     is_auto_memory: bool = True,
     is_temporary: bool = False,
-    history: list = None
+    history: list = None,
+    client_metadata: dict = None
 ):
     """
     Runs agy command asynchronously with native stream-json output
@@ -628,7 +641,8 @@ async def run_agy_command(
         is_temporary=is_temporary,
         history=history,
         model_name=model_display,
-        effort_level=effort
+        effort_level=effort,
+        client_metadata=client_metadata
     )
 
     cmd_args.extend([
@@ -766,6 +780,18 @@ async def run_agy_command(
         logger.exception(f"Error in run_agy_command: {e}")
         yield _make_event("error", f"Bridge error: {str(e)}")
     finally:
+        if process and process.returncode is None:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+            except Exception:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
         if client_conv_id:
             active_processes.pop(client_conv_id, None)
 
