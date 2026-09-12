@@ -21,6 +21,7 @@ data class MessageEntity(
     val attachmentUri: String? = null,
     val attachmentName: String? = null,
     val attachmentIsImage: Boolean = false,
+    val attachmentsJson: String? = null,
     val feedback: String? = null
 )
 

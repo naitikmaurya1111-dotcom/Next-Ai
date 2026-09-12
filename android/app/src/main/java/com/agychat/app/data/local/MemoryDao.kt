@@ -13,6 +13,9 @@ interface MemoryDao {
     @Query("SELECT * FROM memories ORDER BY updatedAt DESC")
     fun getAllMemoriesFlow(): Flow<List<MemoryEntity>>
 
+    @Query("SELECT * FROM memories ORDER BY updatedAt DESC")
+    suspend fun getAllMemoriesList(): List<MemoryEntity>
+
     @Query("SELECT * FROM memories WHERE isEnabled = 1 ORDER BY updatedAt DESC")
     suspend fun getAllEnabledMemories(): List<MemoryEntity>
 

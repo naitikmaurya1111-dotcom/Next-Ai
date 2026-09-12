@@ -3,6 +3,9 @@ package com.agychat.app.ui.settings
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +27,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agychat.app.domain.model.AiModel
 import com.agychat.app.domain.model.ConnectionState
@@ -48,6 +57,55 @@ fun SettingsScreen(
     val customInstructions by chatViewModel.customInstructions.collectAsState()
     val enabledMemoriesCount by chatViewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val allMemories by chatViewModel.memories.collectAsState(initial = emptyList())
+    val cloudSyncStatus by chatViewModel.cloudSyncStatus.collectAsState()
+    val isSyncing by chatViewModel.isSyncing.collectAsState()
+    var showRestoreConfirmDialog by remember { mutableStateOf(false) }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    val jsonFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                try {
+                    val jsonText = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    }
+                    if (!jsonText.isNullOrBlank()) {
+                        val res = chatViewModel.driveManager.restoreFullBackupJson(jsonText)
+                        Toast.makeText(context, res.message, Toast.LENGTH_LONG).show()
+                        chatViewModel.loadConversations()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Restore failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    val jsonFileExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                try {
+                    val fullJson = withContext(Dispatchers.IO) {
+                        chatViewModel.driveManager.createFullBackupJson()
+                    }
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(fullJson.toByteArray())
+                        }
+                    }
+                    Toast.makeText(context, "Backup exported successfully!", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Export failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     var showMemorySheet by remember { mutableStateOf(false) }
     var showCustomInstructionsSheet by remember { mutableStateOf(false) }
 
@@ -488,28 +546,94 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 4: Backup & Cloud Storage ─────────────────────────
+            // ── Section 4: Google Drive & Cloud Backup ─────────────────────
             SettingsCard(
-                title = "Backup & Cloud Storage",
-                icon = Icons.Default.CloudSync
+                title = "Google Drive Sync & Cloud Backup",
+                icon = Icons.Default.CloudSync,
+                badge = if (connectionState == ConnectionState.CONNECTED) "DRIVE LINKED" to Color(0xFF4CAF50) else "OFFLINE" to Color.Gray
             ) {
                 Text(
-                    text = "Preserve your conversation history, artifacts, and slash command outputs.",
+                    text = "Sync all conversations, messages, memories, custom instructions, and settings directly with your Google Drive (/MyDrive/NextAI_Backup). Updating or reinstalling the app will never lose your data.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
                 )
 
                 Spacer(Modifier.height(12.dp))
 
+                // Cloud Sync Status Pill
+                val syncStatus = cloudSyncStatus
+                if (syncStatus != null) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = ClaudeTerracotta.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = ClaudeTerracotta
+                                )
+                            } else {
+                                Icon(Icons.Default.CloudDone, null, modifier = Modifier.size(16.dp), tint = ClaudeTerracotta)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = syncStatus,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = ClaudeTerracotta
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
+                // Cloud Action Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { chatViewModel.syncToGoogleDrive() },
+                        enabled = !isSyncing,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isSyncing) "Syncing..." else "Sync to Drive")
+                    }
+
+                    OutlinedButton(
+                        onClick = { showRestoreConfirmDialog = true },
+                        enabled = !isSyncing,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.CloudDownload, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Restore Drive")
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Auto-save Switch
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "Auto-save to Local & Drive", style = MaterialTheme.typography.titleSmall)
+                        Text(text = "Auto-Sync to Google Drive", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            text = "Save conversations automatically after each turn",
+                            text = "Automatically backs up chats & memories after every response",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -519,11 +643,55 @@ fun SettingsScreen(
                         onCheckedChange = {
                             driveAutoBackup = it
                             prefs.edit().putBoolean("drive_auto_backup", it).apply()
-                        }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
                     )
                 }
 
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    text = "Local Device Backup (Zero-Loss Offline Safety)",
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                )
+
+                Spacer(Modifier.height(6.dp))
+
+                // Local Export & Import Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                            jsonFileExportLauncher.launch("NextAI_Backup_$timestamp.json")
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.UploadFile, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Export JSON")
+                    }
+
+                    OutlinedButton(
+                        onClick = { jsonFilePickerLauncher.launch("application/json") },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.FileOpen, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Import JSON")
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
 
                 OutlinedButton(
                     onClick = {
@@ -602,9 +770,35 @@ fun SettingsScreen(
     }
 
     if (showCustomInstructionsSheet) {
-        CustomInstructionsSheet(
+        com.agychat.app.ui.settings.CustomInstructionsSheet(
             viewModel = chatViewModel,
             onDismiss = { showCustomInstructionsSheet = false }
+        )
+    }
+
+    if (showRestoreConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestoreConfirmDialog = false },
+            title = { Text("Restore from Google Drive?") },
+            text = {
+                Text("This will restore your conversations, messages, memories, and personal settings from your Google Drive cloud backup. Current messages will be preserved and merged.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRestoreConfirmDialog = false
+                        chatViewModel.restoreFromGoogleDrive()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                ) {
+                    Text("Restore Now")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }

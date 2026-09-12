@@ -15,6 +15,15 @@ data class ToolExecutionItem(
 )
 
 @Serializable
+data class AttachmentItem(
+    val uri: String,
+    val name: String,
+    val size: Long = 0,
+    val isImage: Boolean = false,
+    val mimeType: String? = null
+)
+
+@Serializable
 data class Message(
     val id: String,
     val role: String, // "user", "assistant", "system"
@@ -30,16 +39,26 @@ data class Message(
     val attachmentUri: String? = null,
     val attachmentName: String? = null,
     val attachmentIsImage: Boolean = false,
+    val attachments: List<AttachmentItem> = emptyList(),
     val feedback: String? = null, // "like", "dislike", null
     val memoryUpdates: List<String> = emptyList() // Autonomous memory facts saved/updated in this turn
-)
-
-data class AttachmentItem(
-    val uri: String,
-    val name: String,
-    val size: Long = 0,
-    val isImage: Boolean = false
-)
+) {
+    val allAttachments: List<AttachmentItem>
+        get() = if (attachments.isNotEmpty()) {
+            attachments
+        } else if (!attachmentUri.isNullOrBlank()) {
+            listOf(
+                AttachmentItem(
+                    uri = attachmentUri,
+                    name = attachmentName ?: "Attachment",
+                    size = 0,
+                    isImage = attachmentIsImage
+                )
+            )
+        } else {
+            emptyList()
+        }
+}
 
 @Serializable
 data class Conversation(

@@ -112,6 +112,7 @@ fun ChatScreen(
     val currentStatus by viewModel.currentStatus.collectAsState()
     val conversations by viewModel.conversations.collectAsState(initial = emptyList())
     val selectedAttachment by viewModel.selectedAttachment.collectAsState()
+    val selectedAttachments by viewModel.selectedAttachments.collectAsState()
     val reasoningEffort by viewModel.reasoningEffort.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
 
@@ -189,11 +190,12 @@ fun ChatScreen(
                 FileOutputStream(photoFile).use { out ->
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
                 }
-                viewModel.setAttachment(
+                viewModel.addAttachment(
                     AttachmentItem(
                         uri = Uri.fromFile(photoFile).toString(),
                         name = photoFile.name,
-                        isImage = true
+                        isImage = true,
+                        mimeType = "image/jpeg"
                     )
                 )
                 Toast.makeText(context, "Photo attached!", Toast.LENGTH_SHORT).show()
@@ -203,46 +205,51 @@ fun ChatScreen(
         }
     }
 
-    // Gallery / Photo picker launcher
+    // Gallery / Multi-Photo picker launcher
     val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            val fileName = queryFileName(context, uri)
-            viewModel.setAttachment(
+            val items = uris.map { uri ->
+                val fileName = queryFileName(context, uri)
                 AttachmentItem(
                     uri = uri.toString(),
                     name = fileName,
-                    isImage = true
+                    isImage = true,
+                    mimeType = context.contentResolver.getType(uri) ?: "image/*"
                 )
-            )
-            Toast.makeText(context, "Image attached: $fileName", Toast.LENGTH_SHORT).show()
+            }
+            viewModel.addAttachments(items)
+            val msg = if (items.size == 1) "Photo attached: ${items[0].name}" else "${items.size} photos attached!"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
-    // General File picker launcher
+    // General Multi-File picker launcher
     val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            val fileName = queryFileName(context, uri)
-            val mimeType = context.contentResolver.getType(uri) ?: ""
-            val isImg = mimeType.startsWith("image/") ||
-                    fileName.lowercase().endsWith(".png") ||
-                    fileName.lowercase().endsWith(".jpg") ||
-                    fileName.lowercase().endsWith(".jpeg") ||
-                    fileName.lowercase().endsWith(".webp")
-
-            viewModel.setAttachment(
+            val items = uris.map { uri ->
+                val fileName = queryFileName(context, uri)
+                val mimeType = context.contentResolver.getType(uri) ?: ""
+                val isImg = mimeType.startsWith("image/") ||
+                        fileName.lowercase().endsWith(".png") ||
+                        fileName.lowercase().endsWith(".jpg") ||
+                        fileName.lowercase().endsWith(".jpeg") ||
+                        fileName.lowercase().endsWith(".webp")
                 AttachmentItem(
                     uri = uri.toString(),
                     name = fileName,
-                    isImage = isImg
+                    isImage = isImg,
+                    mimeType = mimeType
                 )
-            )
-            Toast.makeText(context, "File attached: $fileName", Toast.LENGTH_SHORT).show()
+            }
+            viewModel.addAttachments(items)
+            val msg = if (items.size == 1) "File attached: ${items[0].name}" else "${items.size} files attached!"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -762,10 +769,14 @@ fun ChatScreen(
                                 Toast.makeText(context, "Voice input not available", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        attachment = selectedAttachment,
-                        onRemoveAttachment = {
+                        attachments = selectedAttachments,
+                        onRemoveAttachment = { item ->
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            viewModel.clearAttachment()
+                            viewModel.removeAttachment(item)
+                        },
+                        onAddMoreAttachments = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showAttachmentMenu = true
                         },
                         isConnected = connectionState == ConnectionState.CONNECTED,
                         isLoading = isLoading
@@ -1336,48 +1347,91 @@ fun MessageItem(
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Column {
-                        // Display attached image if present
-                        if (!message.attachmentUri.isNullOrBlank()) {
-                            if (message.attachmentIsImage) {
-                                AsyncImage(
-                                    model = message.attachmentUri,
-                                    contentDescription = "Attached image",
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .heightIn(max = 220.dp)
-                                        .clip(RoundedCornerShape(14.dp)),
-                                    contentScale = ContentScale.Crop
-                                )
-                                Spacer(Modifier.height(8.dp))
-                            } else {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(10.dp))
-                                        .background(MaterialTheme.colorScheme.surface)
-                                        .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-                                        .padding(horizontal = 10.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                        // Display attached images and files (multi-attachment support)
+                        val allAtts = message.allAttachments
+                        if (allAtts.isNotEmpty()) {
+                            val images = allAtts.filter { it.isImage }
+                            val files = allAtts.filter { !it.isImage }
+
+                            if (images.isNotEmpty()) {
+                                if (images.size == 1) {
+                                    AsyncImage(
+                                        model = images[0].uri,
+                                        contentDescription = "Attached image",
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 240.dp)
+                                            .clip(RoundedCornerShape(14.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                } else {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        images.chunked(2).forEach { rowImages ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                rowImages.forEach { img ->
+                                                    AsyncImage(
+                                                        model = img.uri,
+                                                        contentDescription = img.name,
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .height(115.dp)
+                                                            .clip(RoundedCornerShape(12.dp)),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                }
+                                                if (rowImages.size == 1) {
+                                                    Spacer(Modifier.weight(1f))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                            }
+
+                            if (files.isNotEmpty()) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.InsertDriveFile,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp),
-                                        tint = ClaudeTerracotta
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        text = message.attachmentName ?: "Attached file",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    files.forEach { file ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(MaterialTheme.colorScheme.surface)
+                                                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                                .padding(horizontal = 10.dp, vertical = 7.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.InsertDriveFile,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp),
+                                                tint = ClaudeTerracotta
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                text = file.name,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
                                 }
                                 Spacer(Modifier.height(8.dp))
                             }
                         }
 
-                        if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:")) {
+                        if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:") && !message.content.startsWith("Sent ")) {
                             Text(
                                 text = message.content,
                                 style = MaterialTheme.typography.bodyLarge.copy(
@@ -2330,13 +2384,16 @@ fun ClaudeFloatingInputBar(
     onAttachFile: () -> Unit,
     onToggleWebSearch: () -> Unit = {},
     onVoiceInput: () -> Unit = {},
-    attachment: AttachmentItem?,
-    onRemoveAttachment: () -> Unit,
+    attachments: List<AttachmentItem> = emptyList(),
+    attachment: AttachmentItem? = null,
+    onRemoveAttachment: (AttachmentItem) -> Unit = {},
+    onAddMoreAttachments: () -> Unit = onAttachFile,
     isConnected: Boolean,
     isLoading: Boolean
 ) {
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-    val canSend = (text.isNotBlank() || attachment != null) && isConnected
+    val activeAttachments = if (attachments.isNotEmpty()) attachments else if (attachment != null) listOf(attachment) else emptyList()
+    val canSend = (text.isNotBlank() || activeAttachments.isNotEmpty()) && isConnected
 
     val recognizedModes = remember {
         listOf(
@@ -2366,72 +2423,106 @@ fun ClaudeFloatingInputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-            // Attachment Preview Bar (ChatGPT inline preview card)
-            AnimatedVisibility(visible = attachment != null) {
-                if (attachment != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 6.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (attachment.isImage) {
-                            AsyncImage(
-                                model = attachment.uri,
-                                contentDescription = "Attached image",
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(RoundedCornerShape(10.dp)),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(ClaudeTerracotta.copy(alpha = 0.14f)),
-                                contentAlignment = Alignment.Center
+            // Multi-Attachment Preview Bar (ChatGPT modern carousel / row of attached files/images)
+            AnimatedVisibility(visible = activeAttachments.isNotEmpty()) {
+                LazyRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    items(activeAttachments, key = { it.uri }) { att ->
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.8.dp,
+                                MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.widthIn(max = 200.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    Icons.Default.InsertDriveFile,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(22.dp),
-                                    tint = ClaudeTerracotta
-                                )
+                                if (att.isImage) {
+                                    AsyncImage(
+                                        model = att.uri,
+                                        contentDescription = "Attached image",
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Default.InsertDriveFile,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                            tint = ClaudeTerracotta
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.width(8.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = att.name,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (att.isImage) "Photo" else "Document",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { onRemoveAttachment(att) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Remove attachment",
+                                        modifier = Modifier.size(14.dp),
+                                        tint = MaterialTheme.colorScheme.outline
+                                    )
+                                }
                             }
                         }
+                    }
 
-                        Spacer(Modifier.width(10.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = attachment.name,
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = if (attachment.isImage) "Image attached · Ready to send" else "Document attached · Ready to send",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-
-                        IconButton(
-                            onClick = onRemoveAttachment,
-                            modifier = Modifier.size(28.dp)
+                    item {
+                        Surface(
+                            onClick = onAddMoreAttachments,
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.8.dp,
+                                MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.size(36.dp)
                         ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Remove attachment",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.outline
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "Add more files",
+                                    tint = ClaudeTerracotta,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                     }
                 }

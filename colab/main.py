@@ -103,6 +103,68 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/sync/backup")
+async def api_sync_backup(payload: dict):
+    """Receive full Next AI app state and save directly to Google Drive."""
+    try:
+        drive_dir = "/content/drive/MyDrive/NextAI_Backup"
+        os.makedirs(drive_dir, exist_ok=True)
+        backup_path = os.path.join(drive_dir, "nextai_app_cloud_backup.json")
+        with open(backup_path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+        os.makedirs("/tmp/nextai_backup", exist_ok=True)
+        with open("/tmp/nextai_backup/nextai_app_cloud_backup.json", "w") as f:
+            json.dump(payload, f, indent=2)
+
+        logger.info(f"Successfully saved cloud backup to {backup_path}")
+        return {
+            "status": "success",
+            "message": "Saved to Google Drive (/MyDrive/NextAI_Backup)",
+            "path": backup_path,
+            "timestamp": time.time()
+        }
+    except Exception as e:
+        logger.error(f"Cloud backup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sync/restore")
+async def api_sync_restore():
+    """Read full Next AI app state from Google Drive."""
+    candidate_paths = [
+        "/content/drive/MyDrive/NextAI_Backup/nextai_app_cloud_backup.json",
+        "/content/drive/MyDrive/NextAI_Backup/nextai_app_sync.json",
+        "/tmp/nextai_backup/nextai_app_cloud_backup.json"
+    ]
+    for p in candidate_paths:
+        if os.path.exists(p):
+            try:
+                with open(p, "r") as f:
+                    data = json.load(f)
+                return {"status": "success", "data": data, "source": p}
+            except Exception as e:
+                logger.error(f"Failed to read backup from {p}: {e}")
+
+    raise HTTPException(status_code=404, detail="No cloud backup found on Google Drive")
+
+
+@app.get("/api/sync/status")
+async def api_sync_status():
+    """Return Google Drive mount and backup status."""
+    drive_mounted = os.path.exists("/content/drive/MyDrive")
+    backup_file = "/content/drive/MyDrive/NextAI_Backup/nextai_app_cloud_backup.json"
+    exists = os.path.exists(backup_file)
+    size = os.path.getsize(backup_file) if exists else 0
+    mtime = os.path.getmtime(backup_file) if exists else 0
+    return {
+        "drive_mounted": drive_mounted,
+        "backup_exists": exists,
+        "backup_size_bytes": size,
+        "backup_timestamp": mtime
+    }
+
+
 @app.get("/history")
 async def get_history():
     """Return list of AGY conversation history files."""
@@ -186,6 +248,68 @@ async def websocket_endpoint(websocket: WebSocket):
                     }), websocket)
                     continue
 
+                # Handle Cloud Sync Backup request
+                if payload.get("action") == "cloud_sync_backup":
+                    b_data = payload.get("backup_data", {})
+                    try:
+                        drive_dir = "/content/drive/MyDrive/NextAI_Backup"
+                        os.makedirs(drive_dir, exist_ok=True)
+                        b_path = os.path.join(drive_dir, "nextai_app_cloud_backup.json")
+                        with open(b_path, "w") as f:
+                            json.dump(b_data, f, indent=2)
+
+                        os.makedirs("/tmp/nextai_backup", exist_ok=True)
+                        with open("/tmp/nextai_backup/nextai_app_cloud_backup.json", "w") as f:
+                            json.dump(b_data, f, indent=2)
+
+                        logger.info("Successfully processed cloud sync backup")
+                        await manager.send(json.dumps({
+                            "type": "cloud_sync_result",
+                            "status": "success",
+                            "message": "Saved to Google Drive (/MyDrive/NextAI_Backup)",
+                            "timestamp": time.time() * 1000
+                        }), websocket)
+                    except Exception as b_err:
+                        logger.error(f"Cloud sync backup failed: {b_err}")
+                        await manager.send(json.dumps({
+                            "type": "cloud_sync_result",
+                            "status": "error",
+                            "message": f"Drive backup failed: {b_err}"
+                        }), websocket)
+                    continue
+
+                # Handle Cloud Sync Restore request
+                if payload.get("action") == "cloud_sync_restore":
+                    candidate_paths = [
+                        "/content/drive/MyDrive/NextAI_Backup/nextai_app_cloud_backup.json",
+                        "/content/drive/MyDrive/NextAI_Backup/nextai_app_sync.json",
+                        "/tmp/nextai_backup/nextai_app_cloud_backup.json"
+                    ]
+                    found_data = None
+                    for p in candidate_paths:
+                        if os.path.exists(p):
+                            try:
+                                with open(p, "r") as f:
+                                    found_data = json.load(f)
+                                break
+                            except Exception:
+                                pass
+
+                    if found_data is not None:
+                        logger.info("Sent cloud restore data back to client")
+                        await manager.send(json.dumps({
+                            "type": "cloud_restore_data",
+                            "status": "success",
+                            "data": found_data
+                        }), websocket)
+                    else:
+                        await manager.send(json.dumps({
+                            "type": "cloud_restore_data",
+                            "status": "error",
+                            "message": "No backup found in Google Drive (/MyDrive/NextAI_Backup)"
+                        }), websocket)
+                    continue
+
                 user_message = payload.get("message", raw)
                 conv_id = payload.get("conversation_id", "")
                 effort = payload.get("effort", "high")
@@ -194,20 +318,36 @@ async def websocket_endpoint(websocket: WebSocket):
                 custom_instructions = payload.get("custom_instructions")
                 auto_memory = payload.get("auto_memory", True)
                 is_temporary = payload.get("is_temporary", False)
-                file_name = payload.get("file_name")
-                file_data = payload.get("file_data")
-                if file_name and file_data:
-                    try:
-                        import base64
-                        safe_name = os.path.basename(file_name)
-                        os.makedirs("/tmp/uploads", exist_ok=True)
-                        save_path = f"/tmp/uploads/{safe_name}"
-                        with open(save_path, "wb") as f:
-                            f.write(base64.b64decode(file_data))
-                        user_message = f"[User attached file: {save_path}]\n\n{user_message}"
-                        logger.info(f"Saved uploaded file to {save_path}")
-                    except Exception as upload_err:
-                        logger.error(f"Failed to process file attachment: {upload_err}")
+
+                # Multi-attachment files processing
+                attached_files = payload.get("files", [])
+                if not attached_files and payload.get("file_name") and payload.get("file_data"):
+                    attached_files = [{
+                        "name": payload.get("file_name"),
+                        "data": payload.get("file_data"),
+                        "is_image": payload.get("file_is_image", False)
+                    }]
+
+                file_prefixes = []
+                if attached_files:
+                    import base64
+                    os.makedirs("/tmp/uploads", exist_ok=True)
+                    for f_idx, f_item in enumerate(attached_files):
+                        try:
+                            f_name = f_item.get("name", f"file_{f_idx}")
+                            f_data = f_item.get("data")
+                            if f_data:
+                                s_name = f"{f_idx}_{os.path.basename(f_name)}"
+                                s_path = f"/tmp/uploads/{s_name}"
+                                with open(s_path, "wb") as f_out:
+                                    f_out.write(base64.b64decode(f_data))
+                                file_prefixes.append(f"[User attached file: {s_path}]")
+                                logger.info(f"Saved uploaded attachment: {s_path}")
+                        except Exception as f_err:
+                            logger.error(f"Failed to process attachment {f_idx}: {f_err}")
+
+                if file_prefixes:
+                    user_message = "\n".join(file_prefixes) + "\n\n" + user_message
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
                 custom_instructions = None

@@ -39,7 +39,8 @@ class ChatViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val webSocketClient: AgyWebSocketClient,
     private val chatDao: ChatDao,
-    private val memoryDao: MemoryDao
+    private val memoryDao: MemoryDao,
+    val driveManager: com.agychat.app.data.drive.GoogleDriveManager
 ) : ViewModel() {
 
     // ChatGPT-Style Persistent Memory System
@@ -208,15 +209,116 @@ class ChatViewModel @Inject constructor(
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
+    private val _selectedAttachments = MutableStateFlow<List<AttachmentItem>>(emptyList())
+    val selectedAttachments: StateFlow<List<AttachmentItem>> = _selectedAttachments.asStateFlow()
+
     private val _selectedAttachment = MutableStateFlow<AttachmentItem?>(null)
     val selectedAttachment: StateFlow<AttachmentItem?> = _selectedAttachment.asStateFlow()
 
+    fun addAttachment(item: AttachmentItem) {
+        if (_selectedAttachments.value.none { it.uri == item.uri }) {
+            val updated = _selectedAttachments.value + item
+            _selectedAttachments.value = updated
+            _selectedAttachment.value = updated.firstOrNull()
+        }
+    }
+
+    fun addAttachments(items: List<AttachmentItem>) {
+        val currentUris = _selectedAttachments.value.map { it.uri }.toSet()
+        val newItems = items.filterNot { it.uri in currentUris }
+        if (newItems.isNotEmpty()) {
+            val updated = _selectedAttachments.value + newItems
+            _selectedAttachments.value = updated
+            _selectedAttachment.value = updated.firstOrNull()
+        }
+    }
+
     fun setAttachment(item: AttachmentItem?) {
+        val list = if (item != null) listOf(item) else emptyList()
+        _selectedAttachments.value = list
         _selectedAttachment.value = item
     }
 
+    fun removeAttachment(item: AttachmentItem) {
+        val updated = _selectedAttachments.value.filterNot { it.uri == item.uri }
+        _selectedAttachments.value = updated
+        _selectedAttachment.value = updated.firstOrNull()
+    }
+
     fun clearAttachment() {
+        _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
+    }
+
+    fun clearAttachments() {
+        clearAttachment()
+    }
+
+    // Google Drive & Cloud Sync State
+    private val _cloudSyncStatus = MutableStateFlow<String?>(null)
+    val cloudSyncStatus: StateFlow<String?> = _cloudSyncStatus.asStateFlow()
+
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    fun syncToGoogleDrive() {
+        if (_isSyncing.value) return
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _cloudSyncStatus.value = "Backing up to Google Drive..."
+            try {
+                // Save local safety backup
+                driveManager.exportToLocalFile()
+
+                if (_connectionState.value == ConnectionState.CONNECTED) {
+                    val fullJson = driveManager.createFullBackupJson()
+                    val syncPayload = JSONObject().apply {
+                        put("action", "cloud_sync_backup")
+                        put("backup_data", JSONObject(fullJson))
+                        put("timestamp", System.currentTimeMillis())
+                    }
+                    webSocketClient.sendMessage(syncPayload.toString())
+                    _cloudSyncStatus.value = "Synced with Google Drive"
+                    driveManager.setLastSyncTimestamp(System.currentTimeMillis())
+                } else {
+                    _cloudSyncStatus.value = "Saved local backup (Connect Colab for Drive sync)"
+                }
+            } catch (e: Exception) {
+                _cloudSyncStatus.value = "Sync error: ${e.localizedMessage}"
+            } finally {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    fun restoreFromGoogleDrive() {
+        if (_isSyncing.value) return
+        viewModelScope.launch {
+            _isSyncing.value = true
+            _cloudSyncStatus.value = "Requesting backup from Google Drive..."
+            try {
+                if (_connectionState.value == ConnectionState.CONNECTED) {
+                    val restoreReq = JSONObject().apply {
+                        put("action", "cloud_sync_restore")
+                    }
+                    webSocketClient.sendMessage(restoreReq.toString())
+                } else {
+                    val backupDir = java.io.File(context.filesDir, "backups")
+                    val latestFile = java.io.File(backupDir, "nextai_backup_latest.json")
+                    if (latestFile.exists()) {
+                        val res = driveManager.importFromLocalFile(latestFile)
+                        _cloudSyncStatus.value = res.message
+                        loadConversations()
+                    } else {
+                        _cloudSyncStatus.value = "Colab offline and no local backup found"
+                    }
+                    _isSyncing.value = false
+                }
+            } catch (e: Exception) {
+                _cloudSyncStatus.value = "Restore failed: ${e.localizedMessage}"
+                _isSyncing.value = false
+            }
+        }
     }
 
     private val _selectedModel = MutableStateFlow<AiModel>(ModelRegistry.DEFAULT_MODEL)
@@ -405,6 +507,26 @@ class ChatViewModel @Inject constructor(
                         handleAutonomousMemoryUpdate(action, memContent, category)
                     }
                 }
+                "cloud_sync_result" -> {
+                    val msg = json.optString("message", "Google Drive sync completed")
+                    _cloudSyncStatus.value = "✅ $msg"
+                    driveManager.setLastSyncTimestamp(System.currentTimeMillis())
+                    _isSyncing.value = false
+                }
+                "cloud_restore_data" -> {
+                    val backupData = json.optJSONObject("data") ?: json.optJSONObject("backup_data")
+                    if (backupData != null) {
+                        viewModelScope.launch {
+                            val res = driveManager.restoreFullBackupJson(backupData.toString())
+                            _cloudSyncStatus.value = "✅ ${res.message}"
+                            _isSyncing.value = false
+                            loadConversations()
+                        }
+                    } else {
+                        _cloudSyncStatus.value = "⚠️ No backup found on Google Drive"
+                        _isSyncing.value = false
+                    }
+                }
                 "chunk" -> {
                     appendContentChunk(content)
                 }
@@ -432,18 +554,42 @@ class ChatViewModel @Inject constructor(
         if (!_isAutoMemoryEnabled.value || _isTemporaryChat.value) return
         viewModelScope.launch {
             if (action == "add") {
-                val existing = memoryDao.findMemoryByExactContent(content)
+                val cleanContent = content.trim()
+                val existing = memoryDao.findMemoryByExactContent(cleanContent)
                 if (existing == null) {
-                    memoryDao.insertMemory(
-                        MemoryEntity(
-                            id = UUID.randomUUID().toString(),
-                            content = content.trim(),
-                            category = category,
-                            isEnabled = true,
-                            createdAt = System.currentTimeMillis(),
-                            updatedAt = System.currentTimeMillis()
+                    // Smart Conflict Resolution & Deduplication:
+                    // Check if an existing memory in the same category covers this topic/preference
+                    val existingMemories = memoryDao.getAllMemoriesList()
+                        .filter { it.category.equals(category, ignoreCase = true) }
+                    val keywords = cleanContent.lowercase()
+                        .split(" ")
+                        .filter { it.length > 3 && it !in setOf("user", "prefers", "likes", "always", "never", "with", "from") }
+                        .toSet()
+
+                    val existingMatch = existingMemories.firstOrNull { mem ->
+                        val memKeywords = mem.content.lowercase()
+                            .split(" ")
+                            .filter { it.length > 3 && it !in setOf("user", "prefers", "likes", "always", "never", "with", "from") }
+                            .toSet()
+                        val overlap = keywords.intersect(memKeywords).size
+                        (keywords.isNotEmpty() && overlap >= 2) || (keywords.size <= 2 && overlap >= 1)
+                    }
+
+                    if (existingMatch != null) {
+                        // Update existing memory in place to avoid duplicate contradictions
+                        memoryDao.updateMemoryContent(existingMatch.id, cleanContent, category, System.currentTimeMillis())
+                    } else {
+                        memoryDao.insertMemory(
+                            MemoryEntity(
+                                id = UUID.randomUUID().toString(),
+                                content = cleanContent,
+                                category = category,
+                                isEnabled = true,
+                                createdAt = System.currentTimeMillis(),
+                                updatedAt = System.currentTimeMillis()
+                            )
                         )
-                    )
+                    }
                 }
                 // Attach memory update tag to the currently active assistant message
                 val currentMessages = _messages.value.toMutableList()
@@ -648,6 +794,24 @@ class ChatViewModel @Inject constructor(
             list[idx] = finalized
             _messages.value = list
             saveMessageToDb(finalized)
+
+            // Auto-backup to Google Drive if enabled and connected
+            val autoBackup = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                .getBoolean("drive_auto_backup", true)
+            if (autoBackup && _connectionState.value == ConnectionState.CONNECTED && !_isTemporaryChat.value) {
+                viewModelScope.launch {
+                    try {
+                        val fullJson = driveManager.createFullBackupJson()
+                        val syncPayload = JSONObject().apply {
+                            put("action", "cloud_sync_backup")
+                            put("backup_data", JSONObject(fullJson))
+                            put("timestamp", System.currentTimeMillis())
+                        }
+                        webSocketClient.sendMessage(syncPayload.toString())
+                        driveManager.setLastSyncTimestamp(System.currentTimeMillis())
+                    } catch (_: Exception) {}
+                }
+            }
         }
         streamingMessageId = null
     }
@@ -690,8 +854,8 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(text: String) {
         val trimmed = text.trim()
-        val attachment = _selectedAttachment.value
-        if (trimmed.isBlank() && attachment == null) return
+        val attachments = _selectedAttachments.value
+        if (trimmed.isBlank() && attachments.isEmpty()) return
 
         if (_connectionState.value != ConnectionState.CONNECTED) {
             appendSystemMessage("⚠️ Not connected to Colab Bridge. Tap reconnect or open Settings.")
@@ -713,33 +877,52 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        val firstAtt = attachments.firstOrNull()
+        val summaryContent = if (trimmed.isNotBlank()) {
+            trimmed
+        } else if (attachments.size == 1) {
+            "Sent an attachment: ${firstAtt?.name}"
+        } else {
+            "Sent ${attachments.size} attachments (${attachments.count { it.isImage }} photos, ${attachments.count { !it.isImage }} files)"
+        }
+
         val userMessage = Message(
             id = UUID.randomUUID().toString(),
             role = "user",
-            content = trimmed.ifBlank { "Sent an attachment: ${attachment?.name}" },
+            content = summaryContent,
             timestamp = System.currentTimeMillis(),
-            attachmentUri = attachment?.uri,
-            attachmentName = attachment?.name,
-            attachmentIsImage = attachment?.isImage ?: false
+            attachmentUri = firstAtt?.uri,
+            attachmentName = firstAtt?.name,
+            attachmentIsImage = firstAtt?.isImage ?: false,
+            attachments = attachments
         )
+        _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
         _messages.value = _messages.value + userMessage
         if (!_isTemporaryChat.value) {
             saveMessageToDb(userMessage)
         }
 
-        var fileBase64: String? = null
-        if (attachment != null) {
+        // Encode files to base64
+        val filesArray = org.json.JSONArray()
+        for (att in attachments) {
             try {
-                val uri = Uri.parse(attachment.uri)
+                val uri = Uri.parse(att.uri)
                 context.contentResolver.openInputStream(uri)?.use { stream ->
                     val bytes = stream.readBytes()
-                    if (bytes.size <= 5 * 1024 * 1024) {
-                        fileBase64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    if (bytes.size <= 10 * 1024 * 1024) {
+                        val fileB64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        val fObj = JSONObject().apply {
+                            put("name", att.name)
+                            put("is_image", att.isImage)
+                            put("mime_type", att.mimeType ?: if (att.isImage) "image/jpeg" else "application/octet-stream")
+                            put("data", fileB64)
+                        }
+                        filesArray.put(fObj)
                     }
                 }
-            } catch (e: Exception) {
-                // Ignore read errors
+            } catch (_: Exception) {
+                // Ignore single file read error
             }
         }
 
@@ -763,8 +946,16 @@ class ChatViewModel @Inject constructor(
                 emptyList()
             }
 
+            val promptText = if (trimmed.isNotBlank()) {
+                trimmed
+            } else if (attachments.size == 1) {
+                "Please inspect the attached file: ${firstAtt?.name}"
+            } else {
+                "Please inspect the ${attachments.size} attached files: ${attachments.joinToString(", ") { it.name }}"
+            }
+
             val payload = JSONObject().apply {
-                put("message", trimmed.ifBlank { "Please inspect the attached file: ${attachment?.name}" })
+                put("message", promptText)
                 put("conversation_id", currentConversationId)
                 put("effort", effort)
                 put("model", _selectedModel.value.id)
@@ -783,12 +974,14 @@ class ChatViewModel @Inject constructor(
                 }
                 put("auto_memory", _isAutoMemoryEnabled.value && !_isTemporaryChat.value)
                 put("is_temporary", _isTemporaryChat.value)
-                if (attachment != null) {
-                    put("file_name", attachment.name)
-                    put("file_is_image", attachment.isImage)
-                    if (fileBase64 != null) {
-                        put("file_data", fileBase64)
-                    }
+
+                // Multi-files payload
+                if (filesArray.length() > 0) {
+                    put("files", filesArray)
+                    val firstObj = filesArray.getJSONObject(0)
+                    put("file_name", firstObj.getString("name"))
+                    put("file_is_image", firstObj.getBoolean("is_image"))
+                    put("file_data", firstObj.getString("data"))
                 }
             }.toString()
 
@@ -841,6 +1034,23 @@ class ChatViewModel @Inject constructor(
                     updatedAt = System.currentTimeMillis()
                 )
             )
+
+            val attachmentsJson = if (message.allAttachments.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                message.allAttachments.forEach { att ->
+                    arr.put(JSONObject().apply {
+                        put("uri", att.uri)
+                        put("name", att.name)
+                        put("size", att.size)
+                        put("isImage", att.isImage)
+                        put("mimeType", att.mimeType)
+                    })
+                }
+                arr.toString()
+            } else null
+
+            val firstAtt = message.allAttachments.firstOrNull()
+
             chatDao.insertMessage(
                 MessageEntity(
                     id = message.id,
@@ -848,9 +1058,10 @@ class ChatViewModel @Inject constructor(
                     role = message.role,
                     content = message.content,
                     timestamp = message.timestamp,
-                    attachmentUri = message.attachmentUri,
-                    attachmentName = message.attachmentName,
-                    attachmentIsImage = message.attachmentIsImage,
+                    attachmentUri = message.attachmentUri ?: firstAtt?.uri,
+                    attachmentName = message.attachmentName ?: firstAtt?.name,
+                    attachmentIsImage = message.attachmentIsImage || (firstAtt?.isImage ?: false),
+                    attachmentsJson = attachmentsJson,
                     feedback = message.feedback
                 )
             )
@@ -928,6 +1139,7 @@ class ChatViewModel @Inject constructor(
 
     fun startNewConversation() {
         _messages.value = emptyList()
+        _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
         streamingMessageId = null
         currentConversationId = UUID.randomUUID().toString()
@@ -935,25 +1147,64 @@ class ChatViewModel @Inject constructor(
         _isLoading.value = false
     }
 
+    fun loadConversations() {
+        loadConversation(currentConversationId)
+    }
+
     fun loadConversation(conversationId: String) {
         currentConversationId = conversationId
         streamingMessageId = null
+        _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
         _isLoading.value = false
         _currentStatus.value = null
 
         viewModelScope.launch {
             chatDao.getMessagesForConversation(conversationId).collectLatest { entities ->
-                _messages.value = entities.map {
+                _messages.value = entities.map { entity ->
+                    val parsedAttachments = if (!entity.attachmentsJson.isNullOrBlank()) {
+                        try {
+                            val arr = org.json.JSONArray(entity.attachmentsJson)
+                            val list = mutableListOf<AttachmentItem>()
+                            for (i in 0 until arr.length()) {
+                                val o = arr.getJSONObject(i)
+                                list.add(
+                                    AttachmentItem(
+                                        uri = o.getString("uri"),
+                                        name = o.getString("name"),
+                                        size = o.optLong("size", 0L),
+                                        isImage = o.optBoolean("isImage", false),
+                                        mimeType = if (o.isNull("mimeType")) null else o.optString("mimeType")
+                                    )
+                                )
+                            }
+                            list
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    } else if (!entity.attachmentUri.isNullOrBlank()) {
+                        listOf(
+                            AttachmentItem(
+                                uri = entity.attachmentUri,
+                                name = entity.attachmentName ?: "Attachment",
+                                size = 0L,
+                                isImage = entity.attachmentIsImage
+                            )
+                        )
+                    } else {
+                        emptyList()
+                    }
+
                     Message(
-                        id = it.id,
-                        role = it.role,
-                        content = it.content,
-                        timestamp = it.timestamp,
-                        attachmentUri = it.attachmentUri,
-                        attachmentName = it.attachmentName,
-                        attachmentIsImage = it.attachmentIsImage,
-                        feedback = it.feedback
+                        id = entity.id,
+                        role = entity.role,
+                        content = entity.content,
+                        timestamp = entity.timestamp,
+                        attachmentUri = entity.attachmentUri,
+                        attachmentName = entity.attachmentName,
+                        attachmentIsImage = entity.attachmentIsImage,
+                        attachments = parsedAttachments,
+                        feedback = entity.feedback
                     )
                 }
             }

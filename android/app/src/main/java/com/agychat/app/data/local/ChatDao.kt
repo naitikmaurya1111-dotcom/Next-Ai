@@ -40,4 +40,16 @@ interface ChatDao {
 
     @Query("DELETE FROM messages")
     suspend fun clearAllMessages()
+
+    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    suspend fun getAllConversationsList(): List<ConversationEntity>
+
+    @Query("SELECT * FROM messages ORDER BY timestamp ASC")
+    suspend fun getAllMessagesList(): List<MessageEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllConversations(conversations: List<ConversationEntity>)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllMessages(messages: List<MessageEntity>)
 }

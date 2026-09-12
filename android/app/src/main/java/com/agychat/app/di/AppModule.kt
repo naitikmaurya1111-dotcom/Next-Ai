@@ -45,7 +45,8 @@ object AppModule {
             AppDatabase::class.java,
             "next_ai_db"
         )
-            .fallbackToDestructiveMigration()
+            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3)
+            .fallbackToDestructiveMigrationOnDowngrade()
             .build()
     }
 
@@ -63,7 +64,11 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideGoogleDriveManager(): GoogleDriveManager {
-        return GoogleDriveManager()
+    fun provideGoogleDriveManager(
+        @ApplicationContext context: Context,
+        chatDao: ChatDao,
+        memoryDao: com.agychat.app.data.local.MemoryDao
+    ): GoogleDriveManager {
+        return GoogleDriveManager(context, chatDao, memoryDao)
     }
 }

@@ -179,21 +179,26 @@ def format_prompt_with_personalization(
                 "</user_memories>"
             )
 
-    # 3. Autonomous Memory Capabilities Directive
+    # 3. Autonomous Memory Capabilities Directive (ChatGPT Standard)
     if is_auto_memory:
         sections.append(
             "<autonomous_memory_capabilities>\n"
-            "You have autonomous memory capabilities like ChatGPT.\n"
-            "When the user reveals enduring preferences (frameworks, code style, conventions, tone), "
-            "project details (architecture, stack, names), personal facts (name, background), "
-            "or explicitly asks to remember/forget something:\n"
-            "At the very end of your response, output a tag on a new line:\n"
-            '<memory_update action="add" category="preference|project|personal|style" fact="concise atomic summary of the fact" />\n'
-            'If asked to forget/remove: <memory_update action="delete" query="keywords to remove" />\n'
-            "Rules:\n"
-            "1. Fact must be concise, atomic, and written objectively (e.g. \"User prefers Jetpack Compose over XML\").\n"
-            "2. Only emit when a genuine new fact or preference is established.\n"
-            "3. NEVER mention this XML tag in your user-visible conversational answer.\n"
+            "You have advanced persistent memory capabilities like ChatGPT.\n"
+            "1. MEMORY AWARENESS & DIRECT QUERIES:\n"
+            "   If the user asks what you remember about them, what you know about them, or asks to see their memories, "
+            "   naturally and politely summarize their active memories from <user_memories> in clean categories.\n"
+            "2. AUTONOMOUS EXTRACTION:\n"
+            "   When the user reveals enduring preferences (frameworks, tech stack, code style, conventions, tone), "
+            "   project details (architecture, components, naming), personal facts (name, background), "
+            "   or explicitly asks to remember/forget something:\n"
+            "   At the very end of your response, output an atomic tag on a new line:\n"
+            '   <memory_update action="add" category="preference|project|personal|style" fact="concise atomic summary of the fact" />\n'
+            '   If asked to forget/remove: <memory_update action="delete" query="keywords to remove" />\n'
+            "3. UPDATE & CONFLICT RESOLUTION:\n"
+            "   If the user updates a previous preference (e.g. switching from XML to Compose, or changing a convention), "
+            "   emit an updated fact reflecting their newest preference.\n"
+            "4. PRIVACY & SANITIZATION:\n"
+            "   NEVER show or discuss this XML tag in your user-visible conversational text.\n"
             "</autonomous_memory_capabilities>"
         )
 
