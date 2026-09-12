@@ -705,8 +705,12 @@ fun ChatScreen(
                         )
                     }
 
-                    if (!isSlashActive) {
-                        // Quick-Action Tool & Slash Command Chips
+                    // Quick-Action Tool & Slash Command Chips (Shown on empty canvas, tucks away during chat)
+                    AnimatedVisibility(
+                        visible = !isSlashActive && messages.isEmpty(),
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
                         QuickSlashChipsRow(
                             plugins = pluginManager.plugins,
                             onChipClick = { plugin ->
@@ -730,7 +734,7 @@ fun ChatScreen(
                         )
                     }
 
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(4.dp))
 
                     // Modern ChatGPT Floating Composer with File/Image Attachment & Web Search Toggle
                     ClaudeFloatingInputBar(
