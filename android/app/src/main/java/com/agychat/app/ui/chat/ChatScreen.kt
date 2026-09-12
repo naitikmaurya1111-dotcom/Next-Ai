@@ -572,6 +572,7 @@ fun ChatScreen(
                                                 ConnectionState.CONNECTING -> "Connecting to Colab bridge…"
                                                 ConnectionState.ERROR -> "Bridge disconnected"
                                                 ConnectionState.DISCONNECTED -> "Bridge offline"
+                                                ConnectionState.CONNECTED -> ""
                                             }
                                             Text(
                                                 text = statusText,
