@@ -5,9 +5,10 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Ambient circular glow accent in center safe zone -->
+    <!-- Ambient circular glow accent in center safe zone (14% opacity, API 26 compat) -->
     <path
-        android:fillColor="#15D97757"
+        android:fillColor="#D97757"
+        android:fillAlpha="0.14"
         android:pathData="M54,18 A36,36 0 1,0 54,90 A36,36 0 1,0 54,18 Z" />
 
     <!-- Stylized Next "N" Monogram -->
