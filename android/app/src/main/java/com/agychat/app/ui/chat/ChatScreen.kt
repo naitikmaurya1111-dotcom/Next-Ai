@@ -16,6 +16,7 @@ import java.io.File
 import java.io.FileOutputStream
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +24,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.res.painterResource
+import com.agychat.app.R
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -1847,19 +1850,20 @@ fun MessageItem(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Start
             ) {
-                // Circular Spark Badge Avatar
+                // Next AI Continuum Avatar
                 Box(
                     modifier = Modifier
                         .size(30.dp)
                         .clip(CircleShape)
-                        .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+                        .background(Color(0xFF040510)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "✦",
-                        color = ClaudeTerracotta,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp
+                    Image(
+                        painter = painterResource(id = R.drawable.app_logo),
+                        contentDescription = "Next AI",
+                        modifier = Modifier
+                            .size(26.dp)
+                            .clip(CircleShape)
                     )
                 }
 
@@ -2594,19 +2598,20 @@ fun ClaudeTypingBubble() {
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Circular Spark Badge Avatar matching Assistant messages
+        // Circular Logo Avatar matching Assistant messages
         Box(
             modifier = Modifier
                 .size(30.dp)
                 .clip(CircleShape)
-                .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+                .background(Color(0xFF040510)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "✦",
-                color = ClaudeTerracotta,
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
+            Image(
+                painter = painterResource(id = R.drawable.app_logo),
+                contentDescription = "Next AI",
+                modifier = Modifier
+                    .size(26.dp)
+                    .clip(CircleShape)
             )
         }
 
@@ -3192,19 +3197,20 @@ fun EmptyChatGreeting(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Minimalist Centered Spark Emblem
+        // Next AI Masterpiece Emblem
         Box(
             modifier = Modifier
-                .size(52.dp)
+                .size(72.dp)
                 .clip(CircleShape)
-                .background(ClaudeTerracotta.copy(alpha = 0.12f)),
+                .background(Color(0xFF040510)),
             contentAlignment = Alignment.Center
         ) {
-            Text(
-                text = "✦",
-                color = ClaudeTerracotta,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold
+            Image(
+                painter = painterResource(id = R.drawable.app_logo),
+                contentDescription = "Next AI Logo",
+                modifier = Modifier
+                    .size(68.dp)
+                    .clip(CircleShape)
             )
         }
 
