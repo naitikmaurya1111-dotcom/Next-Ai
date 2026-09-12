@@ -105,7 +105,8 @@ fun formatMessageTime(epochMs: Long): String =
 fun ChatScreen(
     viewModel: ChatViewModel = hiltViewModel(),
     pluginManager: PluginManager,
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    onNavigateToPersonalization: () -> Unit = {}
 ) {
     val messages by viewModel.messages.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -507,6 +508,16 @@ fun ChatScreen(
                                             }
                                         )
 
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = { Text("Personalization & Memory", style = MaterialTheme.typography.bodyMedium) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onNavigateToPersonalization()
+                                            }
+                                        )
                                         DropdownMenuItem(
                                             leadingIcon = {
                                                 Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
