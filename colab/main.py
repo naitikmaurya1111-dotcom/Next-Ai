@@ -316,6 +316,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 model = payload.get("model", "")
                 memories = payload.get("memories", [])
                 custom_instructions = payload.get("custom_instructions")
+                personalization = payload.get("personalization")  # Full Personalization profile
                 auto_memory = payload.get("auto_memory", True)
                 is_temporary = payload.get("is_temporary", False)
 
@@ -351,10 +352,11 @@ async def websocket_endpoint(websocket: WebSocket):
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
                 custom_instructions = None
+                personalization = None
                 auto_memory = True
                 is_temporary = False
 
-            # Stream agy command output back to client with model, effort, memories, and custom instructions
+            # Stream agy command with full personalization profile, memories, and model settings
             async for event in run_agy_command(
                 user_message,
                 conv_id,
@@ -362,6 +364,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 model,
                 memories,
                 custom_instructions=custom_instructions,
+                personalization=personalization,
                 is_auto_memory=auto_memory,
                 is_temporary=is_temporary
             ):

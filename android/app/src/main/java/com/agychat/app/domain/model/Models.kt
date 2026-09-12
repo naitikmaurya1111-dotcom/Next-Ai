@@ -80,38 +80,87 @@ data class MemoryItem(
 )
 
 @Serializable
+data class Personalization(
+    // Identity & Background (who the user is)
+    val name: String = "",                        // "Naitik"
+    val occupation: String = "",                  // "Android developer"
+    val expertise: String = "",                   // "Kotlin, Compose, ML"
+    val country: String = "",                     // "India"
+    val age: String = "",                         // "22"
+    // How should AI respond
+    val responseLength: String = "Adaptive",      // "Concise" | "Balanced" | "Detailed" | "Adaptive"
+    val responseFormat: String = "Auto",          // "Auto" | "Always Markdown" | "Plain Text"
+    val toneStyle: String = "Direct",             // "Direct" | "Formal" | "Casual" | "Socratic" | "Empathetic"
+    val depthLevel: String = "Expert",            // "Beginner" | "Intermediate" | "Expert" | "Research"
+    val codeLanguage: String = "Kotlin",          // preferred programming language
+    val enableExamples: Boolean = true,           // include code/concept examples by default
+    val enableProactiveInsights: Boolean = true,  // volunteer useful related info unprompted
+    val enableCriticalFeedback: Boolean = true,   // give honest critical analysis, no sugarcoating
+    val enableEmoji: Boolean = false,             // use emoji in responses
+    val avoidTopics: String = "",                 // topics to avoid/skip
+    // Extra free-form instructions
+    val customContext: String = "",               // background context about user's work/projects
+    val extraInstructions: String = "",           // any free-form extra directives
+    // System toggles
+    val isEnabled: Boolean = true,
+    val memoryEnabled: Boolean = true,
+    val autoMemoryEnabled: Boolean = true
+)
+
+// Keep CustomInstructions for backward compatibility
+@Serializable
 data class CustomInstructions(
     val aboutUser: String = "",
     val responsePreferences: String = "",
-    val tonePreset: String = "Balanced", // "Balanced", "Concise", "Technical", "Educational", "Warm"
+    val tonePreset: String = "Balanced",
     val isEnabled: Boolean = true
 )
 
 object MemoryCategory {
-    val ALL = "All"
-    val PROJECT = "project"
-    val PREFERENCE = "preference"
-    val PERSONAL = "personal"
-    val STYLE = "style"
-    val GENERAL = "general"
+    const val ALL = "All"
+    const val FACTS = "facts"          // hard user facts: name, job, age
+    const val PREFERENCES = "prefs"   // tech/style preferences
+    const val PROJECT = "project"      // ongoing project context
+    const val GOALS = "goals"          // user goals & milestones
+    const val PERSONAL = "personal"   // personal details, relationships
+    const val SKILLS = "skills"       // known skills, tech stack
+    const val FEEDBACK = "feedback"   // how user reacted to answers
+    const val GENERAL = "general"
 
-    val CATEGORIES = listOf(ALL, PROJECT, PREFERENCE, PERSONAL, STYLE, GENERAL)
+    val ALL_CATEGORIES = listOf(ALL, FACTS, PREFERENCES, PROJECT, GOALS, PERSONAL, SKILLS, FEEDBACK, GENERAL)
 
     fun getDisplayName(category: String): String = when (category.lowercase()) {
-        PROJECT -> "🎯 Project"
-        PREFERENCE -> "⚙️ Preference"
+        FACTS -> "📋 Facts"
+        PREFERENCES -> "⚙️ Preferences"
+        PROJECT -> "🎯 Projects"
+        GOALS -> "🏆 Goals"
         PERSONAL -> "👤 Personal"
-        STYLE -> "🎨 Style"
+        SKILLS -> "💻 Skills"
+        FEEDBACK -> "💬 Feedback"
         GENERAL -> "💡 General"
-        else -> "📌 $category"
+        else -> "📌 ${category.replaceFirstChar { it.uppercase() }}"
     }
 
     fun getIconEmoji(category: String): String = when (category.lowercase()) {
+        FACTS -> "📋"
+        PREFERENCES -> "⚙️"
         PROJECT -> "🎯"
-        PREFERENCE -> "⚙️"
+        GOALS -> "🏆"
         PERSONAL -> "👤"
-        STYLE -> "🎨"
+        SKILLS -> "💻"
+        FEEDBACK -> "💬"
         else -> "💡"
+    }
+
+    fun getColor(category: String): String = when (category.lowercase()) {
+        FACTS -> "#4FC3F7"
+        PREFERENCES -> "#81C784"
+        PROJECT -> "#FFB74D"
+        GOALS -> "#F48FB1"
+        PERSONAL -> "#CE93D8"
+        SKILLS -> "#80CBC4"
+        FEEDBACK -> "#FFCC02"
+        else -> "#B0BEC5"
     }
 }
 

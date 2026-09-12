@@ -95,34 +95,150 @@ def extract_and_strip_memory_tags(text: str):
     cleaned = MEMORY_TAG_REGEX.sub(_repl, text).strip()
     return updates, cleaned
 
+def _build_identity_block(p: dict) -> str:
+    """Build the user identity section from Personalization fields."""
+    parts = []
+    name = p.get("name", "").strip()
+    occupation = p.get("occupation", "").strip()
+    expertise = p.get("expertise", "").strip()
+    country = p.get("country", "").strip()
+    age = p.get("age", "").strip()
+    context = p.get("custom_context", "").strip()
+    if name:
+        parts.append(f"  Name: {name}")
+    if occupation:
+        parts.append(f"  Role: {occupation}")
+    if expertise:
+        parts.append(f"  Skills & Stack: {expertise}")
+    if country:
+        parts.append(f"  Country: {country}")
+    if age:
+        parts.append(f"  Age: {age}")
+    if context:
+        parts.append(f"  Project & Work Context:\n    {context}")
+    return "\n".join(parts)
+
+
+def _build_response_directives(p: dict) -> list:
+    """Turn every Personalization field into a concrete behavioral directive for the model."""
+    directives = []
+    length = p.get("response_length", "Adaptive")
+    if length == "Concise":
+        directives.append("Keep responses SHORT and dense. No padding, no re-stating what the user said.")
+    elif length == "Detailed":
+        directives.append("Give comprehensive answers — cover edge cases and subtleties fully.")
+    elif length == "Balanced":
+        directives.append("Aim for balanced responses — complete but not bloated.")
+    else:
+        directives.append("Adapt response length to question complexity. Simple = short. Complex = thorough.")
+
+    tone = p.get("tone_style", "Direct")
+    if tone == "Direct":
+        directives.append("Be direct and assertive. State conclusions first. No diplomatic padding or hedging.")
+    elif tone == "Formal":
+        directives.append("Use formal, professional language. Structured and precise.")
+    elif tone == "Casual":
+        directives.append("Be friendly and conversational — like a smart colleague, not a textbook.")
+    elif tone == "Socratic":
+        directives.append("Use the Socratic method — ask clarifying questions, challenge assumptions, guide thinking.")
+    elif tone == "Empathetic":
+        directives.append("Be patient, supportive, and encouraging. Acknowledge difficulty before solving.")
+
+    depth = p.get("depth_level", "Expert")
+    if depth == "Beginner":
+        directives.append("Assume zero prior knowledge. Use simple language, analogies, step-by-step breakdowns.")
+    elif depth == "Intermediate":
+        directives.append("Assume baseline domain knowledge. Skip basics, explain intermediate concepts.")
+    elif depth == "Expert":
+        directives.append("Treat user as a domain expert. Use precise technical language, skip basics, go deep immediately.")
+    elif depth == "Research":
+        directives.append("Respond at academic/research level — theory, nuances, trade-offs, state-of-the-art.")
+
+    fmt = p.get("response_format", "Auto")
+    if fmt == "Always Markdown":
+        directives.append("Always format with Markdown: headers, bullets, code blocks where appropriate.")
+    elif fmt == "Plain Text":
+        directives.append("Use plain text ONLY — no Markdown, no headers, no bullet points.")
+
+    code_lang = p.get("code_language", "").strip()
+    if code_lang:
+        directives.append(f"Default all code examples to {code_lang} unless explicitly asked for another language.")
+
+    if not p.get("enable_examples", True):
+        directives.append("Omit code or concept examples unless the user explicitly requests one.")
+    if p.get("enable_proactive", True):
+        directives.append("Proactively volunteer relevant insights, warnings, or information the user didn't ask for but needs.")
+    else:
+        directives.append("Answer exactly what was asked — do not volunteer unrequested information.")
+
+    if p.get("enable_critical", True):
+        directives.append("Give honest, critical assessments. Flag mistakes, bad patterns, suboptimal decisions. No sugarcoating.")
+
+    if not p.get("enable_emoji", False):
+        directives.append("Do NOT use emoji anywhere in responses.")
+
+    avoid = p.get("avoid_topics", "").strip()
+    if avoid:
+        directives.append(f"Do NOT discuss or engage with: {avoid}. Politely redirect if user brings these up.")
+
+    extra = p.get("extra_instructions", "").strip()
+    if extra:
+        directives.append(f"Additional user instructions: {extra}")
+
+    return directives
+
+
 def format_prompt_with_personalization(
     message: str,
     memories: list = None,
     custom_instructions: dict = None,
+    personalization: dict = None,
     is_auto_memory: bool = True,
     is_temporary: bool = False
 ) -> str:
     """
-    Inject user profile, custom instructions, and categorized memories into prompt.
-    Modeled after ChatGPT's state-of-the-art Personalization & Autonomous Memory.
+    Build the complete AI system context from the user's Personalization profile, memories, and settings.
+    This is the single source of truth for how the AI behaves — every field of Personalization
+    translates into a concrete behavioral directive the model must follow.
     """
     if is_temporary:
         return (
             "<temporary_chat>\n"
-            "This is an Incognito / Temporary Chat session. Do NOT reference past memories "
-            "and do NOT emit any <memory_update> tags to save new memories.\n"
+            "This is an Incognito/Temporary Chat. Do NOT reference any past memories "
+            "and do NOT emit any <memory_update> tags.\n"
             "</temporary_chat>\n\n" + message
         )
 
     sections = []
 
-    # 1. Custom Instructions & User Profile
-    if custom_instructions and isinstance(custom_instructions, dict) and custom_instructions.get("is_enabled", True):
+    # ── 1. Full Personalization Profile (new Personalization model) ───────────
+    if personalization and isinstance(personalization, dict):
+        try:
+            backup_dir = "/content/drive/MyDrive/NextAI_Backup"
+            if os.path.exists(backup_dir):
+                with open(os.path.join(backup_dir, "personalization.json"), "w") as f:
+                    json.dump(personalization, f, indent=2)
+        except Exception:
+            pass
+
+        identity_block = _build_identity_block(personalization)
+        directives = _build_response_directives(personalization)
+
+        persona_text = "<personalization>\n"
+        if identity_block:
+            persona_text += "USER PROFILE:\n" + identity_block + "\n\n"
+        persona_text += (
+            "BEHAVIORAL DIRECTIVES — apply these to EVERY response without exception:\n"
+            + "\n".join(f"  {i+1}. {d}" for i, d in enumerate(directives))
+            + "\n</personalization>"
+        )
+        sections.append(persona_text)
+
+    # ── 2. Legacy Custom Instructions (backward compatibility) ────────────────
+    elif custom_instructions and isinstance(custom_instructions, dict) and custom_instructions.get("is_enabled", True):
         about_user = custom_instructions.get("about_user", "").strip()
         response_prefs = custom_instructions.get("response_preferences", "").strip()
         tone_preset = custom_instructions.get("tone_preset", "Balanced").strip()
-
-        # Backup to Google Drive
         try:
             backup_dir = "/content/drive/MyDrive/NextAI_Backup"
             if os.path.exists(backup_dir):
@@ -130,25 +246,22 @@ def format_prompt_with_personalization(
                     json.dump(custom_instructions, f, indent=2)
         except Exception:
             pass
-
         instr_parts = []
         if about_user:
             instr_parts.append(f"• User Profile & Background:\n  {about_user}")
         if response_prefs:
-            instr_parts.append(f"• How Next AI Should Respond & Formatting:\n  {response_prefs}")
+            instr_parts.append(f"• Response Preferences:\n  {response_prefs}")
         if tone_preset and tone_preset != "Default":
-            instr_parts.append(f"• Response Tone Style: {tone_preset}")
-
+            instr_parts.append(f"• Tone: {tone_preset}")
         if instr_parts:
             sections.append(
                 "<custom_instructions>\n"
-                "The user has established the following persistent Custom Instructions:\n"
+                "Persistent user instructions — follow always:\n"
                 + "\n".join(instr_parts) + "\n"
-                "Always adhere to these preferences across all answers.\n"
                 "</custom_instructions>"
             )
 
-    # 2. Categorized Persistent Memories
+    # ── 3. Categorized Persistent Memories (importance-sorted) ───────────────
     if memories:
         try:
             backup_dir = "/content/drive/MyDrive/NextAI_Backup"
@@ -158,53 +271,84 @@ def format_prompt_with_personalization(
         except Exception:
             pass
 
-        memory_lines = []
+        by_category: dict = {}
         for m in memories:
             if isinstance(m, dict):
-                cat = m.get("category", "general")
+                cat = m.get("category", "general").lower()
                 content = m.get("content", "").strip()
+                imp = int(m.get("importance", 5))
                 if content:
-                    memory_lines.append(f"• [{cat.capitalize()}] {content}")
+                    by_category.setdefault(cat, []).append((imp, content))
             else:
                 s = str(m).strip()
                 if s:
-                    memory_lines.append(f"• {s}")
+                    by_category.setdefault("general", []).append((5, s))
 
-        if memory_lines:
+        if by_category:
+            CATEGORY_ORDER = ["facts", "personal", "goals", "prefs", "preferences",
+                               "project", "skills", "feedback", "general"]
+            CATEGORY_LABELS = {
+                "facts": "FACTS", "personal": "PERSONAL", "goals": "GOALS",
+                "prefs": "PREFERENCES", "preferences": "PREFERENCES",
+                "project": "PROJECT CONTEXT", "skills": "SKILLS",
+                "feedback": "FEEDBACK PATTERNS", "general": "GENERAL"
+            }
+            mem_lines = []
+            for cat in CATEGORY_ORDER:
+                entries = by_category.pop(cat, [])
+                if entries:
+                    entries.sort(key=lambda x: x[0], reverse=True)
+                    label = CATEGORY_LABELS.get(cat, cat.upper())
+                    mem_lines.append(f"[{label}]")
+                    mem_lines.extend(f"  • {c}" for _, c in entries)
+            for cat, entries in by_category.items():
+                entries.sort(key=lambda x: x[0], reverse=True)
+                mem_lines.append(f"[{cat.upper()}]")
+                mem_lines.extend(f"  • {c}" for _, c in entries)
+
             sections.append(
                 "<user_memories>\n"
-                "The user has saved the following persistent memories & preferences across chats:\n"
-                + "\n".join(memory_lines) + "\n"
-                "Always respect and incorporate these memories when answering.\n"
+                "What you know and remember about this user (persisted across all conversations):\n"
+                + "\n".join(mem_lines) + "\n\n"
+                "CRITICAL: Always apply these memories when forming your response. If a memory "
+                "conflicts with something the user says NOW, prioritize their current statement "
+                "and treat it as an update to the old memory.\n"
                 "</user_memories>"
             )
 
-    # 3. Autonomous Memory Capabilities Directive (ChatGPT Standard)
+    # ── 4. Autonomous Memory Directive ───────────────────────────────────────
     if is_auto_memory:
+        cat_options = "facts|personal|prefs|project|goals|skills|feedback|general"
         sections.append(
-            "<autonomous_memory_capabilities>\n"
-            "You have advanced persistent memory capabilities like ChatGPT.\n"
-            "1. MEMORY AWARENESS & DIRECT QUERIES:\n"
-            "   If the user asks what you remember about them, what you know about them, or asks to see their memories, "
-            "   naturally and politely summarize their active memories from <user_memories> in clean categories.\n"
-            "2. AUTONOMOUS EXTRACTION:\n"
-            "   When the user reveals enduring preferences (frameworks, tech stack, code style, conventions, tone), "
-            "   project details (architecture, components, naming), personal facts (name, background), "
-            "   or explicitly asks to remember/forget something:\n"
-            "   At the very end of your response, output an atomic tag on a new line:\n"
-            '   <memory_update action="add" category="preference|project|personal|style" fact="concise atomic summary of the fact" />\n'
-            '   If asked to forget/remove: <memory_update action="delete" query="keywords to remove" />\n'
-            "3. UPDATE & CONFLICT RESOLUTION:\n"
-            "   If the user updates a previous preference (e.g. switching from XML to Compose, or changing a convention), "
-            "   emit an updated fact reflecting their newest preference.\n"
-            "4. PRIVACY & SANITIZATION:\n"
-            "   NEVER show or discuss this XML tag in your user-visible conversational text.\n"
-            "</autonomous_memory_capabilities>"
+            "<autonomous_memory>\n"
+            "You have ChatGPT-style persistent memory across all conversations.\n\n"
+            "RULES:\n"
+            "A) DIRECT QUERIES: If the user asks 'what do you remember about me?', "
+            "'what do you know?', or similar — summarize <user_memories> by category, "
+            "concisely and specifically. Do not be vague.\n\n"
+            "B) AUTO-EXTRACT when the user reveals:\n"
+            "   • Personal facts (name, age, role, location)\n"
+            "   • Technical preferences (language, framework, tools, conventions)\n"
+            "   • Project details (architecture, component names, patterns used)\n"
+            "   • Goals or milestones they are working toward\n"
+            "   • How they want the AI to behave\n"
+            "   • Anything they explicitly say to remember\n"
+            "   → Append ONE tag at the VERY END of your response (never mid-response):\n"
+            f'   <memory_update action="add" category="{cat_options}" fact="one concise atomic fact" />\n\n'
+            "C) CONFLICT RESOLUTION: If a new fact contradicts an existing memory "
+            "(e.g. switched from React to Vue, changed preferred language), emit the "
+            "update with the new fact so the old one is replaced.\n\n"
+            "D) FORGET: If the user says 'forget that', 'remove that memory', etc.:\n"
+            '   <memory_update action="delete" query="keywords of the memory to remove" />\n\n'
+            "E) PRIVACY: The <memory_update> tag is NEVER visible to the user. "
+            "It is stripped by the system before display. Never reference or show it.\n"
+            "</autonomous_memory>"
         )
 
     if sections:
         return "\n\n".join(sections) + "\n\n" + message
     return message
+
 
 def format_prompt_with_memories(message: str, memories: list = None) -> str:
     """Backward-compatible helper."""
@@ -324,6 +468,7 @@ async def run_agy_command(
     model: str = "",
     memories: list = None,
     custom_instructions: dict = None,
+    personalization: dict = None,
     is_auto_memory: bool = True,
     is_temporary: bool = False
 ):
@@ -348,11 +493,12 @@ async def run_agy_command(
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
-    # Inject persistent user memories and custom instructions into prompt
+    # Inject full personalization, memories, and custom instructions into prompt
     full_prompt = format_prompt_with_personalization(
         message_trimmed,
         memories=memories or [],
         custom_instructions=custom_instructions,
+        personalization=personalization,
         is_auto_memory=is_auto_memory,
         is_temporary=is_temporary
     )

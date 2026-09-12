@@ -29,8 +29,11 @@ data class MessageEntity(
 data class MemoryEntity(
     @PrimaryKey val id: String,
     val content: String,
-    val category: String = "general", // "preference", "project", "personal", "general"
+    val category: String = "general",
     val isEnabled: Boolean = true,
+    val importance: Int = 5,           // 1-10, higher = more important (shown first)
+    val lastAccessedAt: Long = System.currentTimeMillis(),
+    val accessCount: Int = 0,          // how many times this was included in context
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

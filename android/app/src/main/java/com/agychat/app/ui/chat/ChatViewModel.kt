@@ -18,6 +18,7 @@ import com.agychat.app.domain.model.SlashCommand
 import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.domain.model.WsEvent
 import com.agychat.app.domain.model.CustomInstructions
+import com.agychat.app.domain.model.Personalization
 import com.agychat.app.data.local.MemoryDao
 import com.agychat.app.data.local.MemoryEntity
 import com.agychat.app.domain.model.ThinkingLevel
@@ -57,6 +58,10 @@ class ChatViewModel @Inject constructor(
     private val _customInstructions = MutableStateFlow(CustomInstructions())
     val customInstructions: StateFlow<CustomInstructions> = _customInstructions.asStateFlow()
 
+    // Full Personalization profile
+    private val _personalization = MutableStateFlow(Personalization())
+    val personalization: StateFlow<Personalization> = _personalization.asStateFlow()
+
     private val _isTemporaryChat = MutableStateFlow(false)
     val isTemporaryChat: StateFlow<Boolean> = _isTemporaryChat.asStateFlow()
 
@@ -80,6 +85,36 @@ class ChatViewModel @Inject constructor(
             .putString("custom_response_prefs", instructions.responsePreferences)
             .putString("custom_tone_preset", instructions.tonePreset)
             .putBoolean("custom_instructions_enabled", instructions.isEnabled)
+            .apply()
+    }
+
+    fun savePersonalization(p: Personalization) {
+        _personalization.value = p
+        // Also sync memory/auto-memory toggles from personalization
+        _isMemoryEnabled.value = p.memoryEnabled
+        _isAutoMemoryEnabled.value = p.autoMemoryEnabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putBoolean("memory_enabled", p.memoryEnabled)
+            .putBoolean("auto_memory_enabled", p.autoMemoryEnabled)
+            .putString("p_name", p.name)
+            .putString("p_occupation", p.occupation)
+            .putString("p_expertise", p.expertise)
+            .putString("p_country", p.country)
+            .putString("p_age", p.age)
+            .putString("p_response_length", p.responseLength)
+            .putString("p_response_format", p.responseFormat)
+            .putString("p_tone_style", p.toneStyle)
+            .putString("p_depth_level", p.depthLevel)
+            .putString("p_code_lang", p.codeLanguage)
+            .putBoolean("p_examples", p.enableExamples)
+            .putBoolean("p_proactive", p.enableProactiveInsights)
+            .putBoolean("p_critical", p.enableCriticalFeedback)
+            .putBoolean("p_emoji", p.enableEmoji)
+            .putString("p_avoid", p.avoidTopics)
+            .putString("p_context", p.customContext)
+            .putString("p_extra", p.extraInstructions)
+            .putBoolean("p_enabled", p.isEnabled)
             .apply()
     }
 
@@ -129,7 +164,13 @@ class ChatViewModel @Inject constructor(
 
     fun editMemory(id: String, content: String, category: String) {
         viewModelScope.launch {
-            memoryDao.updateMemoryContent(id, content.trim(), category, System.currentTimeMillis())
+            memoryDao.updateMemoryContent(id, content.trim(), category, updatedAt = System.currentTimeMillis())
+        }
+    }
+
+    fun updateMemoryImportance(id: String, importance: Int) {
+        viewModelScope.launch {
+            memoryDao.updateImportance(id, importance)
         }
     }
 
@@ -380,6 +421,30 @@ class ChatViewModel @Inject constructor(
             isEnabled = savedCustomEnabled
         )
 
+        // Load full Personalization profile
+        _personalization.value = Personalization(
+            name = prefs.getString("p_name", "") ?: "",
+            occupation = prefs.getString("p_occupation", "") ?: "",
+            expertise = prefs.getString("p_expertise", "") ?: "",
+            country = prefs.getString("p_country", "") ?: "",
+            age = prefs.getString("p_age", "") ?: "",
+            responseLength = prefs.getString("p_response_length", "Adaptive") ?: "Adaptive",
+            responseFormat = prefs.getString("p_response_format", "Auto") ?: "Auto",
+            toneStyle = prefs.getString("p_tone_style", "Direct") ?: "Direct",
+            depthLevel = prefs.getString("p_depth_level", "Expert") ?: "Expert",
+            codeLanguage = prefs.getString("p_code_lang", "Kotlin") ?: "Kotlin",
+            enableExamples = prefs.getBoolean("p_examples", true),
+            enableProactiveInsights = prefs.getBoolean("p_proactive", true),
+            enableCriticalFeedback = prefs.getBoolean("p_critical", true),
+            enableEmoji = prefs.getBoolean("p_emoji", false),
+            avoidTopics = prefs.getString("p_avoid", "") ?: "",
+            customContext = prefs.getString("p_context", "") ?: "",
+            extraInstructions = prefs.getString("p_extra", "") ?: "",
+            isEnabled = prefs.getBoolean("p_enabled", true),
+            memoryEnabled = prefs.getBoolean("memory_enabled", true),
+            autoMemoryEnabled = prefs.getBoolean("auto_memory_enabled", true)
+        )
+
         viewModelScope.launch {
             memories.collectLatest { currentMemoriesList = it }
         }
@@ -577,14 +642,29 @@ class ChatViewModel @Inject constructor(
 
                     if (existingMatch != null) {
                         // Update existing memory in place to avoid duplicate contradictions
-                        memoryDao.updateMemoryContent(existingMatch.id, cleanContent, category, System.currentTimeMillis())
+                        memoryDao.updateMemoryContent(
+                            existingMatch.id, cleanContent, category,
+                            importance = existingMatch.importance,
+                            updatedAt = System.currentTimeMillis()
+                        )
                     } else {
+                        val importance = when (category.lowercase()) {
+                            "facts", "personal" -> 8
+                            "prefs", "preferences" -> 7
+                            "skills" -> 6
+                            "project" -> 7
+                            "goals" -> 8
+                            else -> 5
+                        }
                         memoryDao.insertMemory(
                             MemoryEntity(
                                 id = UUID.randomUUID().toString(),
                                 content = cleanContent,
                                 category = category,
                                 isEnabled = true,
+                                importance = importance,
+                                lastAccessedAt = System.currentTimeMillis(),
+                                accessCount = 0,
                                 createdAt = System.currentTimeMillis(),
                                 updatedAt = System.currentTimeMillis()
                             )
@@ -933,10 +1013,15 @@ class ChatViewModel @Inject constructor(
             // Collect enabled memories to include in context if not in temporary chat
             val memoryList = if (_isMemoryEnabled.value && !_isTemporaryChat.value) {
                 try {
-                    memoryDao.getAllEnabledMemories().map {
+                    memoryDao.getTopMemories(40).also { mems ->
+                        viewModelScope.launch {
+                            mems.forEach { memoryDao.incrementAccessCount(it.id) }
+                        }
+                    }.map {
                         JSONObject().apply {
                             put("content", it.content)
                             put("category", it.category)
+                            put("importance", it.importance)
                         }
                     }
                 } catch (e: Exception) {
@@ -954,6 +1039,7 @@ class ChatViewModel @Inject constructor(
                 "Please inspect the ${attachments.size} attached files: ${attachments.joinToString(", ") { it.name }}"
             }
 
+            val p = _personalization.value
             val payload = JSONObject().apply {
                 put("message", promptText)
                 put("conversation_id", currentConversationId)
@@ -964,6 +1050,29 @@ class ChatViewModel @Inject constructor(
                     memoryList.forEach { memArray.put(it) }
                     put("memories", memArray)
                 }
+                // Send full personalization profile to bridge
+                if (!_isTemporaryChat.value && p.isEnabled) {
+                    put("personalization", JSONObject().apply {
+                        if (p.name.isNotBlank()) put("name", p.name)
+                        if (p.occupation.isNotBlank()) put("occupation", p.occupation)
+                        if (p.expertise.isNotBlank()) put("expertise", p.expertise)
+                        if (p.country.isNotBlank()) put("country", p.country)
+                        if (p.age.isNotBlank()) put("age", p.age)
+                        put("response_length", p.responseLength)
+                        put("response_format", p.responseFormat)
+                        put("tone_style", p.toneStyle)
+                        put("depth_level", p.depthLevel)
+                        put("code_language", p.codeLanguage)
+                        put("enable_examples", p.enableExamples)
+                        put("enable_proactive", p.enableProactiveInsights)
+                        put("enable_critical", p.enableCriticalFeedback)
+                        put("enable_emoji", p.enableEmoji)
+                        if (p.avoidTopics.isNotBlank()) put("avoid_topics", p.avoidTopics)
+                        if (p.customContext.isNotBlank()) put("custom_context", p.customContext)
+                        if (p.extraInstructions.isNotBlank()) put("extra_instructions", p.extraInstructions)
+                    })
+                }
+                // Legacy custom_instructions for backward compatibility
                 if (!_isTemporaryChat.value && _customInstructions.value.isEnabled) {
                     put("custom_instructions", JSONObject().apply {
                         put("about_user", _customInstructions.value.aboutUser)
