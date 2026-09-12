@@ -18,37 +18,46 @@
         }
         body {
             margin: 0;
-            padding: 8px 16px 14px 16px;
+            padding: 12px 16px 16px 16px;
             background: transparent !important;
             font-family: "KaTeX_Main", "Times New Roman", Times, serif;
             overflow-x: auto;
             overflow-y: visible;
             -webkit-overflow-scrolling: touch;
             text-align: center;
-            min-height: 44px;
+            min-height: 48px;
             width: 100%;
         }
         #math-wrapper {
             display: inline-block;
             min-width: 100%;
             text-align: center;
+            overflow-x: auto;
+            overflow-y: visible;
+            padding: 2px 4px;
         }
         #math-container {
             display: inline-block;
             text-align: center;
-            font-size: 1.15em;
+            font-size: 1.18em;
             max-width: none;
             margin: 0 auto;
+            line-height: 1.35;
         }
         .katex-display {
             margin: 0 !important;
-            padding: 4px 0 !important;
+            padding: 6px 0 !important;
             text-align: center;
+            overflow-x: auto;
+            overflow-y: visible;
         }
         .katex {
-            font-size: 1.08em;
-            line-height: 1.25;
-            text-rendering: auto;
+            font-size: 1.1em;
+            line-height: 1.3;
+            text-rendering: geometricPrecision;
+        }
+        .katex .katex-html {
+            overflow: visible !important;
         }
         body.dark {
             color: #ECECF1;
@@ -57,7 +66,7 @@
             color: #1A1A1E;
         }
         .katex-error {
-            color: #ECECF1 !important;
+            color: #E06C75 !important;
             font-family: monospace !important;
             font-size: 0.9em;
             white-space: pre-wrap;
@@ -70,6 +79,24 @@
         <div id="math-container"></div>
     </div>
     <script>
+        var lastReportedHeight = 0;
+
+        function reportHeight() {
+            var container = document.getElementById('math-container');
+            if (!container) return;
+            var rect = container.getBoundingClientRect();
+            var bodyH = document.body.offsetHeight;
+            var scrollH = document.documentElement.scrollHeight;
+            var h = Math.ceil(Math.max(rect.height + 26, bodyH + 16, scrollH + 8, 52));
+
+            if (Math.abs(h - lastReportedHeight) >= 2) {
+                lastReportedHeight = h;
+                if (window.AndroidBridge && window.AndroidBridge.onHeight) {
+                    window.AndroidBridge.onHeight(h);
+                }
+            }
+        }
+
         function renderMath(formula, isDark) {
             document.body.className = isDark ? 'dark' : 'light';
             var container = document.getElementById('math-container');
@@ -78,24 +105,37 @@
                     displayMode: true,
                     throwOnError: false,
                     output: 'htmlAndMathml',
-                    trust: true
+                    trust: true,
+                    strict: false
                 });
             } catch (err) {
                 container.innerText = formula;
             }
 
+            reportHeight();
+
+            // Wait for fonts to fully load and measure again
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(function() {
+                    reportHeight();
+                });
+            }
+
+            // Also check on next few animation frames
             requestAnimationFrame(function() {
-                setTimeout(function() {
-                    var rect = container.getBoundingClientRect();
-                    var bodyH = document.body.offsetHeight;
-                    var scrollH = document.documentElement.scrollHeight;
-                    // Provide 20px extra buffer for superscripts, hats, and descenders
-                    var h = Math.ceil(Math.max(rect.height + 20, bodyH + 12, scrollH, 48));
-                    if (window.AndroidBridge && window.AndroidBridge.onHeight) {
-                        window.AndroidBridge.onHeight(h);
-                    }
-                }, 20);
+                reportHeight();
+                setTimeout(reportHeight, 60);
+                setTimeout(reportHeight, 200);
             });
+        }
+
+        // Use ResizeObserver for automatic height tracking on any content change
+        if (window.ResizeObserver) {
+            var ro = new ResizeObserver(function() {
+                reportHeight();
+            });
+            var target = document.getElementById('math-container');
+            if (target) ro.observe(target);
         }
     </script>
 </body>

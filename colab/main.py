@@ -1,11 +1,12 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Optional, Dict
 import os
 import json
 import time
 import logging
+import asyncio
 from aiofiles import open as aio_open
 from agy_runner import run_agy_command, cancel_agy_command
 
@@ -37,25 +38,36 @@ class ConnectionManager:
 
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        self._locks: Dict[WebSocket, asyncio.Lock] = {}
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        self._locks[websocket] = asyncio.Lock()
         logger.info(f"Client connected. Total: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+        self._locks.pop(websocket, None)
         logger.info(f"Client disconnected. Total: {len(self.active_connections)}")
 
     async def send(self, message: str, websocket: WebSocket):
-        try:
-            await websocket.send_text(message)
-        except Exception as e:
-            logger.warning(f"Failed to send message: {e}")
+        lock = self._locks.get(websocket)
+        if lock:
+            async with lock:
+                try:
+                    await websocket.send_text(message)
+                except Exception as e:
+                    logger.warning(f"Failed to send message: {e}")
+        else:
+            try:
+                await websocket.send_text(message)
+            except Exception as e:
+                logger.warning(f"Failed to send message: {e}")
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
+        for connection in list(self.active_connections):
             await self.send(message, connection)
 
 
@@ -280,8 +292,9 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception:
                 break
 
-    import asyncio as _asyncio
-    ping_job = _asyncio.create_task(ping_task())
+    ping_job = asyncio.create_task(ping_task())
+    current_generation_task: Optional[asyncio.Task] = None
+    current_conv_id: Optional[str] = None
 
     try:
         while True:
@@ -296,15 +309,19 @@ async def websocket_endpoint(websocket: WebSocket):
             memories = []
             try:
                 payload = json.loads(raw)
-                # Handle stream cancellation request
+                # Handle stream cancellation request (Stop Generating)
                 if payload.get("type") == "cancel":
-                    cancel_id = payload.get("conversation_id", "")
+                    cancel_id = payload.get("conversation_id", "") or current_conv_id or ""
                     logger.info(f"Cancellation requested for conversation: {cancel_id}")
-                    cancelled = cancel_agy_command(cancel_id)
+                    if cancel_id:
+                        cancel_agy_command(cancel_id)
+                    if current_generation_task and not current_generation_task.done():
+                        current_generation_task.cancel()
+                        current_generation_task = None
                     await manager.send(json.dumps({
                         "type": "done",
-                        "content": "[Generation stopped by user]",
-                        "timestamp": time.time() if "time" in globals() else 0
+                        "content": "",
+                        "timestamp": time.time()
                     }), websocket)
                     continue
 
@@ -448,26 +465,66 @@ async def websocket_endpoint(websocket: WebSocket):
                 is_temporary = False
                 history = []
 
-            # Stream agy command with full personalization profile, memories, and model settings
-            async for event in run_agy_command(
-                user_message,
-                conv_id,
-                effort,
-                model,
-                memories,
-                custom_instructions=custom_instructions,
-                personalization=personalization,
-                is_auto_memory=auto_memory,
-                is_temporary=is_temporary,
-                history=history
-            ):
-                await manager.send(event, websocket)
+            # Cancel any previous in-flight task for this connection before starting new one
+            if current_generation_task and not current_generation_task.done():
+                if current_conv_id:
+                    cancel_agy_command(current_conv_id)
+                current_generation_task.cancel()
+                current_generation_task = None
+
+            current_conv_id = conv_id
+
+            async def stream_worker(msg, cid, eff, mdl, mems, c_inst, pers, a_mem, is_temp, hist):
+                try:
+                    async for event in run_agy_command(
+                        msg,
+                        cid,
+                        eff,
+                        mdl,
+                        mems,
+                        custom_instructions=c_inst,
+                        personalization=pers,
+                        is_auto_memory=a_mem,
+                        is_temporary=is_temp,
+                        history=hist
+                    ):
+                        await manager.send(event, websocket)
+                except asyncio.CancelledError:
+                    logger.info(f"Stream worker cancelled for conversation: {cid}")
+                except Exception as ex:
+                    logger.error(f"Stream worker error: {ex}")
+                    try:
+                        await manager.send(json.dumps({
+                            "type": "error",
+                            "content": f"Bridge streaming error: {ex}",
+                            "timestamp": time.time()
+                        }), websocket)
+                    except Exception:
+                        pass
+
+            current_generation_task = asyncio.create_task(
+                stream_worker(
+                    user_message,
+                    conv_id,
+                    effort,
+                    model,
+                    memories,
+                    custom_instructions,
+                    personalization,
+                    auto_memory,
+                    is_temporary,
+                    history
+                )
+            )
 
     except WebSocketDisconnect:
-        ping_job.cancel()
-        manager.disconnect(websocket)
         logger.info("WebSocket client disconnected normally")
     except Exception as e:
-        ping_job.cancel()
         logger.error(f"WebSocket error: {e}")
+    finally:
+        ping_job.cancel()
+        if current_conv_id:
+            cancel_agy_command(current_conv_id)
+        if current_generation_task and not current_generation_task.done():
+            current_generation_task.cancel()
         manager.disconnect(websocket)

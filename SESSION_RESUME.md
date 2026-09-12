@@ -1,8 +1,8 @@
 # 🧠 Next AI & Antigravity Session Resume Context
-> **Last Synced**: `2026-09-12 11:50:00 UTC`  
-> **Conversation ID**: `b487c728-9697-4475-880c-cc76aaa2498d`  
-> **Git Head SHA**: `25aafb9`  
-> **Active App Version**: `v1.0.35`  
+> **Last Synced**: `2026-09-12 18:29:07 UTC`  
+> **Conversation ID**: `a5b9af8a-4982-4585-b993-23915cd61ec8`  
+> **Git Head SHA**: `658e0e1`  
+> **Active App Version**: `v1.1.0`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -47,8 +47,8 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.35`
-  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.35/app-debug.apk`
+  - Tag: `v1.0.18`
+  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.18/app-debug.apk`
 
 ---
 
@@ -56,14 +56,14 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
 - **Location**: `/content/Next-Ai/colab`
 - **Stack**: FastAPI + Uvicorn (Port 8000) + Cloudflare Tunnel (`cloudflared`)
 - **Execution**: Runs `/root/.local/bin/agy -p "<message>" --output-format stream-json --dangerously-skip-permissions`
-- **Session Continuity**: Retains `--conversation b885e03f-9af6-4038-b0f6-5185f2344b9c` across turns.
+- **Session Continuity**: Retains `--conversation a5b9af8a-4982-4585-b993-23915cd61ec8` across turns.
 - **Launcher**: `/content/Next-Ai/colab/start_bridge.sh`
 
 ---
 
 ## 📂 Restored Antigravity State
 - **Conversation DBs**: `/root/.gemini/antigravity-cli/conversations/`
-- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/b885e03f-9af6-4038-b0f6-5185f2344b9c/`
+- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/a5b9af8a-4982-4585-b993-23915cd61ec8/`
 - **History & Summaries**: `/root/.gemini/antigravity-cli/conversation_summaries.db`, `history.jsonl`
 
 ---

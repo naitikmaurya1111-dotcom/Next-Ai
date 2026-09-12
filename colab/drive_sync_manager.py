@@ -21,6 +21,7 @@ import tarfile
 import sqlite3
 import signal
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,7 +35,7 @@ RESUME_FILE_NAME = "SESSION_RESUME.md"
 SNAPSHOT_FILE_NAME = "session_snapshot.json"
 ARCHIVE_FILE_NAME = "nextai_session_latest.tar.gz"
 
-CONVERSATION_ID = os.environ.get("CONVERSATION_ID", "b885e03f-9af6-4038-b0f6-5185f2344b9c")
+CONVERSATION_ID = os.environ.get("CONVERSATION_ID", "a5b9af8a-4982-4585-b993-23915cd61ec8")
 
 def is_drive_mounted() -> bool:
     """Check if Google Drive is mounted at /content/drive/MyDrive."""
@@ -173,63 +174,75 @@ def backup():
         except Exception:
             pass
 
-    # Create temporary staging directory for the archive
-    tmp_archive_dir = Path("/tmp/nextai_backup_tmp")
-    if tmp_archive_dir.exists():
-        shutil.rmtree(tmp_archive_dir)
-    tmp_archive_dir.mkdir(parents=True, exist_ok=True)
+    # Create isolated temporary staging directory for the archive to prevent race conditions
+    temp_dir_obj = tempfile.TemporaryDirectory(prefix="nextai_backup_")
+    tmp_archive_dir = Path(temp_dir_obj.name)
 
-    # 1. Copy essential Antigravity state
-    tmp_gemini = tmp_archive_dir / "antigravity-cli"
-    tmp_gemini.mkdir(parents=True, exist_ok=True)
-
-    # Copy conversations
-    if conv_dir.exists():
-        shutil.copytree(conv_dir, tmp_gemini / "conversations", dirs_exist_ok=True)
-    # Copy brain
-    brain_dir = GEMINI_DIR / "brain"
-    if brain_dir.exists():
-        shutil.copytree(brain_dir, tmp_gemini / "brain", dirs_exist_ok=True)
-    # Copy metadata files
-    for fname in ["conversation_summaries.db", "history.jsonl", "settings.json", "installation_id", "antigravity-oauth-token"]:
-        fpath = GEMINI_DIR / fname
-        if fpath.exists():
-            shutil.copy2(fpath, tmp_gemini / fname)
-
-    # 2. Generate resume documentation
-    resume_md_path = tmp_archive_dir / RESUME_FILE_NAME
-    generate_session_resume_md(resume_md_path, git_sha=git_sha)
-
-    # 3. Create metadata snapshot json
-    snapshot_data = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "conversation_id": CONVERSATION_ID,
-        "git_sha": git_sha,
-        "app_version": "v1.0.10",
-        "drive_mounted": is_mounted
-    }
-    with open(tmp_archive_dir / SNAPSHOT_FILE_NAME, "w") as f:
-        json.dump(snapshot_data, f, indent=2)
-
-    # 4. Create compressed tarball
-    archive_path = target_dir / ARCHIVE_FILE_NAME
-    temp_tar_path = Path("/tmp") / ARCHIVE_FILE_NAME
-    print(f"📦 Compressing state into {ARCHIVE_FILE_NAME}...")
-    with tarfile.open(temp_tar_path, "w:gz") as tar:
-        tar.add(str(tmp_archive_dir), arcname=".")
-
-    shutil.move(str(temp_tar_path), str(archive_path))
-
-    # Also copy SESSION_RESUME.md directly to target_dir for quick inspection
-    shutil.copy2(str(resume_md_path), str(target_dir / RESUME_FILE_NAME))
-    shutil.copy2(str(tmp_archive_dir / SNAPSHOT_FILE_NAME), str(target_dir / SNAPSHOT_FILE_NAME))
-
-    # Also copy to /content/SESSION_RESUME.md and /content/Next-Ai/SESSION_RESUME.md
     try:
-        shutil.copy2(str(resume_md_path), "/content/SESSION_RESUME.md")
-        shutil.copy2(str(resume_md_path), str(PROJECT_DIR / RESUME_FILE_NAME))
-    except Exception:
-        pass
+        # 1. Copy essential Antigravity state
+        tmp_gemini = tmp_archive_dir / "antigravity-cli"
+        tmp_gemini.mkdir(parents=True, exist_ok=True)
+
+        # Copy conversations
+        if conv_dir.exists():
+            shutil.copytree(conv_dir, tmp_gemini / "conversations", dirs_exist_ok=True, ignore_dangling_symlinks=True)
+        # Copy brain
+        brain_dir = GEMINI_DIR / "brain"
+        if brain_dir.exists():
+            shutil.copytree(brain_dir, tmp_gemini / "brain", dirs_exist_ok=True, ignore_dangling_symlinks=True)
+        # Copy metadata files
+        for fname in ["conversation_summaries.db", "history.jsonl", "settings.json", "installation_id", "antigravity-oauth-token"]:
+            fpath = GEMINI_DIR / fname
+            if fpath.exists():
+                shutil.copy2(fpath, tmp_gemini / fname)
+
+        # 2. Generate resume documentation
+        resume_md_path = tmp_archive_dir / RESUME_FILE_NAME
+        generate_session_resume_md(resume_md_path, git_sha=git_sha)
+
+        # 3. Create metadata snapshot json
+        snapshot_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "conversation_id": CONVERSATION_ID,
+            "git_sha": git_sha,
+            "app_version": "v1.1.0",
+            "drive_mounted": is_mounted
+        }
+        with open(tmp_archive_dir / SNAPSHOT_FILE_NAME, "w") as f:
+            json.dump(snapshot_data, f, indent=2)
+
+        # 4. Create compressed tarball
+        archive_path = target_dir / ARCHIVE_FILE_NAME
+        temp_tar_fd, temp_tar_path_str = tempfile.mkstemp(prefix="nextai_tar_", suffix=".tar.gz")
+        os.close(temp_tar_fd)
+        temp_tar_path = Path(temp_tar_path_str)
+
+        print(f"📦 Compressing state into {ARCHIVE_FILE_NAME}...")
+        with tarfile.open(temp_tar_path, "w:gz") as tar:
+            tar.add(str(tmp_archive_dir), arcname=".")
+
+        shutil.move(str(temp_tar_path), str(archive_path))
+
+        # Also copy SESSION_RESUME.md directly to target_dir for quick inspection
+        shutil.copy2(str(resume_md_path), str(target_dir / RESUME_FILE_NAME))
+        shutil.copy2(str(tmp_archive_dir / SNAPSHOT_FILE_NAME), str(target_dir / SNAPSHOT_FILE_NAME))
+
+        # Also copy to /content/SESSION_RESUME.md and /content/Next-Ai/SESSION_RESUME.md
+        try:
+            shutil.copy2(str(resume_md_path), "/content/SESSION_RESUME.md")
+            shutil.copy2(str(resume_md_path), str(PROJECT_DIR / RESUME_FILE_NAME))
+        except Exception:
+            pass
+    finally:
+        try:
+            temp_dir_obj.cleanup()
+        except Exception:
+            pass
+        try:
+            if 'temp_tar_path' in locals() and temp_tar_path.exists():
+                temp_tar_path.unlink()
+        except Exception:
+            pass
 
     # If Drive is mounted AND staging exists, sync staging to Drive as well
     if is_mounted and STAGING_BACKUP_DIR.exists():

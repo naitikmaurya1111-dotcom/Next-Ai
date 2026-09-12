@@ -15,13 +15,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -284,14 +286,15 @@ fun formatLatexToUnicode(raw: String): String {
  */
 fun isPureEquationLine(raw: String): Boolean {
     val s = raw.trim()
-    if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("*") ||
+    if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("* ") ||
         s.startsWith(">") || s.startsWith("|") || s.startsWith("```") ||
-        s.matches(Regex("""^\d+\.\s+.*""")) || s.contains("**") || s.contains("~~") || s.contains("[")
+        s.matches(Regex("""^\d+\.\s+.*""")) || s.contains("**") || s.contains("~~") ||
+        s.contains("](") || s.contains("][") || s.startsWith("![")
     ) {
         return false
     }
 
-    // Common English prose words: if present with spaces, it is prose, NOT a standalone formula!
+    // Common English prose words: if multiple are present with spaces, it is prose, NOT a standalone formula!
     val englishWords = setOf(
         "the", "is", "of", "and", "in", "to", "that", "this", "we", "can",
         "for", "with", "as", "by", "from", "are", "which", "where", "quantum",
@@ -299,20 +302,36 @@ fun isPureEquationLine(raw: String): Boolean {
         "classical", "microscopic", "action", "scales", "comparable", "constant",
         "pure", "physical", "space", "spaces", "represented", "vector", "vectors",
         "potential", "electric", "dipole", "field", "charge", "energy", "force",
-        "surface", "volume", "point", "distance", "plane", "line", "axis", "note"
+        "surface", "volume", "point", "distance", "plane", "line", "axis", "note",
+        "equation", "equations", "formula", "formulas", "consider", "assume", "given"
     )
 
     val words = s.split(Regex("\\s+")).map { it.lowercase().filter { ch -> ch.isLetter() } }.filter { it.isNotBlank() }
     val matchedEng = words.count { it in englishWords }
-    if (matchedEng >= 1 && words.size > 2) return false
+    if (matchedEng >= 2 && words.size > 3) return false
 
     val mathTokens = listOf(
-        "\\frac", "frac{", "\\int", "\\sum", "\\prod", "\\sqrt", "\\partial",
-        "\\nabla", "\\hbar", "\\dagger", "\\ket{", "\\bra{", "\\hat{", "\\vec{"
+        "\\frac", "frac{", "\\int", "int_", "\\sum", "sum_", "\\prod", "prod_", "\\sqrt", "sqrt{",
+        "\\partial", "\\nabla", "\\hbar", "\\dagger", "\\ket{", "\\bra{", "\\braket{",
+        "\\hat{", "\\vec{", "\\dot{", "\\ddot{", "\\bar{", "\\tilde{",
+        "\\alpha", "\\beta", "\\gamma", "\\delta", "\\epsilon", "\\varepsilon", "\\theta", "\\lambda",
+        "\\mu", "\\nu", "\\pi", "\\rho", "\\sigma", "\\tau", "\\phi", "\\varphi", "\\psi", "\\omega",
+        "\\Delta", "\\Theta", "\\Lambda", "\\Sigma", "\\Phi", "\\Psi", "\\Omega",
+        "\\mathcal", "\\mathbf", "\\mathbb", "\\mathrm", "\\left", "\\right", "\\pm", "\\times",
+        "\\cdot", "\\infty", "\\approx", "\\equiv", "\\neq", "\\le", "\\ge", "\\in", "\\to"
     )
     val hasMathToken = mathTokens.any { s.contains(it) }
-    if (hasMathToken && (s.contains("=") || s.startsWith("\\frac") || s.startsWith("frac{") || s.startsWith("\\int") || s.startsWith("\\sum"))) {
+    val hasMathRelation = s.contains("=") || s.contains("\\approx") || s.contains("\\sim") ||
+        s.contains("\\le") || s.contains("\\ge") || s.contains("\\in") || s.contains("\\to") ||
+        s.contains("<") || s.contains(">") || s.contains("+") || s.contains("-")
+
+    if (hasMathToken && (hasMathRelation || s.startsWith("\\frac") || s.startsWith("frac{") || s.startsWith("\\int") || s.startsWith("\\sum"))) {
         return true
+    }
+
+    // Bare mathematical expressions like `[H, \rho]` or `H\psi = E\psi` or `E = mc^2`
+    if (s.contains("=") && (s.contains("\\") || s.contains("^") || s.contains("_") || s.contains("[") || s.contains("{"))) {
+        if (matchedEng <= 1) return true
     }
 
     return false
@@ -504,7 +523,7 @@ fun MarkdownContent(
 /**
  * ChatGPT-style Display Math View.
  * Seamless, centered, borderless equation presentation using KaTeX with instant Unicode preview.
- * Allows long-press / tap to copy LaTeX equation source with haptic feedback.
+ * Includes interactive copy action, haptic feedback, and auto-adapting height.
  */
 @Composable
 fun MathEquationBlockView(
@@ -512,41 +531,110 @@ fun MathEquationBlockView(
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier
 ) {
-    DisableSelection {
-        val context = LocalContext.current
-        val haptic = LocalHapticFeedback.current
-        val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-        val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
-        val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
-        var measuredHeightDp by remember { mutableStateOf(58.dp) }
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
+    val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
+    var measuredHeightDp by remember(normalizedFormula) { mutableStateOf(64.dp) }
+    var isCopied by remember { mutableStateOf(false) }
 
-        Box(
-            modifier = modifier
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            delay(2000)
+            isCopied = false
+        }
+    }
+
+    val cardBg = if (isDark) Color(0xFF141418) else Color(0xFFF7F7F6)
+    val borderColor = if (isDark) Color(0xFF26262E) else Color(0xFFE4E4DE)
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = cardBg,
+        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 4.dp)
-                .clickable {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
-                    Toast.makeText(context, "Copied LaTeX equation", Toast.LENGTH_SHORT).show()
-                },
-            contentAlignment = Alignment.Center
         ) {
-            KaTeXDisplayView(
-                formula = normalizedFormula,
-                unicodeFallback = unicodePreview,
-                isDark = isDark,
-                onHeightMeasured = { cssPixels ->
-                    // JavaScript WebView reports dimensions in CSS pixels (1 CSS px = 1 dp in viewport 1.0)
-                    val dpVal = (cssPixels + 14).dp
-                    if (dpVal in 44.dp..650.dp) {
-                        measuredHeightDp = dpVal
-                    }
-                },
+            // Header with LaTeX indicator and copy action
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(measuredHeightDp)
-            )
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "MATH / LATEX",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 9.sp,
+                        letterSpacing = 0.5.sp
+                    ),
+                    color = if (isDark) Color(0xFF7E7E8E) else Color(0xFF8A8A94)
+                )
+
+                Surface(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                        isCopied = true
+                        Toast.makeText(context, "Copied LaTeX equation", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color.Transparent
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
+                            tint = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFF9E9EA8) else Color(0xFF6E6E78),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = if (isCopied) "Copied" else "Copy",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            color = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFF9E9EA8) else Color(0xFF6E6E78)
+                        )
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 52.dp, max = 650.dp)
+                    .height(measuredHeightDp),
+                contentAlignment = Alignment.Center
+            ) {
+                KaTeXDisplayView(
+                    formula = normalizedFormula,
+                    unicodeFallback = unicodePreview,
+                    isDark = isDark,
+                    onHeightMeasured = { cssPixels ->
+                        val dpVal = (cssPixels + 12).dp
+                        if (dpVal in 48.dp..650.dp) {
+                            measuredHeightDp = dpVal
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }
@@ -1140,34 +1228,36 @@ fun FormattedMarkdownText(
         annotatedString.getStringAnnotations(tag = "URL", start = 0, end = annotatedString.length).isNotEmpty()
     }
     val uriHandler = LocalUriHandler.current
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
 
-    if (hasUrl) {
-        ClickableText(
-            text = annotatedString,
-            style = style.copy(color = color),
-            modifier = modifier,
-            onClick = { offset ->
-                annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                    .firstOrNull()?.let { annotation ->
-                        val url = annotation.item
-                        if (onLinkClick != null) {
-                            onLinkClick(url)
-                        } else {
-                            try {
-                                uriHandler.openUri(url)
-                            } catch (_: Throwable) {}
-                        }
+    Text(
+        text = annotatedString,
+        style = style,
+        color = color,
+        modifier = if (hasUrl) {
+            modifier.pointerInput(annotatedString) {
+                detectTapGestures { offset ->
+                    layoutResult?.let { layout ->
+                        val charOffset = layout.getOffsetForPosition(offset)
+                        annotatedString.getStringAnnotations(tag = "URL", start = charOffset, end = charOffset)
+                            .firstOrNull()?.let { annotation ->
+                                val url = annotation.item
+                                if (onLinkClick != null) {
+                                    onLinkClick(url)
+                                } else {
+                                    try {
+                                        uriHandler.openUri(url)
+                                    } catch (_: Throwable) {}
+                                }
+                            }
                     }
+                }
             }
-        )
-    } else {
-        Text(
-            text = annotatedString,
-            style = style,
-            color = color,
-            modifier = modifier
-        )
-    }
+        } else {
+            modifier
+        },
+        onTextLayout = { layoutResult = it }
+    )
 }
 
 /**
@@ -1416,17 +1506,31 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
             continue
         }
 
-        // Display Math Block $$ ... $$
-        if (trimmed.startsWith("$$")) {
-            flushPara()
-            if (trimmed.length > 2 && trimmed.endsWith("$$")) {
-                val formula = trimmed.removePrefix("$$").removeSuffix("$$").trim()
+        // Display Math Block $$ ... $$ (standalone or embedded in text)
+        if (trimmed.contains("$$") && !trimmed.startsWith("```")) {
+            val before = trimmed.substringBefore("$$").trim()
+            val remainder = trimmed.substringAfter("$$")
+            if (remainder.contains("$$")) {
+                val formula = remainder.substringBefore("$$").trim()
+                val after = remainder.substringAfter("$$").trim()
+                if (before.isNotEmpty()) {
+                    if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                    paraBuffer.append(before)
+                    flushPara()
+                } else {
+                    flushPara()
+                }
                 if (formula.isNotEmpty()) {
                     blocks.add(MarkdownBlock.MathEquation(formula))
                 }
+                if (after.isNotEmpty()) {
+                    if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                    paraBuffer.append(after)
+                }
                 i++
                 continue
-            } else {
+            } else if (trimmed.startsWith("$$")) {
+                flushPara()
                 val mathBuffer = StringBuilder()
                 val first = trimmed.removePrefix("$$").trim()
                 if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
@@ -1439,6 +1543,29 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 i++
                 continue
             }
+        }
+
+        // Display Math Block \[ ... \] (standalone or embedded in text)
+        if (trimmed.contains("\\[") && trimmed.contains("\\]") && !trimmed.startsWith("```")) {
+            val before = trimmed.substringBefore("\\[").trim()
+            val formula = trimmed.substringAfter("\\[").substringBefore("\\]").trim()
+            val after = trimmed.substringAfter("\\]").trim()
+            if (before.isNotEmpty()) {
+                if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                paraBuffer.append(before)
+                flushPara()
+            } else {
+                flushPara()
+            }
+            if (formula.isNotEmpty()) {
+                blocks.add(MarkdownBlock.MathEquation(formula))
+            }
+            if (after.isNotEmpty()) {
+                if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                paraBuffer.append(after)
+            }
+            i++
+            continue
         }
 
         // Display Math Block \[ ... \]

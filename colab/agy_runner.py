@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import time
+from datetime import datetime, timezone
 from typing import Dict
 
 logger = logging.getLogger(__name__)
@@ -98,8 +99,6 @@ def extract_and_strip_memory_tags(text: str, is_streaming: bool = False):
     """
     Finds all <memory_update ... /> tags regardless of quote style, multiline formatting,
     or attribute order. Returns (updates: list, cleaned_text: str).
-    If is_streaming is True, suppresses trailing partial <memory_update tags
-    so no raw XML fragments leak to the UI.
     """
     updates = []
     def _repl(match):
@@ -117,6 +116,54 @@ def extract_and_strip_memory_tags(text: str, is_streaming: bool = False):
     if is_streaming:
         cleaned = PARTIAL_TAG_REGEX.sub("", cleaned)
     return updates, cleaned.strip()
+
+
+class MemoryStreamingSanitizer:
+    """
+    Stateful stream buffer ensuring that <memory_update ... /> tags split across
+    consecutive streaming chunks are never leaked into the user's visible text stream.
+    """
+    def __init__(self):
+        self.buffer = ""
+        self.emitted_facts = set()
+
+    def feed(self, chunk: str) -> tuple[list, str]:
+        self.buffer += chunk
+        updates, self.buffer = extract_and_strip_memory_tags(self.buffer, is_streaming=False)
+        new_updates = []
+        for u in updates:
+            fact_key = f"{u['action']}:{u['content'].lower()}"
+            if fact_key not in self.emitted_facts:
+                self.emitted_facts.add(fact_key)
+                new_updates.append(u)
+
+        # Hold back potential incomplete tag at the tail of buffer
+        tag_idx = self.buffer.rfind("<memory_update")
+        if tag_idx != -1 and tag_idx >= len(self.buffer) - 350:
+            emit_chunk = self.buffer[:tag_idx]
+            self.buffer = self.buffer[tag_idx:]
+            return new_updates, emit_chunk
+
+        last_bracket = self.buffer.rfind("<")
+        if last_bracket != -1 and last_bracket >= len(self.buffer) - 20 and "<memory_update".startswith(self.buffer[last_bracket:]):
+            emit_chunk = self.buffer[:last_bracket]
+            self.buffer = self.buffer[last_bracket:]
+            return new_updates, emit_chunk
+
+        emit_chunk = self.buffer
+        self.buffer = ""
+        return new_updates, emit_chunk
+
+    def flush(self) -> tuple[list, str]:
+        updates, cleaned = extract_and_strip_memory_tags(self.buffer, is_streaming=False)
+        new_updates = []
+        for u in updates:
+            fact_key = f"{u['action']}:{u['content'].lower()}"
+            if fact_key not in self.emitted_facts:
+                self.emitted_facts.add(fact_key)
+                new_updates.append(u)
+        self.buffer = ""
+        return new_updates, cleaned
 
 def _build_identity_block(p: dict) -> str:
     """Build the user identity section from Personalization fields."""
@@ -218,15 +265,37 @@ def format_prompt_with_personalization(
     personalization: dict = None,
     is_auto_memory: bool = True,
     is_temporary: bool = False,
-    history: list = None
+    history: list = None,
+    model_name: str = "",
+    effort_level: str = "high"
 ) -> str:
     """
-    Build the complete AI system context from the user's Personalization profile, memories, settings,
-    and verbatim multi-turn conversation history for unbreakable conversational continuity.
+    Build the complete AI system context from environment awareness, user Personalization profile,
+    memories, settings, and verbatim multi-turn conversation history for unbreakable conversational continuity.
     """
     sections = []
 
-    # ── 0. Prior Conversation History (Multi-turn Context Persistence) ─────────
+    # ── 0. Environment Awareness & System Context ──────────────────────────────
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    drive_mounted = os.path.exists("/content/drive/MyDrive")
+    env_lines = [
+        f"• Current Date & Time: {now_utc}",
+        "• Host OS & Environment: Google Colab (Linux Ubuntu x86_64, Python 3.12, bash shell)",
+        "• Connected Client: Next AI Android Mobile App (Material 3 Dynamic Theme, Jetpack Compose)",
+        f"• Storage & Persistence: Google Drive is {'MOUNTED at /content/drive/MyDrive' if drive_mounted else 'NOT MOUNTED'}; local scratch at /content and /tmp",
+        "• Web Search Tool: /usr/local/bin/websearch utility is installed and ready for real-time web querying",
+        f"• Active Model: {model_name or 'Gemini 3.8 Flash'} (Thinking Effort: {effort_level.upper()})",
+        "• Output Formatting: LaTeX mathematical notation ($ for inline, $$ for display blocks), GitHub-flavored Markdown tables, code blocks with language headers"
+    ]
+    sections.append(
+        "<environment_awareness>\n"
+        "You are operating as the intelligent assistant for the Next AI Android app running via Google Colab:\n"
+        + "\n".join(env_lines) + "\n"
+        "Always use accurate current dates, reference real filesystem paths, and deliver concise, polished answers.\n"
+        "</environment_awareness>"
+    )
+
+    # ── 1. Prior Conversation History (Multi-turn Context Persistence) ─────────
     if history and isinstance(history, list) and len(history) > 0:
         history_lines = []
         for turn in history[-20:]:  # Keep up to 20 turns
@@ -546,7 +615,10 @@ async def run_agy_command(
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
-    # Inject full personalization, memories, custom instructions, and prior history into prompt
+    # Extract clean model display name
+    model_display = resolved_model.replace("gemini-", "Gemini ").replace("-flash-", " Flash ").replace("-pro-", " Pro ").replace("-high", " ⚡").replace("-medium", " ⚡").replace("-low", " 💨").replace("claude-sonnet-4-6", "Claude Sonnet 4.6").replace("claude-opus-4-6-thinking", "Claude Opus 4.6").replace("gpt-oss-120b-medium", "GPT-OSS 120B").strip()
+
+    # Inject environment awareness, full personalization, memories, custom instructions, and prior history into prompt
     full_prompt = format_prompt_with_personalization(
         message_trimmed,
         memories=memories or [],
@@ -554,7 +626,9 @@ async def run_agy_command(
         personalization=personalization,
         is_auto_memory=is_auto_memory,
         is_temporary=is_temporary,
-        history=history
+        history=history,
+        model_name=model_display,
+        effort_level=effort
     )
 
     cmd_args.extend([
@@ -563,8 +637,6 @@ async def run_agy_command(
         "-p", full_prompt
     ])
 
-    # Extract clean model display name
-    model_display = resolved_model.replace("gemini-", "Gemini ").replace("-flash-", " Flash ").replace("-pro-", " Pro ").replace("-high", " ⚡").replace("-medium", " ⚡").replace("-low", " 💨").replace("claude-sonnet-4-6", "Claude Sonnet 4.6").replace("claude-opus-4-6-thinking", "Claude Opus 4.6").replace("gpt-oss-120b-medium", "GPT-OSS 120B").strip()
     logger.info(f"Executing: {' '.join(cmd_args[:6])} ... -p '{message_trimmed[:40]}'")
     yield _make_event("info", f"Starting {model_display}…")
 
@@ -578,7 +650,7 @@ async def run_agy_command(
             active_processes[client_conv_id] = process
 
         accumulated_text = ""
-        emitted_memory_facts = set()
+        sanitizer = MemoryStreamingSanitizer()
 
         while True:
             if process.stdout is None:
@@ -635,41 +707,34 @@ async def run_agy_command(
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
-                            # Check for memory update tags as they emerge
-                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk, is_streaming=True)
+                            updates, stripped_chunk = sanitizer.feed(cleaned_chunk)
                             for u in updates:
-                                fact_key = f"{u['action']}:{u['content'].lower()}"
-                                if fact_key not in emitted_memory_facts:
-                                    emitted_memory_facts.add(fact_key)
-                                    logger.info(f"Autonomous memory detected: {u}")
-                                    yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                                logger.info(f"Autonomous memory detected: {u}")
+                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
                             if stripped_chunk:
                                 yield _make_event("chunk", stripped_chunk)
                     elif text_delta:
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
-                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk, is_streaming=True)
+                            updates, stripped_chunk = sanitizer.feed(cleaned_chunk)
                             for u in updates:
-                                fact_key = f"{u['action']}:{u['content'].lower()}"
-                                if fact_key not in emitted_memory_facts:
-                                    emitted_memory_facts.add(fact_key)
-                                    logger.info(f"Autonomous memory detected: {u}")
-                                    yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                                logger.info(f"Autonomous memory detected: {u}")
+                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
                             if stripped_chunk:
                                 yield _make_event("chunk", stripped_chunk)
 
                 elif event_type == "result":
                     result = data.get("result", {})
                     final_response = result.get("response", accumulated_text)
-                    # Extract any memory update tags from the full accumulated response
-                    final_updates, cleaned_done = extract_and_strip_memory_tags(sanitize_text(final_response))
+                    final_updates, final_chunk = sanitizer.flush()
                     for u in final_updates:
-                        fact_key = f"{u['action']}:{u['content'].lower()}"
-                        if fact_key not in emitted_memory_facts:
-                            emitted_memory_facts.add(fact_key)
-                            logger.info(f"Final autonomous memory detected: {u}")
-                            yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                        logger.info(f"Final autonomous memory detected: {u}")
+                        yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                    if final_chunk:
+                        yield _make_event("chunk", final_chunk)
+
+                    _, cleaned_done = extract_and_strip_memory_tags(sanitize_text(final_response))
                     yield _make_event("done", cleaned_done.strip())
 
             except json.JSONDecodeError:

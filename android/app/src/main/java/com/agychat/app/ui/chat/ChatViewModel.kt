@@ -1125,7 +1125,7 @@ class ChatViewModel @Inject constructor(
         val idx = list.indexOfFirst { it.id == id }
         if (idx >= 0) {
             val cur = list[idx]
-            val resolvedContent = if (!finalContent.isNullOrBlank()) sanitizeChunk(finalContent) else cur.content
+            val resolvedContent = if (!finalContent.isNullOrBlank() && !finalContent.contains("Generation stopped by user")) sanitizeChunk(finalContent) else cur.content
             val finalized = cur.copy(
                 content = resolvedContent,
                 isStreaming = false,
