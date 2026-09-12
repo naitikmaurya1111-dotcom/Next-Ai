@@ -3278,6 +3278,7 @@ fun ClaudeFloatingInputBar(
     isConnected: Boolean,
     isLoading: Boolean
 ) {
+    val context = LocalContext.current
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val activeAttachments = if (attachments.isNotEmpty()) attachments else if (attachment != null) listOf(attachment) else emptyList()
     val canSend = (text.isNotBlank() || activeAttachments.isNotEmpty()) && isConnected
