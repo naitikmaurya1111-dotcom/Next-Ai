@@ -68,6 +68,7 @@ import com.agychat.app.domain.model.ModelRegistry
 import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.ui.plugin.PluginDrawer
 import com.agychat.app.ui.theme.*
+import com.agychat.app.ui.common.NextAiLogo
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -1839,21 +1840,10 @@ fun MessageItem(
                 horizontalArrangement = Arrangement.Start
             ) {
                 // Next AI Continuum Avatar
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFF040510)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.app_logo),
-                        contentDescription = "Next AI",
-                        modifier = Modifier
-                            .size(26.dp)
-                            .clip(CircleShape)
-                    )
-                }
+                NextAiLogo(
+                    size = 30.dp,
+                    showBackground = true
+                )
 
                 Spacer(Modifier.width(12.dp))
 
@@ -2590,21 +2580,10 @@ fun ClaudeTypingBubble() {
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Circular Logo Avatar matching Assistant messages
-        Box(
-            modifier = Modifier
-                .size(30.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF040510)),
-            contentAlignment = Alignment.Center
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.app_logo),
-                contentDescription = "Next AI",
-                modifier = Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-            )
-        }
+        NextAiLogo(
+            size = 30.dp,
+            showBackground = true
+        )
 
         Spacer(Modifier.width(12.dp))
 
@@ -3189,21 +3168,10 @@ fun EmptyChatGreeting(
         verticalArrangement = Arrangement.Center
     ) {
         // Next AI Masterpiece Emblem
-        Box(
-            modifier = Modifier
-                .size(72.dp)
-                .clip(CircleShape)
-                .background(Color(0xFF040510)),
-            contentAlignment = Alignment.Center
-        ) {
-            Image(
-                painter = painterResource(id = R.drawable.app_logo),
-                contentDescription = "Next AI Logo",
-                modifier = Modifier
-                    .size(68.dp)
-                    .clip(CircleShape)
-            )
-        }
+        NextAiLogo(
+            size = 72.dp,
+            showBackground = true
+        )
 
         Spacer(Modifier.height(16.dp))
 

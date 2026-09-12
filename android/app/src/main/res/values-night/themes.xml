@@ -1,6 +1,9 @@
 <resources>
-    <!-- Dark application theme. Uses Android built-in Material theme for Compose root window -->
-    <style name="Theme.NextAI" parent="@android:style/Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+    <!-- Compose full-screen night theme: deep obsidian dark background, no white flash -->
+    <style name="Theme.NextAI" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">#0D0D12</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
     </style>
 </resources>

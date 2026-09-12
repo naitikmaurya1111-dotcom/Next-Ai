@@ -1,6 +1,9 @@
 <resources>
-    <!-- Base application theme. Uses Android built-in Material theme for Compose root window -->
-    <style name="Theme.NextAI" parent="@android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+    <!-- Compose full-screen theme: obsidian dark background to eliminate white flash on startup -->
+    <style name="Theme.NextAI" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowBackground">#0D0D12</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
     </style>
 </resources>
