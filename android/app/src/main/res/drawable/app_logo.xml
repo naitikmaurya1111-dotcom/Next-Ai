@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Obsidian Circular Base -->
+    <path
+        android:fillColor="#0D0D12"
+        android:pathData="M54,0 A54,54 0 1,0 54,108 A54,54 0 1,0 54,0 Z" />
+
+    <!-- Ambient circular glow -->
+    <path
+        android:fillColor="#1CD97757"
+        android:pathData="M54,18 A36,36 0 1,0 54,90 A36,36 0 1,0 54,18 Z" />
+
+    <!-- Stylized Next "N" Monogram -->
+    <path
+        android:strokeColor="#D97757"
+        android:strokeWidth="9"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 36,72 L 36,36 L 72,72 L 72,36" />
+
+    <!-- Radiant AI Intelligence Sparkle -->
+    <path
+        android:fillColor="#FFD7A8"
+        android:pathData="M 79,18.5 C 79,24.0 82.0,27.0 87.5,27.0 C 82.0,27.0 79,30.0 79,35.5 C 79,30.0 76.0,27.0 70.5,27.0 C 76.0,27.0 79,24.0 79,18.5 Z" />
+</vector>

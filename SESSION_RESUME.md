@@ -1,8 +1,8 @@
 # 🧠 Next AI & Antigravity Session Resume Context
-> **Last Synced**: `2026-09-12 07:59:54 UTC`  
-> **Conversation ID**: `b885e03f-9af6-4038-b0f6-5185f2344b9c`  
-> **Git Head SHA**: `6be2cfb`  
-> **Active App Version**: `v1.1.0`  
+> **Last Synced**: `2026-09-12 11:50:00 UTC`  
+> **Conversation ID**: `b487c728-9697-4475-880c-cc76aaa2498d`  
+> **Git Head SHA**: `25aafb9`  
+> **Active App Version**: `v1.0.35`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -47,8 +47,8 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.18`
-  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.18/app-debug.apk`
+  - Tag: `v1.0.35`
+  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.35/app-debug.apk`
 
 ---
 
