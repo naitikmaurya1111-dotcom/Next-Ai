@@ -1,33 +1,43 @@
 # 🧠 Next AI & Antigravity Session Resume Context
-> **Last Synced**: `2026-09-12 04:28:26 UTC`  
-> **Conversation ID**: `045d867f-f060-4d70-b425-c2f6b980df73`  
-> **Git Head SHA**: `8619295`  
-> **Active App Version**: `v1.0.10`  
+> **Last Synced**: `2026-09-12 06:10:14 UTC`  
+> **Conversation ID**: `b885e03f-9af6-4038-b0f6-5185f2344b9c`  
+> **Git Head SHA**: `3b71dd1`  
+> **Active App Version**: `v1.1.0`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
 
 ## 🎯 Executive Summary & Mission
-You are pair programming on **Next AI**, a premium, Claude-like Android Chat App integrated with Google Colab running the **Antigravity CLI** (`agy`) bridge server via WebSocket.
+You are pair programming on **Next AI**, a premium Android Chat App inspired by ChatGPT, Claude, and Gemini, integrated with Google Colab running the **Antigravity CLI** (`agy`) bridge server via WebSocket.
 
 ### 🔑 Critical User Rules & Instructions
 1. **GitHub Pushes**: **ALWAYS ask the user for explicit confirmation before pushing to GitHub (`git push`). NEVER push automatically without permission.**
 2. **Drive Persistence**: When a session restarts, resume context seamlessly from this Google Drive backup (`SESSION_RESUME.md`).
-3. **Reasoning Effort**: Defaults to `high`.
+3. **Reasoning Effort / Thinking Level**: User controls Low, Medium, High via UI; bridge auto-maps without CLI flag conflicts.
 
 ---
 
-## 📱 Android App Architecture & Current Status
+## 📱 Android App Architecture & Features
 - **Package**: `com.agychat.app`
-- **UI Framework**: Jetpack Compose (Material 3 Dynamic Theme)
+- **UI Framework**: Jetpack Compose (Material 3 Dynamic Theme, Claude Terracotta styling)
 - **Dependency Injection**: Hilt
-- **Local DB**: SQLite via Room (`ChatDao`, `ConversationEntity`, `MessageEntity`)
-- **Network**: OkHttp WebSocket client (`AgyWebSocketClient`) with 20s ping intervals and auto-reconnect
-- **Navigation & ViewModel Scoping**:
-  - `sharedChatViewModel: ChatViewModel = hiltViewModel()` is hoisted to the root `AGYChatNavHost` level in `MainActivity.kt`.
-  - All screens (`ChatScreen`, `SettingsScreen`, `HistoryScreen`) share the exact same ViewModel instance so the WebSocket connection remains active when switching screens.
-  - Auto-connects on startup to the saved bridge URL via `SharedPreferences("next_ai_prefs")`.
-- **Slash Command Plugins** (all 8 implemented as cards in `PluginDrawer` and chips):
+- **Local DB**: SQLite via Room (`ChatDao`, `MemoryDao`, `ConversationEntity`, `MessageEntity`, `MemoryEntity`)
+- **Network**: OkHttp WebSocket client (`AgyWebSocketClient`) with 20s ping intervals, auto-reconnect, and cancellation support (cancel events)
+- **Persistent ChatGPT-Style Memory & Personalization Architecture**:
+  - `MemoryEntity` and `MemoryDao`: CRUD, category tags (`project`, `preference`, `personal`, `style`, `general`), search, and batch import/export.
+  - `ManageMemorySheet.kt`: Modal sheet with real-time search, category filters, inline editing, JSON export & import, and template inspiration chips.
+  - `CustomInstructionsSheet.kt`: Full two-part customization (User Profile & Background + Response Style & Formatting) with tone preset chips (`Direct & Concise`, `Technical`, `Educational`, `Warm`).
+  - **Autonomous Real-time Memory Extraction**: Model emits `<memory_update>` tags during natural conversation; bridge extracts and emits `memory_updated` WebSocket events, and chat displays interactive `✨ Memory updated` pills on assistant messages.
+  - **Temporary / Incognito Chat**: Ephemeral mode where memories are paused, excluded from prompt, and not saved.
+  - Natural commands in chat: `/remember <fact>`, `/forget <query>`, and `/memory`.
+  - Automatic memory and custom instructions backup to Google Drive (`user_memories.json`, `custom_instructions.json`).
+- **Thinking Level & Model Configuration**:
+  - Full support for Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.1 Pro, Claude Sonnet 4.6, Claude Opus 4.6, and GPT-OSS 120B.
+  - CLI flag conflict resolved via canonical suffix mapping in `resolve_model_and_effort()`.
+- **Active Stop Generation**:
+  - Claude/ChatGPT style red stop square in `ClaudeFloatingInputBar` when streaming is in progress.
+  - Subprocess cancellation via `active_processes` tracking in `agy_runner.py`.
+- **Slash Command Plugins** (8 implemented in `PluginDrawer`):
   1. `/goal` — Run long-running tasks autonomously until done
   2. `/plan` — Multi-step planning before execution
   3. `/boost` — Deep thinking and rigorous multi-perspective review
@@ -37,8 +47,8 @@ You are pair programming on **Next AI**, a premium, Claude-like Android Chat App
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.10`
-  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.10/app-debug.apk`
+  - Tag: `v1.0.18`
+  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.18/app-debug.apk`
 
 ---
 
@@ -46,14 +56,14 @@ You are pair programming on **Next AI**, a premium, Claude-like Android Chat App
 - **Location**: `/content/Next-Ai/colab`
 - **Stack**: FastAPI + Uvicorn (Port 8000) + Cloudflare Tunnel (`cloudflared`)
 - **Execution**: Runs `/root/.local/bin/agy -p "<message>" --output-format stream-json --dangerously-skip-permissions`
-- **Session Continuity**: Retains `--conversation 045d867f-f060-4d70-b425-c2f6b980df73` across turns.
+- **Session Continuity**: Retains `--conversation b885e03f-9af6-4038-b0f6-5185f2344b9c` across turns.
 - **Launcher**: `/content/Next-Ai/colab/start_bridge.sh`
 
 ---
 
 ## 📂 Restored Antigravity State
 - **Conversation DBs**: `/root/.gemini/antigravity-cli/conversations/`
-- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/045d867f-f060-4d70-b425-c2f6b980df73/`
+- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/b885e03f-9af6-4038-b0f6-5185f2344b9c/`
 - **History & Summaries**: `/root/.gemini/antigravity-cli/conversation_summaries.db`, `history.jsonl`
 
 ---

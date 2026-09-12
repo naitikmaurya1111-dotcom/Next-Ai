@@ -146,6 +146,21 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket
     )
 
+    # Keep-alive ping task to prevent Cloudflare 100s WebSocket timeout
+    async def ping_task():
+        while True:
+            await asyncio.sleep(45)
+            try:
+                await manager.send(
+                    json.dumps({"type": "ping", "content": "", "timestamp": time.time()}),
+                    websocket
+                )
+            except Exception:
+                break
+
+    import asyncio as _asyncio
+    ping_job = _asyncio.create_task(ping_task())
+
     try:
         while True:
             raw = await websocket.receive_text()
@@ -176,6 +191,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 effort = payload.get("effort", "high")
                 model = payload.get("model", "")
                 memories = payload.get("memories", [])
+                custom_instructions = payload.get("custom_instructions")
+                auto_memory = payload.get("auto_memory", True)
+                is_temporary = payload.get("is_temporary", False)
                 file_name = payload.get("file_name")
                 file_data = payload.get("file_data")
                 if file_name and file_data:
@@ -192,14 +210,28 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.error(f"Failed to process file attachment: {upload_err}")
             except json.JSONDecodeError:
                 user_message = raw  # Treat as plain text
+                custom_instructions = None
+                auto_memory = True
+                is_temporary = False
 
-            # Stream agy command output back to client with model, effort, and memories
-            async for event in run_agy_command(user_message, conv_id, effort, model, memories):
+            # Stream agy command output back to client with model, effort, memories, and custom instructions
+            async for event in run_agy_command(
+                user_message,
+                conv_id,
+                effort,
+                model,
+                memories,
+                custom_instructions=custom_instructions,
+                is_auto_memory=auto_memory,
+                is_temporary=is_temporary
+            ):
                 await manager.send(event, websocket)
 
     except WebSocketDisconnect:
+        ping_job.cancel()
         manager.disconnect(websocket)
         logger.info("WebSocket client disconnected normally")
     except Exception as e:
+        ping_job.cancel()
         logger.error(f"WebSocket error: {e}")
         manager.disconnect(websocket)

@@ -34,7 +34,7 @@ RESUME_FILE_NAME = "SESSION_RESUME.md"
 SNAPSHOT_FILE_NAME = "session_snapshot.json"
 ARCHIVE_FILE_NAME = "nextai_session_latest.tar.gz"
 
-CONVERSATION_ID = os.environ.get("CONVERSATION_ID", "78283619-3d26-416e-ba19-d4590d6c440a")
+CONVERSATION_ID = os.environ.get("CONVERSATION_ID", "b885e03f-9af6-4038-b0f6-5185f2344b9c")
 
 def is_drive_mounted() -> bool:
     """Check if Google Drive is mounted at /content/drive/MyDrive."""
@@ -90,11 +90,14 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
 - **Dependency Injection**: Hilt
 - **Local DB**: SQLite via Room (`ChatDao`, `MemoryDao`, `ConversationEntity`, `MessageEntity`, `MemoryEntity`)
 - **Network**: OkHttp WebSocket client (`AgyWebSocketClient`) with 20s ping intervals, auto-reconnect, and cancellation support (cancel events)
-- **Persistent ChatGPT-Style Memory**:
-  - `MemoryEntity` and `MemoryDao` with CRUD, toggle, search, and category tags.
-  - `ManageMemorySheet.kt`: modal bottom sheet for adding, searching, filtering, toggling, and clearing memories.
-  - Automatic memory injection into WebSocket payloads and prompt formatting in `agy_runner.py`.
-  - `/remember <fact>` shortcut in chat for instant memory persistence.
+- **Persistent ChatGPT-Style Memory & Personalization Architecture**:
+  - `MemoryEntity` and `MemoryDao`: CRUD, category tags (`project`, `preference`, `personal`, `style`, `general`), search, and batch import/export.
+  - `ManageMemorySheet.kt`: Modal sheet with real-time search, category filters, inline editing, JSON export & import, and template inspiration chips.
+  - `CustomInstructionsSheet.kt`: Full two-part customization (User Profile & Background + Response Style & Formatting) with tone preset chips (`Direct & Concise`, `Technical`, `Educational`, `Warm`).
+  - **Autonomous Real-time Memory Extraction**: Model emits `<memory_update>` tags during natural conversation; bridge extracts and emits `memory_updated` WebSocket events, and chat displays interactive `✨ Memory updated` pills on assistant messages.
+  - **Temporary / Incognito Chat**: Ephemeral mode where memories are paused, excluded from prompt, and not saved.
+  - Natural commands in chat: `/remember <fact>`, `/forget <query>`, and `/memory`.
+  - Automatic memory and custom instructions backup to Google Drive (`user_memories.json`, `custom_instructions.json`).
 - **Thinking Level & Model Configuration**:
   - Full support for Gemini 3.8 Flash, 3.7 Flash, 3.6 Flash, 3.1 Pro, Claude Sonnet 4.6, Claude Opus 4.6, and GPT-OSS 120B.
   - CLI flag conflict resolved via canonical suffix mapping in `resolve_model_and_effort()`.
@@ -111,8 +114,8 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.10`
-  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.10/app-debug.apk`
+  - Tag: `v1.0.18`
+  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.18/app-debug.apk`
 
 ---
 

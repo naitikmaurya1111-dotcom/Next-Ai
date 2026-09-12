@@ -9,14 +9,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -29,13 +29,11 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.agychat.app.ui.theme.ClaudeTerracotta
-import com.agychat.app.ui.theme.CodeBlockBg
-import com.agychat.app.ui.theme.CodeBlockBorder
-import com.agychat.app.ui.theme.CodeBlockHeader
+import com.agychat.app.ui.theme.*
 import kotlinx.coroutines.delay
 
 fun sanitizeMarkdownInput(raw: String): String {
@@ -68,6 +66,9 @@ fun MarkdownContent(
                 is MarkdownBlock.Code -> {
                     CodeBlockView(language = section.language, code = section.code)
                 }
+                is MarkdownBlock.Table -> {
+                    TableBlockView(headers = section.headers, rows = section.rows)
+                }
                 is MarkdownBlock.Heading -> {
                     val style = when (section.level) {
                         1 -> MaterialTheme.typography.titleLarge.copy(
@@ -92,29 +93,71 @@ fun MarkdownContent(
                     )
                 }
                 is MarkdownBlock.Blockquote -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                    ) {
-                        Box(
+                    val isCallout = section.text.startsWith("[!") && section.text.contains("]")
+                    if (isCallout) {
+                        val calloutType = section.text.substringAfter("[!").substringBefore("]").uppercase()
+                        val calloutBody = section.text.substringAfter("]").trim()
+                        val (calloutColor, calloutIcon, calloutTitle) = when (calloutType) {
+                            "NOTE" -> Triple(ChatGptBlue, Icons.Default.Info, "Note")
+                            "TIP" -> Triple(ChatGptEmerald, Icons.Default.Lightbulb, "Tip")
+                            "WARNING" -> Triple(ChatGptAmber, Icons.Default.Warning, "Warning")
+                            "IMPORTANT" -> Triple(ClaudeTerracotta, Icons.Default.PriorityHigh, "Important")
+                            "CAUTION" -> Triple(MaterialTheme.colorScheme.error, Icons.Default.Error, "Caution")
+                            else -> Triple(ClaudeTerracotta, Icons.Default.Info, calloutType.lowercase().replaceFirstChar { it.uppercase() })
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = calloutColor.copy(alpha = 0.08f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, calloutColor.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(calloutIcon, contentDescription = null, tint = calloutColor, modifier = Modifier.size(15.dp))
+                                    Text(
+                                        text = calloutTitle,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = calloutColor
+                                    )
+                                }
+                                if (calloutBody.isNotBlank()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = buildFormattedInlineText(calloutBody, textColor),
+                                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                                        color = textColor
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Row(
                             modifier = Modifier
-                                .width(3.5.dp)
-                                .fillMaxHeight()
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(ClaudeTerracotta)
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            text = buildFormattedInlineText(section.text, MaterialTheme.colorScheme.onSurfaceVariant),
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontStyle = FontStyle.Italic,
-                                lineHeight = 22.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.5.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(ClaudeTerracotta)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = buildFormattedInlineText(section.text, MaterialTheme.colorScheme.onSurfaceVariant),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontStyle = FontStyle.Italic,
+                                    lineHeight = 22.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
                 is MarkdownBlock.ListItem -> {
@@ -172,9 +215,76 @@ fun MarkdownContent(
 }
 
 @Composable
+fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val headerBg = if (isDark) Color(0xFF1E1E22) else Color(0xFFECEAE4)
+    val rowAltBg = if (isDark) Color(0xFF18181C) else Color(0xFFF7F6F2)
+    val rowNormBg = if (isDark) Color(0xFF141416) else Color(0xFFFFFFFF)
+    val borderColor = if (isDark) Color(0xFF2E2E36) else Color(0xFFE2E0D8)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(10.dp)),
+        shape = RoundedCornerShape(10.dp),
+        color = rowNormBg
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier
+                    .background(headerBg)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                headers.forEach { header ->
+                    Text(
+                        text = header.trim(),
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .widthIn(min = 90.dp, max = 220.dp)
+                            .padding(end = 12.dp)
+                    )
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = borderColor)
+
+            // Data Rows
+            rows.forEachIndexed { index, row ->
+                val bg = if (index % 2 == 1) rowAltBg else rowNormBg
+                Row(
+                    modifier = Modifier
+                        .background(bg)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    row.forEachIndexed { _, cell ->
+                        Text(
+                            text = cell.trim(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .widthIn(min = 90.dp, max = 220.dp)
+                                .padding(end = 12.dp)
+                        )
+                    }
+                }
+                if (index < rows.size - 1) {
+                    HorizontalDivider(thickness = 0.5.dp, color = borderColor.copy(alpha = 0.5f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun CodeBlockView(language: String, code: String) {
     val context = LocalContext.current
-    val displayLang = language.ifBlank { "TEXT" }.uppercase()
+    val displayLang = if (language.isNotBlank()) language.lowercase() else "code"
     var isCopied by remember { mutableStateOf(false) }
 
     LaunchedEffect(isCopied) {
@@ -191,7 +301,7 @@ fun CodeBlockView(language: String, code: String) {
             .background(CodeBlockBg)
             .border(1.dp, CodeBlockBorder, RoundedCornerShape(12.dp))
     ) {
-        // Top Header Bar
+        // Modern ChatGPT Code Header Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -202,42 +312,41 @@ fun CodeBlockView(language: String, code: String) {
         ) {
             Text(
                 text = displayLang,
-                style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.sp),
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 0.5.sp
+                ),
                 color = Color(0xFFA6A6B0),
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.Medium
             )
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(Color(0xFF2B2B32).copy(alpha = 0.6f))
-                    .border(0.5.dp, Color(0xFF3E3E48), RoundedCornerShape(6.dp))
+            Surface(
+                onClick = {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("Code", code))
+                    isCopied = true
+                    Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
+                },
+                shape = RoundedCornerShape(6.dp),
+                color = Color(0xFF2B2B32).copy(alpha = 0.7f),
+                border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFF3E3E48))
             ) {
-                IconButton(
-                    onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("Code", code))
-                        isCopied = true
-                        Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.size(28.dp)
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    if (isCopied) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = "Copied",
-                            modifier = Modifier.size(14.dp),
-                            tint = Color(0xFF4CAF50)
-                        )
-                    } else {
-                        Icon(
-                            Icons.Default.ContentCopy,
-                            contentDescription = "Copy code",
-                            modifier = Modifier.size(14.dp),
-                            tint = Color(0xFFA6A6B0)
-                        )
-                    }
+                    Icon(
+                        if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                        contentDescription = if (isCopied) "Copied" else "Copy code",
+                        modifier = Modifier.size(13.dp),
+                        tint = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                    )
+                    Text(
+                        text = if (isCopied) "Copied!" else "Copy code",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                        color = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                    )
                 }
             }
         }
@@ -247,7 +356,8 @@ fun CodeBlockView(language: String, code: String) {
             text = code,
             style = MaterialTheme.typography.bodySmall.copy(
                 fontFamily = FontFamily.Monospace,
-                lineHeight = 18.sp
+                lineHeight = 19.sp,
+                fontSize = 12.5.sp
             ),
             color = Color(0xFFEDEDF0),
             modifier = Modifier
@@ -259,7 +369,7 @@ fun CodeBlockView(language: String, code: String) {
 }
 
 /**
- * Parses markdown inline styles like **bold**, *italic*, and `inline code`.
+ * Parses markdown inline styles like **bold**, *italic*, ~~strikethrough~~, `inline code`, and [link](url).
  */
 @Composable
 fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui.text.AnnotatedString {
@@ -267,47 +377,44 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
     val inlineCodeBg = if (isDark) Color(0xFF2C2B27) else Color(0xFFEFECE5)
     val inlineCodeText = if (isDark) Color(0xFFF0EBE1) else Color(0xFF9C4927)
 
+    val pattern = remember {
+        Regex("(\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|`(.+?)`|\\[(.+?)\\]\\((.+?)\\))")
+    }
+
     return buildAnnotatedString {
         var cursor = 0
-        val textLength = raw.length
+        val matches = pattern.findAll(raw)
 
-        while (cursor < textLength) {
-            val nextBold = raw.indexOf("**", cursor)
-            val nextCode = raw.indexOf("`", cursor)
+        for (match in matches) {
+            val start = match.range.first
+            val end = match.range.last + 1
 
-            val nextToken = when {
-                nextBold != -1 && nextCode != -1 -> minOf(nextBold, nextCode)
-                nextBold != -1 -> nextBold
-                nextCode != -1 -> nextCode
-                else -> -1
+            if (start > cursor) {
+                append(raw.substring(cursor, start))
             }
 
-            if (nextToken == -1) {
-                append(raw.substring(cursor))
-                break
-            }
-
-            // Append text preceding the token
-            if (nextToken > cursor) {
-                append(raw.substring(cursor, nextToken))
-            }
-
-            if (nextToken == nextBold && nextBold + 2 < textLength) {
-                val endBold = raw.indexOf("**", nextBold + 2)
-                if (endBold != -1) {
-                    val boldContent = raw.substring(nextBold + 2, endBold)
+            val fullMatch = match.value
+            when {
+                fullMatch.startsWith("**") -> {
+                    val content = match.groupValues.getOrNull(2) ?: ""
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = baseColor)) {
-                        append(boldContent)
+                        append(content)
                     }
-                    cursor = endBold + 2
-                    continue
                 }
-            }
-
-            if (nextToken == nextCode && nextCode + 1 < textLength) {
-                val endCode = raw.indexOf("`", nextCode + 1)
-                if (endCode != -1) {
-                    val codeContent = raw.substring(nextCode + 1, endCode)
+                fullMatch.startsWith("*") -> {
+                    val content = match.groupValues.getOrNull(3) ?: ""
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor)) {
+                        append(content)
+                    }
+                }
+                fullMatch.startsWith("~~") -> {
+                    val content = match.groupValues.getOrNull(4) ?: ""
+                    withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = baseColor.copy(alpha = 0.6f))) {
+                        append(content)
+                    }
+                }
+                fullMatch.startsWith("`") -> {
+                    val content = match.groupValues.getOrNull(5) ?: ""
                     withStyle(
                         SpanStyle(
                             fontFamily = FontFamily.Monospace,
@@ -316,16 +423,30 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                             fontSize = 13.sp
                         )
                     ) {
-                        append(" $codeContent ")
+                        append(" $content ")
                     }
-                    cursor = endCode + 1
-                    continue
+                }
+                fullMatch.startsWith("[") -> {
+                    val linkText = match.groupValues.getOrNull(6) ?: ""
+                    withStyle(
+                        SpanStyle(
+                            color = ChatGptBlue,
+                            textDecoration = TextDecoration.Underline,
+                            fontWeight = FontWeight.Medium
+                        )
+                    ) {
+                        append(linkText)
+                    }
+                }
+                else -> {
+                    append(fullMatch)
                 }
             }
+            cursor = end
+        }
 
-            // Fallback if no matching closing tag found
-            append(raw[cursor])
-            cursor++
+        if (cursor < raw.length) {
+            append(raw.substring(cursor))
         }
     }
 }
@@ -334,6 +455,7 @@ sealed class MarkdownBlock {
     data class Paragraph(val text: String) : MarkdownBlock()
     data class Heading(val level: Int, val text: String) : MarkdownBlock()
     data class Code(val language: String, val code: String) : MarkdownBlock()
+    data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
     data class Blockquote(val text: String) : MarkdownBlock()
     data class ListItem(val isOrdered: Boolean, val index: Int, val text: String) : MarkdownBlock()
     object Divider : MarkdownBlock()
@@ -358,7 +480,9 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         }
     }
 
-    for (line in lines) {
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
         val trimmed = line.trim()
 
         if (trimmed.startsWith("```")) {
@@ -372,12 +496,32 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 codeLang = trimmed.removePrefix("```").trim()
                 inCodeBlock = true
             }
+            i++
             continue
         }
 
         if (inCodeBlock) {
             codeBuffer.append(line).append("\n")
+            i++
             continue
+        }
+
+        // Table detection: line starts and ends with '|' and next line contains '---'
+        if (trimmed.startsWith("|") && trimmed.endsWith("|") && i + 1 < lines.size) {
+            val nextTrimmed = lines[i + 1].trim()
+            if (nextTrimmed.startsWith("|") && nextTrimmed.contains("---")) {
+                flushPara()
+                val headers = trimmed.removePrefix("|").removeSuffix("|").split("|").map { it.trim() }
+                i += 2 // skip header and divider line
+                val rows = mutableListOf<List<String>>()
+                while (i < lines.size && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
+                    val cells = lines[i].trim().removePrefix("|").removeSuffix("|").split("|").map { it.trim() }
+                    rows.add(cells)
+                    i++
+                }
+                blocks.add(MarkdownBlock.Table(headers, rows))
+                continue
+            }
         }
 
         when {
@@ -427,6 +571,7 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 paraBuffer.append(line)
             }
         }
+        i++
     }
 
     if (inCodeBlock && codeBuffer.isNotEmpty()) {

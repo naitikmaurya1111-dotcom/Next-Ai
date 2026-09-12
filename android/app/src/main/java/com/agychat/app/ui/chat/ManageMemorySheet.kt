@@ -1,5 +1,9 @@
 package com.agychat.app.ui.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -19,11 +23,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.agychat.app.data.local.MemoryEntity
+import com.agychat.app.domain.model.MemoryCategory
 import com.agychat.app.ui.theme.ClaudeTerracotta
 import java.text.SimpleDateFormat
 import java.util.*
@@ -34,15 +40,19 @@ fun ManageMemorySheet(
     viewModel: ChatViewModel,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val memories by viewModel.memories.collectAsState(initial = emptyList())
     val isMemoryEnabled by viewModel.isMemoryEnabled.collectAsState()
+    val isAutoMemoryEnabled by viewModel.isAutoMemoryEnabled.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("All") }
     var showAddDialog by remember { mutableStateOf(false) }
+    var editingMemory by remember { mutableStateOf<MemoryEntity?>(null) }
+    var showImportDialog by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
 
-    val categories = listOf("All", "project", "preference", "personal", "general")
+    val categories = listOf("All", "project", "preference", "personal", "style", "general")
 
     val filteredMemories = remember(memories, searchQuery, selectedCategory) {
         memories.filter { mem ->
@@ -75,7 +85,7 @@ fun ManageMemorySheet(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(42.dp)
                             .clip(CircleShape)
                             .background(ClaudeTerracotta.copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
@@ -84,38 +94,79 @@ fun ManageMemorySheet(
                             Icons.Default.Psychology,
                             contentDescription = null,
                             tint = ClaudeTerracotta,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(26.dp)
                         )
                     }
                     Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = "Memory",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = ClaudeTerracotta.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = "${memories.count { it.isEnabled }} active",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTerracotta,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         Text(
-                            text = "Memory",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "Remembers details across all your chats",
+                            text = "Next AI remembers details across all chats",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
 
-                IconButton(
-                    onClick = { showAddDialog = true }
-                ) {
-                    Icon(
-                        Icons.Default.AddCircle,
-                        contentDescription = "Add Memory",
-                        tint = ClaudeTerracotta,
-                        modifier = Modifier.size(28.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = {
+                            val json = viewModel.exportMemoriesJson()
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("Next AI Memories", json))
+                            Toast.makeText(context, "Memories exported to clipboard!", Toast.LENGTH_SHORT).show()
+                        }
+                    ) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "Export Memories",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { showImportDialog = true }
+                    ) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Import Memories",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { showAddDialog = true }
+                    ) {
+                        Icon(
+                            Icons.Default.AddCircle,
+                            contentDescription = "Add Memory",
+                            tint = ClaudeTerracotta,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
                 }
             }
 
             Spacer(Modifier.height(14.dp))
 
-            // Master Toggle Card
+            // Master Toggle & Auto-Extract Controls
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -123,29 +174,63 @@ fun ManageMemorySheet(
                 ),
                 shape = RoundedCornerShape(14.dp)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Memory Active",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            text = if (isMemoryEnabled) "Injecting ${memories.count { it.isEnabled }} memories into queries" else "Memory is paused",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Persistent Memory Active",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = if (isMemoryEnabled) "Injecting memories into relevant prompts" else "Memory reference is paused",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = isMemoryEnabled,
+                            onCheckedChange = { viewModel.setMemoryEnabled(it) }
                         )
                     }
-                    Switch(
-                        checked = isMemoryEnabled,
-                        onCheckedChange = { viewModel.setMemoryEnabled(it) }
+
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                        thickness = 0.6.dp
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Autonomous Memory Extraction",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Text(
+                                text = "Automatically learns preferences as you chat",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = isAutoMemoryEnabled,
+                            onCheckedChange = { viewModel.setAutoMemoryEnabled(it) },
+                            modifier = Modifier.scale(0.85f)
+                        )
+                    }
                 }
             }
 
@@ -155,7 +240,7 @@ fun ManageMemorySheet(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Search memories...") },
+                placeholder = { Text("Search memories by text or topic...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -171,20 +256,32 @@ fun ManageMemorySheet(
 
             Spacer(Modifier.height(10.dp))
 
-            // Category Filter Row
+            // Category Filter Row with Counters
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 items(categories) { cat ->
                     val isSelected = selectedCategory == cat
+                    val count = if (cat == "All") memories.size else memories.count { it.category.equals(cat, ignoreCase = true) }
+                    val label = when (cat) {
+                        "All" -> "All ($count)"
+                        "project" -> "🎯 Project ($count)"
+                        "preference" -> "⚙️ Preference ($count)"
+                        "personal" -> "👤 Personal ($count)"
+                        "style" -> "🎨 Style ($count)"
+                        "general" -> "💡 General ($count)"
+                        else -> "$cat ($count)"
+                    }
                     FilterChip(
                         selected = isSelected,
                         onClick = { selectedCategory = cat },
                         label = {
                             Text(
-                                text = cat.replaceFirstChar { it.uppercase() },
-                                style = MaterialTheme.typography.labelSmall
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                )
                             )
                         }
                     )
@@ -212,12 +309,12 @@ fun ManageMemorySheet(
                             modifier = Modifier.size(36.dp)
                         )
                         Text(
-                            text = if (searchQuery.isBlank()) "No memories saved yet." else "No memories matching \"$searchQuery\"",
+                            text = if (searchQuery.isBlank()) "No memories in this category yet." else "No memories matching \"$searchQuery\"",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Tap the + button to save facts or preferences",
+                            text = "Tap + to add facts or type \"/remember <fact>\" in chat",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
@@ -235,6 +332,7 @@ fun ManageMemorySheet(
                         MemoryItemCard(
                             memory = mem,
                             onToggle = { viewModel.toggleMemory(mem.id, it) },
+                            onEdit = { editingMemory = mem },
                             onDelete = { viewModel.deleteMemory(mem.id) }
                         )
                     }
@@ -243,7 +341,7 @@ fun ManageMemorySheet(
 
             Spacer(Modifier.height(14.dp))
 
-            // Bottom Actions: Clear All button if memories exist
+            // Bottom Actions: Clear All & Summary
             if (memories.isNotEmpty()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -251,7 +349,7 @@ fun ManageMemorySheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "${memories.size} total memories",
+                        text = "${memories.size} total memories saved",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -270,36 +368,72 @@ fun ManageMemorySheet(
         }
     }
 
-    // Add Memory Dialog
+    // Add Memory Dialog with Inspiration Templates
     if (showAddDialog) {
         var memoryText by remember { mutableStateOf("") }
-        var category by remember { mutableStateOf("general") }
+        var category by remember { mutableStateOf("preference") }
+
+        val templateChips = listOf(
+            "Prefer Jetpack Compose",
+            "Write clean architecture",
+            "Always include type hints",
+            "Be direct and concise",
+            "Target Android SDK 34"
+        )
 
         AlertDialog(
             onDismissRequest = { showAddDialog = false },
-            title = { Text("Add Memory") },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.AddCircle, contentDescription = null, tint = ClaudeTerracotta)
+                    Text("Add New Memory")
+                }
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        "Tell Next AI something to remember about you, your coding style, or your project.",
+                        "Tell Next AI something to remember about you, your tech stack, or coding conventions.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    // Quick inspiration chips
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(templateChips) { template ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.clickable { memoryText = template }
+                            ) {
+                                Text(
+                                    text = template,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = memoryText,
                         onValueChange = { memoryText = it },
-                        placeholder = { Text("e.g. Always write Jetpack Compose code with clean Architecture") },
+                        placeholder = { Text("e.g. Always write Jetpack Compose code with ViewModel and StateFlow") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 3,
                         maxLines = 5,
                         shape = RoundedCornerShape(10.dp)
                     )
-                    Text("Category:", style = MaterialTheme.typography.labelMedium)
+
+                    Text("Category:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        listOf("project", "preference", "personal", "general").forEach { cat ->
+                        listOf("project", "preference", "personal", "style", "general").forEach { cat ->
                             FilterChip(
                                 selected = category == cat,
                                 onClick = { category = cat },
@@ -331,13 +465,121 @@ fun ManageMemorySheet(
         )
     }
 
+    // Edit Memory Dialog
+    editingMemory?.let { mem ->
+        var editContent by remember(mem) { mutableStateOf(mem.content) }
+        var editCategory by remember(mem) { mutableStateOf(mem.category) }
+
+        AlertDialog(
+            onDismissRequest = { editingMemory = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = ClaudeTerracotta)
+                    Text("Edit Memory")
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editContent,
+                        onValueChange = { editContent = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 5,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    Text("Category:", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf("project", "preference", "personal", "style", "general").forEach { cat ->
+                            FilterChip(
+                                selected = editCategory.equals(cat, ignoreCase = true),
+                                onClick = { editCategory = cat },
+                                label = { Text(cat.replaceFirstChar { it.uppercase() }, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (editContent.isNotBlank()) {
+                            viewModel.editMemory(mem.id, editContent.trim(), editCategory)
+                            editingMemory = null
+                        }
+                    },
+                    enabled = editContent.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                ) {
+                    Text("Update")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMemory = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Import Memories Dialog
+    if (showImportDialog) {
+        var importJson by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showImportDialog = false },
+            title = { Text("Import Memories JSON") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Paste a JSON array of memories to import into your local SQLite storage.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = importJson,
+                        onValueChange = { importJson = it },
+                        placeholder = { Text("[{\"content\": \"User prefers Kotlin\", \"category\": \"preference\"}]") },
+                        modifier = Modifier.fillMaxWidth().height(140.dp),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val success = viewModel.importMemoriesJson(importJson)
+                        if (success) {
+                            Toast.makeText(context, "Memories imported successfully!", Toast.LENGTH_SHORT).show()
+                            showImportDialog = false
+                        } else {
+                            Toast.makeText(context, "Invalid JSON format", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = importJson.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                ) {
+                    Text("Import")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showImportDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     // Clear All Confirmation Dialog
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
             title = { Text("Clear All Memories?") },
             text = {
-                Text("This will delete all saved memories across your chats. Next AI will forget your saved preferences.")
+                Text("This will permanently delete all ${memories.size} saved memories across all chats. Next AI will forget all saved preferences.")
             },
             confirmButton = {
                 Button(
@@ -363,22 +605,25 @@ fun ManageMemorySheet(
 fun MemoryItemCard(
     memory: MemoryEntity,
     onToggle: (Boolean) -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val dateStr = remember(memory.updatedAt) {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(memory.updatedAt))
     }
 
-    val categoryColor = when (memory.category.lowercase()) {
-        "project" -> Color(0xFF1976D2)
-        "preference" -> Color(0xFFE65100)
-        "personal" -> Color(0xFF7B1FA2)
-        else -> Color(0xFF455A64)
+    val (categoryLabel, categoryColor) = when (memory.category.lowercase()) {
+        "project" -> "🎯 Project" to Color(0xFF1976D2)
+        "preference" -> "⚙️ Preference" to Color(0xFFE65100)
+        "personal" -> "👤 Personal" to Color(0xFF7B1FA2)
+        "style" -> "🎨 Style" to Color(0xFF00897B)
+        else -> "💡 General" to Color(0xFF455A64)
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onEdit() }
             .border(
                 1.dp,
                 if (memory.isEnabled) MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
@@ -409,7 +654,7 @@ fun MemoryItemCard(
                     border = androidx.compose.foundation.BorderStroke(0.5.dp, categoryColor.copy(alpha = 0.3f))
                 ) {
                     Text(
-                        text = memory.category.replaceFirstChar { it.uppercase() },
+                        text = categoryLabel,
                         style = MaterialTheme.typography.labelSmall,
                         color = categoryColor,
                         fontWeight = FontWeight.Medium,
@@ -419,13 +664,24 @@ fun MemoryItemCard(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
                         text = dateStr,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
+                    IconButton(
+                        onClick = onEdit,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "Edit",
+                            tint = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
                     Switch(
                         checked = memory.isEnabled,
                         onCheckedChange = onToggle,

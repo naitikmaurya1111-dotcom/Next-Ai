@@ -42,4 +42,16 @@ interface MemoryDao {
 
     @Query("SELECT COUNT(*) FROM memories WHERE isEnabled = 1")
     fun getEnabledCountFlow(): Flow<Int>
+
+    @Query("SELECT * FROM memories WHERE LOWER(content) = LOWER(:content) LIMIT 1")
+    suspend fun findMemoryByExactContent(content: String): MemoryEntity?
+
+    @Query("SELECT * FROM memories WHERE LOWER(content) LIKE '%' || LOWER(:query) || '%'")
+    suspend fun findMemoriesMatching(query: String): List<MemoryEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(memories: List<MemoryEntity>)
+
+    @Query("DELETE FROM memories WHERE LOWER(content) LIKE '%' || LOWER(:query) || '%'")
+    suspend fun deleteMemoriesMatching(query: String): Int
 }

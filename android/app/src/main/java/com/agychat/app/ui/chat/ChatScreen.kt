@@ -20,6 +20,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -80,6 +81,23 @@ fun queryFileName(context: Context, uri: Uri): String {
     return name
 }
 
+/** Format a timestamp as a relative human-readable string: "just now", "2m ago", "3h ago", "Yesterday", "Sep 11" */
+fun formatRelativeTime(epochMs: Long): String {
+    val now = System.currentTimeMillis()
+    val diff = now - epochMs
+    return when {
+        diff < 60_000 -> "just now"
+        diff < 3_600_000 -> "${diff / 60_000}m ago"
+        diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+        diff < 172_800_000 -> "Yesterday"
+        else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(epochMs))
+    }
+}
+
+/** Format epoch millis to a short time string for inline display: e.g. "3:42 PM" */
+fun formatMessageTime(epochMs: Long): String =
+    SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(epochMs))
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -102,7 +120,11 @@ fun ChatScreen(
     var showEffortMenu by remember { mutableStateOf(false) }
     var showModelSheet by remember { mutableStateOf(false) }
     var showMemorySheet by remember { mutableStateOf(false) }
+    var showCustomInstructionsSheet by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     val enabledMemoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
+    val isTemporaryChat by viewModel.isTemporaryChat.collectAsState()
+    val customInstructions by viewModel.customInstructions.collectAsState()
     var speakingMessageId by remember { mutableStateOf<String?>(null) }
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
 
@@ -260,6 +282,14 @@ fun ChatScreen(
                 onOpenSettings = {
                     scope.launch { drawerState.close() }
                     onNavigateToSettings()
+                },
+                onOpenMemory = {
+                    scope.launch { drawerState.close() }
+                    showMemorySheet = true
+                },
+                onOpenCustomInstructions = {
+                    scope.launch { drawerState.close() }
+                    showCustomInstructionsSheet = true
                 }
             )
         }
@@ -272,64 +302,6 @@ fun ChatScreen(
                 ) {
                     Column {
                         TopAppBar(
-                            title = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(start = 2.dp)
-                                ) {
-                                    // Claude Terracotta Asterisk Badge
-                                    Box(
-                                        modifier = Modifier
-                                            .size(30.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(ClaudeTerracotta.copy(alpha = 0.14f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = "✦",
-                                            color = ClaudeTerracotta,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 17.sp
-                                        )
-                                    }
-
-                                    Spacer(Modifier.width(10.dp))
-
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = "Next AI",
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.Bold,
-                                                letterSpacing = (-0.3).sp
-                                            )
-                                            Spacer(Modifier.width(8.dp))
-                                            ConnectionStatusBadge(
-                                                state = connectionState,
-                                                onClick = {
-                                                    if (connectionState == ConnectionState.DISCONNECTED || connectionState == ConnectionState.ERROR) {
-                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                        Toast.makeText(context, "Reconnecting to Colab bridge...", Toast.LENGTH_SHORT).show()
-                                                        viewModel.reconnect()
-                                                    } else {
-                                                        onNavigateToSettings()
-                                                    }
-                                                }
-                                            )
-                                        }
-
-                                        if (!currentStatus.isNullOrBlank()) {
-                                            Text(
-                                                text = currentStatus ?: "",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = ClaudeTerracotta,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                }
-                            },
                             navigationIcon = {
                                 IconButton(onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -342,166 +314,83 @@ fun ChatScreen(
                                     )
                                 }
                             },
-                            actions = {
-                                // Antigravity AI Model Selector Pill
+                            title = {
                                 Surface(
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         showModelSheet = true
                                     },
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                                     border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant)
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(
-                                            text = "✦",
-                                            color = ClaudeTerracotta,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 11.sp
+                                        val statusColor = when (connectionState) {
+                                            ConnectionState.CONNECTED -> Color(0xFF10A37F)
+                                            ConnectionState.CONNECTING -> Color(0xFFF59E0B)
+                                            ConnectionState.ERROR -> Color(0xFFEF5350)
+                                            ConnectionState.DISCONNECTED -> Color(0xFF9E9E9E)
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.5.dp)
+                                                .clip(CircleShape)
+                                                .background(statusColor)
                                         )
-                                        Spacer(Modifier.width(3.dp))
+                                        Spacer(Modifier.width(7.dp))
                                         val shortModelName = when {
-                                            selectedModel.id.contains("3.8") -> "3.8 Flash"
-                                            selectedModel.id.contains("3.7") -> "3.7 Flash"
-                                            selectedModel.id.contains("3.6") -> "3.6 Flash"
-                                            selectedModel.id.contains("3.1") -> "3.1 Pro"
-                                            selectedModel.id.contains("opus") -> "Opus 4.6"
-                                            selectedModel.id.contains("sonnet") -> "Sonnet 4.6"
-                                            selectedModel.id.contains("gpt-oss") -> "GPT-OSS"
+                                            selectedModel.id.contains("3.8") -> "Gemini 3.8 Flash"
+                                            selectedModel.id.contains("3.7") -> "Gemini 3.7 Flash"
+                                            selectedModel.id.contains("3.6") -> "Gemini 3.6 Flash"
+                                            selectedModel.id.contains("3.1") -> "Gemini 3.1 Pro"
+                                            selectedModel.id.contains("opus") -> "Claude Opus 4.6"
+                                            selectedModel.id.contains("sonnet") -> "Claude Sonnet 4.6"
+                                            selectedModel.id.contains("gpt-oss") -> "GPT-OSS 120B"
                                             else -> selectedModel.name
                                         }
                                         Text(
                                             text = shortModelName,
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 14.sp),
                                             color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
-                                        Spacer(Modifier.width(2.dp))
+                                        Spacer(Modifier.width(3.dp))
                                         Icon(
-                                            Icons.Default.ArrowDropDown,
+                                            Icons.Default.KeyboardArrowDown,
                                             contentDescription = "Select Model",
-                                            modifier = Modifier.size(14.dp),
+                                            modifier = Modifier.size(16.dp),
                                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 }
-
-                                Spacer(Modifier.width(4.dp))
-
-                                // Thinking Effort Selector (interactive for Gemini, locked indicator for Claude/GPT-OSS)
-                                if (selectedModel.supportsEffort) {
-                                    Box {
-                                        Surface(
-                                            onClick = { showEffortMenu = true },
-                                            shape = RoundedCornerShape(10.dp),
-                                            color = MaterialTheme.colorScheme.surfaceVariant,
-                                            border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.ElectricBolt,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(13.dp),
-                                                    tint = ClaudeTerracotta
-                                                )
-                                                Spacer(Modifier.width(3.dp))
-                                                Text(
-                                                    text = reasoningEffort.replaceFirstChar { it.uppercase() },
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                                    color = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-                                        DropdownMenu(
-                                            expanded = showEffortMenu,
-                                            onDismissRequest = { showEffortMenu = false }
-                                        ) {
-                                            listOf("high", "medium", "low").forEach { effortOption ->
-                                                DropdownMenuItem(
-                                                    text = {
-                                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                                            Text(
-                                                                text = effortOption.replaceFirstChar { it.uppercase() },
-                                                                fontWeight = if (reasoningEffort == effortOption) FontWeight.Bold else FontWeight.Normal,
-                                                                color = if (reasoningEffort == effortOption) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
-                                                            )
-                                                            if (reasoningEffort == effortOption) {
-                                                                Spacer(Modifier.width(8.dp))
-                                                                Icon(Icons.Default.Check, null, modifier = Modifier.size(15.dp), tint = ClaudeTerracotta)
-                                                            }
-                                                        }
-                                                    },
-                                                    onClick = {
-                                                        viewModel.setReasoningEffort(effortOption)
-                                                        showEffortMenu = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Non-configurable thinking indicator for Claude / GPT-OSS
+                            },
+                            actions = {
+                                if (isTemporaryChat) {
                                     Surface(
                                         onClick = {
-                                            Toast.makeText(
-                                                context,
-                                                "${selectedModel.name} thinking level is fixed to default in Antigravity CLI",
-                                                Toast.LENGTH_SHORT
-                                            ).show()
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            viewModel.toggleTemporaryChat()
                                         },
                                         shape = RoundedCornerShape(10.dp),
                                         color = ClaudeTerracotta.copy(alpha = 0.12f),
-                                        border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.3f))
+                                        border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.4f)),
+                                        modifier = Modifier.padding(end = 2.dp)
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Icon(
-                                                Icons.Default.Lock,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(11.dp),
+                                                Icons.Default.VisibilityOff,
+                                                contentDescription = "Temporary Chat Active",
+                                                modifier = Modifier.size(13.dp),
                                                 tint = ClaudeTerracotta
                                             )
-                                            Spacer(Modifier.width(3.dp))
-                                            Text(
-                                                text = "Thinking",
-                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                                                color = ClaudeTerracotta
-                                            )
                                         }
-                                    }
-                                }
-
-                                // ChatGPT-Style Persistent Memory Button
-                                IconButton(onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    showMemorySheet = true
-                                }) {
-                                    BadgedBox(
-                                        badge = {
-                                            if (enabledMemoriesCount > 0) {
-                                                Badge(
-                                                    containerColor = ClaudeTerracotta,
-                                                    contentColor = Color.White
-                                                ) {
-                                                    Text(text = enabledMemoriesCount.toString(), fontSize = 9.sp)
-                                                }
-                                            }
-                                        }
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Psychology,
-                                            contentDescription = "Manage Memories",
-                                            tint = if (enabledMemoriesCount > 0) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
                                     }
                                 }
 
@@ -515,37 +404,258 @@ fun ChatScreen(
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                IconButton(onClick = {
-                                    val md = viewModel.exportConversationToMarkdown()
-                                    val sendIntent = Intent().apply {
-                                        action = Intent.ACTION_SEND
-                                        putExtra(Intent.EXTRA_TEXT, md)
-                                        type = "text/plain"
+
+                                Box {
+                                    IconButton(onClick = { showMoreMenu = true }) {
+                                        Icon(
+                                            Icons.Default.MoreVert,
+                                            contentDescription = "More options",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
-                                    context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
-                                }) {
-                                    Icon(
-                                        Icons.Default.Share,
-                                        contentDescription = "Share/Export Chat",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                IconButton(onClick = onNavigateToSettings) {
-                                    Icon(
-                                        Icons.Default.Settings,
-                                        contentDescription = "Settings",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+
+                                    DropdownMenu(
+                                        expanded = showMoreMenu,
+                                        onDismissRequest = { showMoreMenu = false }
+                                    ) {
+                                        if (selectedModel.supportsEffort) {
+                                            DropdownMenuItem(
+                                                leadingIcon = {
+                                                    Icon(Icons.Default.ElectricBolt, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(18.dp))
+                                                },
+                                                text = {
+                                                    Column {
+                                                        Text("Thinking Effort", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                                        Text(reasoningEffort.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall, color = ClaudeTerracotta)
+                                                    }
+                                                },
+                                                onClick = {
+                                                    showMoreMenu = false
+                                                    showEffortMenu = true
+                                                }
+                                            )
+                                        }
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Psychology, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text("Memory", style = MaterialTheme.typography.bodyMedium)
+                                                    if (enabledMemoriesCount > 0) {
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Surface(
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            color = ClaudeTerracotta.copy(alpha = 0.15f)
+                                                        ) {
+                                                            Text(
+                                                                "$enabledMemoriesCount",
+                                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                                                color = ClaudeTerracotta,
+                                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                showMemorySheet = true
+                                            }
+                                        )
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Person, contentDescription = null, tint = ChatGptPurple, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = {
+                                                Text(
+                                                    if (customInstructions.isEnabled && (customInstructions.aboutUser.isNotBlank() || customInstructions.responsePreferences.isNotBlank()))
+                                                        "Custom Instructions (Active)" else "Custom Instructions",
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                showCustomInstructionsSheet = true
+                                            }
+                                        )
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(
+                                                    if (isTemporaryChat) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                                    contentDescription = null,
+                                                    tint = if (isTemporaryChat) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            },
+                                            text = {
+                                                Text(
+                                                    if (isTemporaryChat) "Exit Temporary Chat" else "Temporary Chat",
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    color = if (isTemporaryChat) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                viewModel.toggleTemporaryChat()
+                                            }
+                                        )
+
+                                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = { Text("Export Chat", style = MaterialTheme.typography.bodyMedium) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                val md = viewModel.exportConversationToMarkdown()
+                                                val sendIntent = Intent().apply {
+                                                    action = Intent.ACTION_SEND
+                                                    putExtra(Intent.EXTRA_TEXT, md)
+                                                    type = "text/plain"
+                                                }
+                                                context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
+                                            }
+                                        )
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = { Text("Settings & Bridge", style = MaterialTheme.typography.bodyMedium) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onNavigateToSettings()
+                                            }
+                                        )
+                                    }
                                 }
                             },
                             colors = TopAppBarDefaults.topAppBarColors(
                                 containerColor = MaterialTheme.colorScheme.surface
                             )
                         )
+
+                        // If effort dropdown is opened from More menu
+                        if (selectedModel.supportsEffort) {
+                            DropdownMenu(
+                                expanded = showEffortMenu,
+                                onDismissRequest = { showEffortMenu = false }
+                            ) {
+                                listOf("high", "medium", "low").forEach { effortOption ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = effortOption.replaceFirstChar { it.uppercase() },
+                                                    fontWeight = if (reasoningEffort == effortOption) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (reasoningEffort == effortOption) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (reasoningEffort == effortOption) {
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Icon(Icons.Default.Check, null, modifier = Modifier.size(15.dp), tint = ClaudeTerracotta)
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.setReasoningEffort(effortOption)
+                                            showEffortMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
                         HorizontalDivider(
                             thickness = 0.8.dp,
                             color = MaterialTheme.colorScheme.outlineVariant
                         )
+
+                        // Subtle Status Strip / Connection Notice
+                        if (!currentStatus.isNullOrBlank() || connectionState != ConnectionState.CONNECTED) {
+                            Surface(
+                                color = if (connectionState == ConnectionState.CONNECTED) ClaudeTerracotta.copy(alpha = 0.08f)
+                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        if (connectionState != ConnectionState.CONNECTED) {
+                                            val statusText = when (connectionState) {
+                                                ConnectionState.CONNECTING -> "Connecting to Colab bridge…"
+                                                ConnectionState.ERROR -> "Bridge disconnected"
+                                                ConnectionState.DISCONNECTED -> "Bridge offline"
+                                            }
+                                            Text(
+                                                text = statusText,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (connectionState == ConnectionState.ERROR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        } else {
+                                            Text(
+                                                text = currentStatus ?: "",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                                color = ClaudeTerracotta,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+
+                                    if (connectionState == ConnectionState.DISCONNECTED || connectionState == ConnectionState.ERROR) {
+                                        Text(
+                                            text = "Reconnect",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = ClaudeTerracotta,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .clickable { viewModel.reconnect() }
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Temporary Chat Banner
+                        if (isTemporaryChat) {
+                            Surface(
+                                color = ClaudeTerracotta.copy(alpha = 0.10f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.VisibilityOff,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(14.dp),
+                                        tint = ClaudeTerracotta
+                                    )
+                                    Text(
+                                        text = "Temporary Chat · Memory is paused and won't be saved",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTerracotta,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -596,7 +706,7 @@ fun ChatScreen(
                     }
 
                     if (!isSlashActive) {
-                        // Quick-Action Slash Command Chips
+                        // Quick-Action Tool & Slash Command Chips
                         QuickSlashChipsRow(
                             plugins = pluginManager.plugins,
                             onChipClick = { plugin ->
@@ -612,13 +722,17 @@ fun ChatScreen(
                                 } else {
                                     inputText = "${plugin.prefix} "
                                 }
+                            },
+                            onOpenAllTools = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showPluginBottomSheet = true
                             }
                         )
                     }
 
                     Spacer(Modifier.height(6.dp))
 
-                    // Claude Web Floating Input Box with File/Image Attachment & Speech Input
+                    // Modern ChatGPT Floating Composer with File/Image Attachment & Web Search Toggle
                     ClaudeFloatingInputBar(
                         text = inputText,
                         onTextChange = { inputText = it },
@@ -638,6 +752,16 @@ fun ChatScreen(
                         onAttachFile = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             showAttachmentMenu = true
+                        },
+                        onToggleWebSearch = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            if (inputText.startsWith("/browser ")) {
+                                inputText = inputText.removePrefix("/browser ")
+                            } else if (inputText.startsWith("/browser")) {
+                                inputText = inputText.removePrefix("/browser").trimStart()
+                            } else {
+                                inputText = if (inputText.isBlank()) "/browser " else "/browser $inputText"
+                            }
                         },
                         onVoiceInput = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -674,7 +798,12 @@ fun ChatScreen(
                         onPromptCardClick = { prompt ->
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             viewModel.sendMessage(prompt)
-                        }
+                        },
+                        selectedModelName = selectedModel.name,
+                        memoriesCount = enabledMemoriesCount,
+                        hasCustomInstructions = customInstructions.isEnabled && (customInstructions.aboutUser.isNotBlank() || customInstructions.responsePreferences.isNotBlank()),
+                        onOpenMemorySheet = { showMemorySheet = true },
+                        onOpenCustomInstructions = { showCustomInstructionsSheet = true }
                     )
                 } else {
                     LazyColumn(
@@ -692,6 +821,7 @@ fun ChatScreen(
                                 message = msg,
                                 isSpeaking = isSpeaking,
                                 isLastAssistant = isLastAssistant,
+                                onOpenMemory = { showMemorySheet = true },
                                 onToggleThinking = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     viewModel.toggleThinkingExpanded(msg.id)
@@ -786,24 +916,40 @@ fun ChatScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 14.dp)
+                    .padding(horizontal = 20.dp, vertical = 14.dp)
                     .navigationBarsPadding(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Tools & Attachments",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
                 Text(
-                    text = "Add Attachment",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = "MEDIA & FILES",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     AttachmentOptionCard(
                         icon = Icons.Default.PhotoCamera,
                         title = "Camera",
                         subtitle = "Take photo",
+                        accentColor = ClaudeTerracotta,
+                        modifier = Modifier.weight(1f),
                         onClick = {
                             showAttachmentMenu = false
                             try {
@@ -818,6 +964,8 @@ fun ChatScreen(
                         icon = Icons.Default.PhotoLibrary,
                         title = "Gallery",
                         subtitle = "Choose photo",
+                        accentColor = ClaudeTerracotta,
+                        modifier = Modifier.weight(1f),
                         onClick = {
                             showAttachmentMenu = false
                             imagePickerLauncher.launch("image/*")
@@ -828,13 +976,109 @@ fun ChatScreen(
                         icon = Icons.Default.Description,
                         title = "Document",
                         subtitle = "Pick file",
+                        accentColor = ClaudeTerracotta,
+                        modifier = Modifier.weight(1f),
                         onClick = {
                             showAttachmentMenu = false
                             filePickerLauncher.launch("*/*")
                         }
                     )
                 }
-                Spacer(Modifier.height(12.dp))
+
+                HorizontalDivider(thickness = 0.6.dp, color = MaterialTheme.colorScheme.outlineVariant)
+
+                Text(
+                    text = "AI MODES & AGENT CAPABILITIES",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    AttachmentOptionCard(
+                        icon = Icons.Default.Language,
+                        title = "Web Search",
+                        subtitle = "Live web search",
+                        accentColor = ChatGptBlue,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            showAttachmentMenu = false
+                            inputText = if (inputText.startsWith("/browser")) inputText else "/browser $inputText"
+                        }
+                    )
+
+                    AttachmentOptionCard(
+                        icon = Icons.Default.AutoAwesome,
+                        title = "Deep Think",
+                        subtitle = "Multi-step logic",
+                        accentColor = ChatGptPurple,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            showAttachmentMenu = false
+                            inputText = if (inputText.startsWith("/boost")) inputText else "/boost $inputText"
+                        }
+                    )
+
+                    AttachmentOptionCard(
+                        icon = Icons.Default.Assignment,
+                        title = "Plan Mode",
+                        subtitle = "Phased roadmap",
+                        accentColor = ClaudeTerracotta,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            showAttachmentMenu = false
+                            inputText = if (inputText.startsWith("/plan")) inputText else "/plan $inputText"
+                        }
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    AttachmentOptionCard(
+                        icon = Icons.Default.RocketLaunch,
+                        title = "Auto Goal",
+                        subtitle = "Loop till solved",
+                        accentColor = ChatGptEmerald,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            showAttachmentMenu = false
+                            inputText = if (inputText.startsWith("/goal")) inputText else "/goal $inputText"
+                        }
+                    )
+
+                    AttachmentOptionCard(
+                        icon = Icons.Default.Psychology,
+                        title = "Memories",
+                        subtitle = "Saved facts",
+                        accentColor = ClaudeTerracotta,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            showAttachmentMenu = false
+                            showMemorySheet = true
+                        }
+                    )
+
+                    AttachmentOptionCard(
+                        icon = Icons.Default.Person,
+                        title = "Profile",
+                        subtitle = "Instructions",
+                        accentColor = ChatGptPurple,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            showAttachmentMenu = false
+                            showCustomInstructionsSheet = true
+                        }
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
             }
         }
     }
@@ -858,6 +1102,13 @@ fun ChatScreen(
             onDismiss = { showMemorySheet = false }
         )
     }
+
+    if (showCustomInstructionsSheet) {
+        com.agychat.app.ui.settings.CustomInstructionsSheet(
+            viewModel = viewModel,
+            onDismiss = { showCustomInstructionsSheet = false }
+        )
+    }
 }
 
 @Composable
@@ -865,6 +1116,8 @@ fun AttachmentOptionCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
+    accentColor: Color = ClaudeTerracotta,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Surface(
@@ -872,37 +1125,40 @@ fun AttachmentOptionCard(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant),
-        modifier = Modifier.width(96.dp)
+        modifier = modifier
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 16.dp, horizontal = 6.dp),
+            modifier = Modifier.padding(vertical = 12.dp, horizontal = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(ClaudeTerracotta.copy(alpha = 0.12f)),
+                    .background(accentColor.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     icon,
                     contentDescription = title,
-                    tint = ClaudeTerracotta,
-                    modifier = Modifier.size(22.dp)
+                    tint = accentColor,
+                    modifier = Modifier.size(20.dp)
                 )
             }
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -953,11 +1209,20 @@ fun MessageItem(
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: () -> Unit = {},
     onToggleSpeak: () -> Unit = {},
-    onFeedback: (String) -> Unit = {}
+    onFeedback: (String) -> Unit = {},
+    onOpenMemory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     var showUserActions by remember { mutableStateOf(false) }
+    var isCopied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            kotlinx.coroutines.delay(2000)
+            isCopied = false
+        }
+    }
 
     when (message.role) {
         "user" -> {
@@ -967,12 +1232,12 @@ fun MessageItem(
             ) {
                 Box(
                     modifier = Modifier
-                        .widthIn(max = 310.dp)
-                        .clip(RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
+                        .widthIn(max = 320.dp)
+                        .clip(RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp))
                         .clickable { showUserActions = !showUserActions }
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
                     Column {
                         // Display attached image if present
@@ -983,8 +1248,8 @@ fun MessageItem(
                                     contentDescription = "Attached image",
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(max = 200.dp)
-                                        .clip(RoundedCornerShape(12.dp)),
+                                        .heightIn(max = 220.dp)
+                                        .clip(RoundedCornerShape(14.dp)),
                                     contentScale = ContentScale.Crop
                                 )
                                 Spacer(Modifier.height(8.dp))
@@ -992,10 +1257,10 @@ fun MessageItem(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(10.dp))
                                         .background(MaterialTheme.colorScheme.surface)
-                                        .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
-                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                        .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                        .padding(horizontal = 10.dp, vertical = 7.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
@@ -1030,6 +1295,16 @@ fun MessageItem(
                 }
 
                 // Interactive Quick Actions for User Message
+                // Timestamp — tap bubble to reveal
+                AnimatedVisibility(visible = showUserActions) {
+                    Text(
+                        text = formatMessageTime(message.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp, end = 6.dp)
+                    )
+                }
+
                 AnimatedVisibility(visible = showUserActions) {
                     Row(
                         modifier = Modifier.padding(top = 4.dp, end = 4.dp),
@@ -1086,26 +1361,26 @@ fun MessageItem(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Start
             ) {
-                // Claude Avatar with Terracotta Sparkle
+                // Circular Spark Badge Avatar
                 Box(
                     modifier = Modifier
-                        .size(32.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(ClaudeTerracotta),
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(ClaudeTerracotta.copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = "✦",
-                        color = Color.White,
+                        color = ClaudeTerracotta,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 17.sp
+                        fontSize = 16.sp
                     )
                 }
 
                 Spacer(Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    // 1. Thinking Process Card (Claude 3.7 Style)
+                    // 1. Thinking Process Card (Claude 3.7 / Gemini Thinking Style)
                     if (!message.thinking.isNullOrBlank()) {
                         ThinkingAccordionCard(
                             thinkingText = message.thinking,
@@ -1126,9 +1401,51 @@ fun MessageItem(
                         Spacer(Modifier.height(10.dp))
                     }
 
-                    // 3. Main Message Markdown Content
+                    // Autonomous Memory Update Banner (ChatGPT Style)
+                    if (message.memoryUpdates.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier.padding(bottom = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            message.memoryUpdates.forEach { memUpdate ->
+                                Surface(
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = ClaudeTerracotta.copy(alpha = 0.10f),
+                                    border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.35f)),
+                                    modifier = Modifier.clickable { onOpenMemory() }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text("✨", fontSize = 11.sp)
+                                        Text(
+                                            text = "Memory updated: \"$memUpdate\"",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                            color = ClaudeTerracotta,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Icon(
+                                            Icons.Default.ChevronRight,
+                                            contentDescription = null,
+                                            tint = ClaudeTerracotta,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Main Message Markdown Content with streaming cursor (Borderless Canvas Flow)
                     if (message.content.isNotBlank()) {
                         MarkdownContent(text = message.content)
+                    }
+                    // Streaming blinking cursor
+                    if (message.isStreaming && message.content.isNotBlank()) {
+                        StreamingCursorBlink()
                     }
 
                     // 4. Subtle Action Bar below assistant message (ChatGPT & Gemini style)
@@ -1137,20 +1454,28 @@ fun MessageItem(
                             modifier = Modifier.padding(top = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Copy
+                            // Timestamp inline
+                            Text(
+                                text = formatRelativeTime(message.timestamp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            // Copy with checkmark animation
                             IconButton(
                                 onClick = {
                                     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                     cm.setPrimaryClip(ClipData.newPlainText("Response", message.content))
+                                    isCopied = true
                                     Toast.makeText(context, "Copied response to clipboard", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
-                                    Icons.Default.ContentCopy,
+                                    if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
                                     contentDescription = "Copy message",
                                     modifier = Modifier.size(15.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    tint = if (isCopied) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
                             Spacer(Modifier.width(2.dp))
@@ -1260,18 +1585,36 @@ fun MessageItem(
             }
         }
         else -> {
-            // System message pill
+            // System message styled pill
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = 6.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                        .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(20.dp))
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    val isError = message.content.startsWith("⚠️")
+                    Icon(
+                        if (isError) Icons.Default.Warning else Icons.Default.Info,
+                        contentDescription = null,
+                        modifier = Modifier.size(11.dp),
+                        tint = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
+                    )
+                    Text(
+                        text = message.content.removePrefix("⚠️").trim(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3
+                    )
+                }
             }
         }
     }
@@ -1291,9 +1634,9 @@ fun ThinkingAccordionCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(14.dp))
             .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(12.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
             .clickable(onClick = onToggle)
             .padding(12.dp)
     ) {
@@ -1306,14 +1649,13 @@ fun ThinkingAccordionCard(
                 Icon(
                     Icons.Default.AutoAwesome,
                     contentDescription = null,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(15.dp),
                     tint = textColor
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = "Thinking Process",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                     color = textColor
                 )
             }
@@ -1326,15 +1668,30 @@ fun ThinkingAccordionCard(
         }
 
         AnimatedVisibility(visible = isExpanded) {
-            Text(
-                text = thinkingText,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    lineHeight = 18.sp,
-                    fontFamily = FontFamily.Monospace
-                ),
-                color = textColor.copy(alpha = 0.9f),
-                modifier = Modifier.padding(top = 10.dp)
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .heightIn(min = 24.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(textColor.copy(alpha = 0.45f))
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = thinkingText,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        lineHeight = 19.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    ),
+                    color = textColor.copy(alpha = 0.9f),
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
     }
 }
@@ -1717,40 +2074,97 @@ fun ClaudeTypingBubble() {
 }
 
 @Composable
+fun StreamingCursorBlink() {
+    val infiniteTransition = rememberInfiniteTransition(label = "cursor")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 1f, targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = keyframes {
+                durationMillis = 900
+                1f at 0
+                1f at 400
+                0f at 500
+                0f at 900
+            },
+            repeatMode = RepeatMode.Restart
+        ), label = "cursorAlpha"
+    )
+    Box(
+        modifier = Modifier
+            .size(width = 2.dp, height = 16.dp)
+            .clip(RoundedCornerShape(1.dp))
+            .background(ClaudeTerracotta.copy(alpha = alpha))
+    )
+}
+
+
+@Composable
 fun QuickSlashChipsRow(
     plugins: List<PluginItem>,
-    onChipClick: (PluginItem) -> Unit
+    onChipClick: (PluginItem) -> Unit,
+    onOpenAllTools: () -> Unit = {}
 ) {
+    val curatedChips = remember {
+        listOf(
+            Triple("🌐 Search Web", "/browser ", ChatGptBlue),
+            Triple("⚡ Deep Think", "/boost ", ChatGptPurple),
+            Triple("📋 Plan", "/plan ", ClaudeTerracotta),
+            Triple("🎯 Auto Goal", "/goal ", ChatGptEmerald),
+            Triple("🧠 Remember", "/remember ", ClaudeTerracottaDark)
+        )
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        for (p in plugins) {
+        curatedChips.forEach { (label, commandPrefix, accentColor) ->
             Row(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(MaterialTheme.colorScheme.surface)
-                    .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                    .clickable { onChipClick(p) }
-                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                    .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                    .clickable {
+                        val matching = plugins.firstOrNull { it.prefix == commandPrefix.trim() }
+                        if (matching != null) {
+                            onChipClick(matching)
+                        }
+                    }
+                    .padding(horizontal = 11.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    p.icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(12.dp),
-                    tint = ClaudeTerracotta
-                )
-                Spacer(Modifier.width(5.dp))
                 Text(
-                    text = p.prefix,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
+        }
+
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(ClaudeTerracotta.copy(alpha = 0.12f))
+                .border(0.8.dp, ClaudeTerracotta.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+                .clickable { onOpenAllTools() }
+                .padding(horizontal = 11.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Tune,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = ClaudeTerracotta
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "All Tools ✦",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = ClaudeTerracotta
+            )
         }
     }
 }
@@ -1763,35 +2177,40 @@ fun ClaudeFloatingInputBar(
     onStop: () -> Unit = {},
     onOpenPlugins: () -> Unit,
     onAttachFile: () -> Unit,
+    onToggleWebSearch: () -> Unit = {},
     onVoiceInput: () -> Unit = {},
     attachment: AttachmentItem?,
     onRemoveAttachment: () -> Unit,
     isConnected: Boolean,
     isLoading: Boolean
 ) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val isWebSearchActive = text.startsWith("/browser")
+    val canSend = (text.isNotBlank() || attachment != null) && isConnected
+
     Surface(
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(26.dp),
         color = MaterialTheme.colorScheme.surface,
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(2.dp, RoundedCornerShape(24.dp))
-            .border(1.2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+            .shadow(3.dp, RoundedCornerShape(26.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(26.dp))
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-            // Attachment Preview Bar
+            // Attachment Preview Bar (ChatGPT inline preview card)
             AnimatedVisibility(visible = attachment != null) {
                 if (attachment != null) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 6.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
+                            .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
                             .padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1800,22 +2219,22 @@ fun ClaudeFloatingInputBar(
                                 model = attachment.uri,
                                 contentDescription = "Attached image",
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(10.dp)),
                                 contentScale = ContentScale.Crop
                             )
                         } else {
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(10.dp))
                                     .background(ClaudeTerracotta.copy(alpha = 0.14f)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     Icons.Default.InsertDriveFile,
                                     contentDescription = null,
-                                    modifier = Modifier.size(20.dp),
+                                    modifier = Modifier.size(22.dp),
                                     tint = ClaudeTerracotta
                                 )
                             }
@@ -1832,7 +2251,7 @@ fun ClaudeFloatingInputBar(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = if (attachment.isImage) "Image ready to send" else "File ready to send",
+                                text = if (attachment.isImage) "Image attached · Ready to send" else "Document attached · Ready to send",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1840,7 +2259,7 @@ fun ClaudeFloatingInputBar(
 
                         IconButton(
                             onClick = onRemoveAttachment,
-                            modifier = Modifier.size(26.dp)
+                            modifier = Modifier.size(28.dp)
                         ) {
                             Icon(
                                 Icons.Default.Close,
@@ -1858,41 +2277,57 @@ fun ClaudeFloatingInputBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom
             ) {
-                // Plugins drawer button (+)
+                // Plus button (+) for Attachments, Camera & Tools
                 IconButton(
-                    onClick = onOpenPlugins,
+                    onClick = onAttachFile,
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     Icon(
                         Icons.Default.Add,
-                        contentDescription = "Slash Plugins",
-                        tint = ClaudeTerracotta,
-                        modifier = Modifier.size(18.dp)
+                        contentDescription = "Add attachment or tool",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
 
                 Spacer(Modifier.width(4.dp))
 
-                // Attach File / Image Button (Paperclip)
-                IconButton(
-                    onClick = onAttachFile,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                // Quick Web Search Toggle Pill
+                Surface(
+                    onClick = onToggleWebSearch,
+                    shape = RoundedCornerShape(16.dp),
+                    color = if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.15f) else Color.Transparent,
+                    border = androidx.compose.foundation.BorderStroke(
+                        0.8.dp,
+                        if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier.padding(bottom = 2.dp)
                 ) {
-                    Icon(
-                        Icons.Default.AttachFile,
-                        contentDescription = "Attach file or image",
-                        tint = if (attachment != null) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Language,
+                            contentDescription = "Toggle Web Search",
+                            modifier = Modifier.size(14.dp),
+                            tint = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (isWebSearchActive) {
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                text = "Search",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                color = ChatGptBlue
+                            )
+                        }
+                    }
                 }
 
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.dp))
 
                 // Multi-line Text input
                 OutlinedTextField(
@@ -1903,9 +2338,9 @@ fun ClaudeFloatingInputBar(
                         .padding(vertical = 2.dp),
                     placeholder = {
                         Text(
-                            if (isConnected) "Message Next AI or type /..." else "Connect in Settings to chat...",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            if (isConnected) "Message Next AI..." else "Connect in Settings to chat...",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
                         )
                     },
                     maxLines = 6,
@@ -1922,11 +2357,22 @@ fun ClaudeFloatingInputBar(
                     )
                 )
 
-                // Voice Dictation (Mic) or Clear (✕)
+                // Character count hint (shows when typing a long message)
+                if (text.length > 100) {
+                    Text(
+                        text = "${text.length}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                        color = if (text.length > 2000) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(end = 2.dp, bottom = 8.dp)
+                    )
+                }
+
+                // Clear (✕) Button if text non-empty
                 if (text.isNotBlank()) {
                     IconButton(
                         onClick = { onTextChange("") },
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(32.dp).padding(bottom = 2.dp)
                     ) {
                         Icon(
                             Icons.Default.Close,
@@ -1935,54 +2381,55 @@ fun ClaudeFloatingInputBar(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                } else {
-                    IconButton(
-                        onClick = onVoiceInput,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Mic,
-                            contentDescription = "Voice dictation",
-                            tint = ClaudeTerracotta,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
                 }
 
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(2.dp))
 
-                // Claude Circular Send Button or Stop Generation Button
+                // Modern ChatGPT Dynamic Send / Stop / Mic Button
                 if (isLoading) {
                     FilledIconButton(
                         onClick = onStop,
-                        modifier = Modifier.size(38.dp),
+                        modifier = Modifier.size(36.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.error,
-                            contentColor = Color.White
+                            containerColor = MaterialTheme.colorScheme.onSurface,
+                            contentColor = MaterialTheme.colorScheme.surface
                         )
                     ) {
                         Icon(
                             Icons.Default.Stop,
                             contentDescription = "Stop Generating",
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.surface,
                             modifier = Modifier.size(18.dp)
                         )
                     }
-                } else {
-                    val canSend = (text.isNotBlank() || attachment != null) && isConnected
+                } else if (canSend) {
                     FilledIconButton(
                         onClick = onSend,
-                        enabled = canSend,
-                        modifier = Modifier.size(38.dp),
+                        modifier = Modifier.size(36.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = ClaudeTerracotta,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            containerColor = if (isDark) Color.White else Color(0xFF0D0D0D),
+                            contentColor = if (isDark) Color.Black else Color.White
                         )
                     ) {
                         Icon(
                             Icons.Default.ArrowUpward,
                             contentDescription = "Send",
-                            tint = if (canSend) Color.White else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                            tint = if (isDark) Color.Black else Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = onVoiceInput,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = "Voice dictation",
+                            tint = ClaudeTerracotta,
                             modifier = Modifier.size(18.dp)
                         )
                     }
@@ -1995,19 +2442,25 @@ fun ClaudeFloatingInputBar(
 @Composable
 fun EmptyChatGreeting(
     plugins: List<PluginItem>,
-    onPromptCardClick: (String) -> Unit
+    onPromptCardClick: (String) -> Unit,
+    selectedModelName: String = "Next AI",
+    memoriesCount: Int = 0,
+    hasCustomInstructions: Boolean = false,
+    onOpenMemorySheet: () -> Unit = {},
+    onOpenCustomInstructions: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 28.dp),
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Claude Terracotta Star Halo
+        // Minimalist Centered Spark Emblem
         Box(
             modifier = Modifier
-                .size(68.dp)
+                .size(52.dp)
                 .clip(CircleShape)
                 .background(ClaudeTerracotta.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center
@@ -2015,56 +2468,121 @@ fun EmptyChatGreeting(
             Text(
                 text = "✦",
                 color = ClaudeTerracotta,
-                fontSize = 36.sp,
+                fontSize = 28.sp,
                 fontWeight = FontWeight.Bold
             )
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
 
         Text(
-            text = "How can I help you today?",
-            style = MaterialTheme.typography.headlineSmall.copy(
+            text = "What can I help with?",
+            style = MaterialTheme.typography.headlineMedium.copy(
                 fontWeight = FontWeight.SemiBold,
-                letterSpacing = (-0.4).sp
+                letterSpacing = (-0.5).sp,
+                fontSize = 25.sp
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(8.dp))
 
-        Text(
-            text = "Connected to Antigravity CLI in Google Colab",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // Context Status Badges (Model, Memories, Custom Instructions)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "✦",
+                        color = ClaudeTerracotta,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = selectedModelName,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
 
-        Spacer(Modifier.height(26.dp))
+            if (memoriesCount > 0) {
+                Surface(
+                    onClick = onOpenMemorySheet,
+                    shape = RoundedCornerShape(12.dp),
+                    color = ClaudeTerracotta.copy(alpha = 0.12f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "🧠 $memoriesCount memories",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                            color = ClaudeTerracotta
+                        )
+                    }
+                }
+            }
 
-        // ChatGPT / Gemini Style Suggestion Cards
+            if (hasCustomInstructions) {
+                Surface(
+                    onClick = onOpenCustomInstructions,
+                    shape = RoundedCornerShape(12.dp),
+                    color = ChatGptPurple.copy(alpha = 0.12f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, ChatGptPurple.copy(alpha = 0.35f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "👤 Profile Active",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                            color = ChatGptPurple
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        // Modern 2x2 Action Starter Grid (ChatGPT Web & App Style)
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             val starterPrompts = listOf(
-                Triple("💡 Brainstorm Ideas", "Explore creative concepts and solutions", "/boost brainstorm creative project ideas"),
-                Triple("💻 Write & Debug Code", "Inspect codebase, find bugs, or optimize", "/boost analyze codebase architecture and improve it"),
-                Triple("📋 Phased Roadmap", "Plan feature delivery with step-by-step phases", "/plan design next sprint features step by step"),
-                Triple("🌐 Real-time Web Search", "Search latest docs, releases, and information", "/browser search for latest Jetpack Compose features")
+                Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
+                Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
+                Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
+                Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
             )
 
             for ((title, subtitle, prompt) in starterPrompts) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .clickable { onPromptCardClick(prompt) },
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.surface,
                     border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
@@ -2073,6 +2591,7 @@ fun EmptyChatGreeting(
                                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+                            Spacer(Modifier.height(2.dp))
                             Text(
                                 text = subtitle,
                                 style = MaterialTheme.typography.bodySmall,
@@ -2082,7 +2601,7 @@ fun EmptyChatGreeting(
                         Icon(
                             Icons.Default.ArrowForward,
                             contentDescription = null,
-                            modifier = Modifier.size(15.dp),
+                            modifier = Modifier.size(16.dp),
                             tint = ClaudeTerracotta
                         )
                     }
@@ -2099,9 +2618,15 @@ fun HistoryDrawerContent(
     onSelectConversation: (String) -> Unit,
     onNewChat: () -> Unit,
     onDelete: (String) -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenMemory: () -> Unit = {},
+    onOpenCustomInstructions: () -> Unit = {}
 ) {
-    val dateFormat = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault())
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredConversations = remember(conversations, searchQuery) {
+        if (searchQuery.isBlank()) conversations
+        else conversations.filter { it.title.contains(searchQuery, ignoreCase = true) }
+    }
 
     ModalDrawerSheet(
         modifier = Modifier.width(310.dp),
@@ -2110,7 +2635,7 @@ fun HistoryDrawerContent(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(18.dp)
+                .padding(16.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2125,7 +2650,7 @@ fun HistoryDrawerContent(
                 )
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
 
             Button(
                 onClick = onNewChat,
@@ -2138,87 +2663,212 @@ fun HistoryDrawerContent(
                 Text("Start New Chat", color = Color.White, fontWeight = FontWeight.SemiBold)
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
 
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(conversations, key = { it.id }) { conv ->
-                    val isActive = conv.id == activeId
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isActive) ClaudeTerracotta.copy(alpha = 0.12f)
-                                else Color.Transparent
-                            )
-                            .clickable { onSelectConversation(conv.id) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.ChatBubbleOutline,
-                            contentDescription = null,
-                            modifier = Modifier.size(17.dp),
-                            tint = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.outline
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = conv.title.ifBlank { "Untitled Chat" },
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
-                                ),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = dateFormat.format(Date(conv.updatedAt)),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                        }
+            // Real-time Chat Search Bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = {
+                    Text(
+                        "Search chats...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = "Search",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
                         IconButton(
-                            onClick = { onDelete(conv.id) },
+                            onClick = { searchQuery = "" },
                             modifier = Modifier.size(24.dp)
                         ) {
                             Icon(
                                 Icons.Default.Close,
-                                contentDescription = "Delete",
+                                contentDescription = "Clear",
                                 modifier = Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.outline
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedBorderColor = ClaudeTerracotta,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                )
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // Group conversations by date
+            val now = System.currentTimeMillis()
+            val todayStart = now - (now % 86_400_000)
+            val yesterdayStart = todayStart - 86_400_000
+            val grouped = filteredConversations.groupBy { conv ->
+                when {
+                    conv.updatedAt >= todayStart -> "Today"
+                    conv.updatedAt >= yesterdayStart -> "Yesterday"
+                    else -> "Older"
+                }
+            }
+            val groupOrder = listOf("Today", "Yesterday", "Older")
+
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                groupOrder.forEach { groupName ->
+                    val groupConvs = grouped[groupName] ?: return@forEach
+                    item(key = "header_$groupName") {
+                        Text(
+                            text = groupName,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp)
+                        )
+                    }
+                    items(groupConvs, key = { it.id }) { conv ->
+                        val isActive = conv.id == activeId
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isActive) ClaudeTerracotta.copy(alpha = 0.12f)
+                                    else Color.Transparent
+                                )
+                                .clickable { onSelectConversation(conv.id) }
+                                .padding(horizontal = 10.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(if (isActive) 8.dp else 6.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isActive) ClaudeTerracotta
+                                        else MaterialTheme.colorScheme.outlineVariant
+                                    )
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = conv.title.ifBlank { "Untitled Chat" },
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = formatRelativeTime(conv.updatedAt),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.outline
+                                )
+                            }
+                            IconButton(
+                                onClick = { onDelete(conv.id) },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Delete",
+                                    modifier = Modifier.size(12.dp),
+                                    tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+                                )
+                            }
                         }
                     }
                 }
             }
 
             HorizontalDivider(
-                modifier = Modifier.padding(vertical = 12.dp),
+                modifier = Modifier.padding(vertical = 10.dp),
                 thickness = 0.8.dp,
                 color = MaterialTheme.colorScheme.outlineVariant
             )
 
+            // Personalization & Memory Shortcut
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onOpenMemory)
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Psychology,
+                    contentDescription = null,
+                    tint = ClaudeTerracotta,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Memory & Personalization",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            // Custom Instructions Shortcut
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onOpenCustomInstructions)
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Person,
+                    contentDescription = null,
+                    tint = ChatGptPurple,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "Custom Instructions",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+
+            // Settings Shortcut
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .clickable(onClick = onOpenSettings)
-                    .padding(10.dp),
+                    .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     Icons.Default.Settings,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
                 Spacer(Modifier.width(10.dp))
                 Text(
-                    "Settings & Colab Tunnel",
-                    style = MaterialTheme.typography.bodyMedium,
+                    "Settings & Bridge",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }

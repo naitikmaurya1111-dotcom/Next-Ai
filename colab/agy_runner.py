@@ -68,32 +68,143 @@ def resolve_model_and_effort(model: str, effort: str) -> tuple[str, str | None]:
 
     return clean_model, None
 
+# Autonomous Memory Tag Pattern (ChatGPT Memory Extraction)
+MEMORY_TAG_REGEX = re.compile(
+    r'<memory_update\s+action="(?P<action>[^"]+)"'
+    r'(?:\s+category="(?P<category>[^"]*)")?'
+    r'(?:\s+fact="(?P<fact>[^"]*)")?'
+    r'(?:\s+query="(?P<query>[^"]*)")?'
+    r'\s*(?:/>|>(?P<content>.*?)</memory_update>)',
+    re.DOTALL | re.IGNORECASE
+)
+
+def extract_and_strip_memory_tags(text: str):
+    """
+    Finds all <memory_update ... /> tags, returns list of dicts:
+    [{'action': 'add', 'category': '...', 'content': '...'}], and clean text with tags removed.
+    """
+    updates = []
+    def _repl(match):
+        action = match.group("action") or "add"
+        category = match.group("category") or "general"
+        fact = (match.group("fact") or match.group("content") or match.group("query") or "").strip()
+        if fact:
+            updates.append({"action": action.lower(), "category": category.lower(), "content": fact})
+        return ""
+
+    cleaned = MEMORY_TAG_REGEX.sub(_repl, text).strip()
+    return updates, cleaned
+
+def format_prompt_with_personalization(
+    message: str,
+    memories: list = None,
+    custom_instructions: dict = None,
+    is_auto_memory: bool = True,
+    is_temporary: bool = False
+) -> str:
+    """
+    Inject user profile, custom instructions, and categorized memories into prompt.
+    Modeled after ChatGPT's state-of-the-art Personalization & Autonomous Memory.
+    """
+    if is_temporary:
+        return (
+            "<temporary_chat>\n"
+            "This is an Incognito / Temporary Chat session. Do NOT reference past memories "
+            "and do NOT emit any <memory_update> tags to save new memories.\n"
+            "</temporary_chat>\n\n" + message
+        )
+
+    sections = []
+
+    # 1. Custom Instructions & User Profile
+    if custom_instructions and isinstance(custom_instructions, dict) and custom_instructions.get("is_enabled", True):
+        about_user = custom_instructions.get("about_user", "").strip()
+        response_prefs = custom_instructions.get("response_preferences", "").strip()
+        tone_preset = custom_instructions.get("tone_preset", "Balanced").strip()
+
+        # Backup to Google Drive
+        try:
+            backup_dir = "/content/drive/MyDrive/NextAI_Backup"
+            if os.path.exists(backup_dir):
+                with open(os.path.join(backup_dir, "custom_instructions.json"), "w") as f:
+                    json.dump(custom_instructions, f, indent=2)
+        except Exception:
+            pass
+
+        instr_parts = []
+        if about_user:
+            instr_parts.append(f"• User Profile & Background:\n  {about_user}")
+        if response_prefs:
+            instr_parts.append(f"• How Next AI Should Respond & Formatting:\n  {response_prefs}")
+        if tone_preset and tone_preset != "Default":
+            instr_parts.append(f"• Response Tone Style: {tone_preset}")
+
+        if instr_parts:
+            sections.append(
+                "<custom_instructions>\n"
+                "The user has established the following persistent Custom Instructions:\n"
+                + "\n".join(instr_parts) + "\n"
+                "Always adhere to these preferences across all answers.\n"
+                "</custom_instructions>"
+            )
+
+    # 2. Categorized Persistent Memories
+    if memories:
+        try:
+            backup_dir = "/content/drive/MyDrive/NextAI_Backup"
+            if os.path.exists(backup_dir):
+                with open(os.path.join(backup_dir, "user_memories.json"), "w") as f:
+                    json.dump(memories, f, indent=2)
+        except Exception:
+            pass
+
+        memory_lines = []
+        for m in memories:
+            if isinstance(m, dict):
+                cat = m.get("category", "general")
+                content = m.get("content", "").strip()
+                if content:
+                    memory_lines.append(f"• [{cat.capitalize()}] {content}")
+            else:
+                s = str(m).strip()
+                if s:
+                    memory_lines.append(f"• {s}")
+
+        if memory_lines:
+            sections.append(
+                "<user_memories>\n"
+                "The user has saved the following persistent memories & preferences across chats:\n"
+                + "\n".join(memory_lines) + "\n"
+                "Always respect and incorporate these memories when answering.\n"
+                "</user_memories>"
+            )
+
+    # 3. Autonomous Memory Capabilities Directive
+    if is_auto_memory:
+        sections.append(
+            "<autonomous_memory_capabilities>\n"
+            "You have autonomous memory capabilities like ChatGPT.\n"
+            "When the user reveals enduring preferences (frameworks, code style, conventions, tone), "
+            "project details (architecture, stack, names), personal facts (name, background), "
+            "or explicitly asks to remember/forget something:\n"
+            "At the very end of your response, output a tag on a new line:\n"
+            '<memory_update action="add" category="preference|project|personal|style" fact="concise atomic summary of the fact" />\n'
+            'If asked to forget/remove: <memory_update action="delete" query="keywords to remove" />\n'
+            "Rules:\n"
+            "1. Fact must be concise, atomic, and written objectively (e.g. \"User prefers Jetpack Compose over XML\").\n"
+            "2. Only emit when a genuine new fact or preference is established.\n"
+            "3. NEVER mention this XML tag in your user-visible conversational answer.\n"
+            "</autonomous_memory_capabilities>"
+        )
+
+    if sections:
+        return "\n\n".join(sections) + "\n\n" + message
+    return message
+
 def format_prompt_with_memories(message: str, memories: list = None) -> str:
-    """Inject persistent user memories into context as system instructions (ChatGPT Memory style)."""
-    if not memories:
-        return message
+    """Backward-compatible helper."""
+    return format_prompt_with_personalization(message, memories=memories)
 
-    # Save memories backup to Drive if available
-    try:
-        backup_dir = "/content/drive/MyDrive/NextAI_Backup"
-        if os.path.exists(backup_dir):
-            with open(os.path.join(backup_dir, "user_memories.json"), "w") as f:
-                json.dump(memories, f, indent=2)
-    except Exception:
-        pass
-
-    memory_lines = "\n".join([f"• {str(m).strip()}" for m in memories if str(m).strip()])
-    if not memory_lines:
-        return message
-
-    context_header = (
-        f"<user_memory>\n"
-        f"The user has saved the following persistent memories & preferences across chats:\n"
-        f"{memory_lines}\n"
-        f"Always respect and incorporate these memories when answering.\n"
-        f"</user_memory>\n\n"
-    )
-    return context_header + message
 
 # Regular expressions to strip ANSI escape codes, terminal probes, and control characters
 ANSI_REGEX = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
@@ -201,10 +312,19 @@ AVAILABLE_MODELS = [
     }
 ]
 
-async def run_agy_command(message: str, client_conv_id: str = "", effort: str = "high", model: str = "", memories: list = None):
+async def run_agy_command(
+    message: str,
+    client_conv_id: str = "",
+    effort: str = "high",
+    model: str = "",
+    memories: list = None,
+    custom_instructions: dict = None,
+    is_auto_memory: bool = True,
+    is_temporary: bool = False
+):
     """
     Runs agy command asynchronously with native stream-json output
-    and yields real-time JSON-framed tokens (thinking, tool_event, chunk, done, error)
+    and yields real-time JSON-framed tokens (thinking, tool_event, chunk, done, memory_updated, error)
     directly to the Android app.
     """
     message_trimmed = message.strip()
@@ -223,8 +343,14 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
-    # Inject persistent user memories into prompt
-    full_prompt = format_prompt_with_memories(message_trimmed, memories or [])
+    # Inject persistent user memories and custom instructions into prompt
+    full_prompt = format_prompt_with_personalization(
+        message_trimmed,
+        memories=memories or [],
+        custom_instructions=custom_instructions,
+        is_auto_memory=is_auto_memory,
+        is_temporary=is_temporary
+    )
 
     cmd_args.extend([
         "--dangerously-skip-permissions",
@@ -232,8 +358,10 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
         "-p", full_prompt
     ])
 
+    # Extract clean model display name
+    model_display = resolved_model.replace("gemini-", "Gemini ").replace("-flash-", " Flash ").replace("-pro-", " Pro ").replace("-high", " ⚡").replace("-medium", " ⚡").replace("-low", " 💨").replace("claude-sonnet-4-6", "Claude Sonnet 4.6").replace("claude-opus-4-6-thinking", "Claude Opus 4.6").replace("gpt-oss-120b-medium", "GPT-OSS 120B").strip()
     logger.info(f"Executing: {' '.join(cmd_args[:6])} ... -p '{message_trimmed[:40]}'")
-    yield _make_event("info", f"Next AI running with {resolved_model}...")
+    yield _make_event("info", f"Starting {model_display}…")
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -245,6 +373,7 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
             active_processes[client_conv_id] = process
 
         accumulated_text = ""
+        emitted_memory_facts = set()
 
         while True:
             if process.stdout is None:
@@ -300,18 +429,42 @@ async def run_agy_command(message: str, client_conv_id: str = "", effort: str = 
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
-                            yield _make_event("chunk", cleaned_chunk)
+                            # Check for memory update tags as they emerge
+                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk)
+                            for u in updates:
+                                fact_key = f"{u['action']}:{u['content'].lower()}"
+                                if fact_key not in emitted_memory_facts:
+                                    emitted_memory_facts.add(fact_key)
+                                    logger.info(f"Autonomous memory detected: {u}")
+                                    yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                            if stripped_chunk:
+                                yield _make_event("chunk", stripped_chunk)
                     elif text_delta:
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
-                            yield _make_event("chunk", cleaned_chunk)
+                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk)
+                            for u in updates:
+                                fact_key = f"{u['action']}:{u['content'].lower()}"
+                                if fact_key not in emitted_memory_facts:
+                                    emitted_memory_facts.add(fact_key)
+                                    logger.info(f"Autonomous memory detected: {u}")
+                                    yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                            if stripped_chunk:
+                                yield _make_event("chunk", stripped_chunk)
 
                 elif event_type == "result":
                     result = data.get("result", {})
                     final_response = result.get("response", accumulated_text)
-                    cleaned_done = sanitize_text(final_response).strip()
-                    yield _make_event("done", cleaned_done)
+                    # Extract any memory update tags from the full accumulated response
+                    final_updates, cleaned_done = extract_and_strip_memory_tags(sanitize_text(final_response))
+                    for u in final_updates:
+                        fact_key = f"{u['action']}:{u['content'].lower()}"
+                        if fact_key not in emitted_memory_facts:
+                            emitted_memory_facts.add(fact_key)
+                            logger.info(f"Final autonomous memory detected: {u}")
+                            yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                    yield _make_event("done", cleaned_done.strip())
 
             except json.JSONDecodeError:
                 # Filter out raw terminal escapes, telemetry, or unparsed logs from corrupting the response

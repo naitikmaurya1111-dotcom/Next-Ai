@@ -17,6 +17,7 @@ import com.agychat.app.domain.model.ModelRegistry
 import com.agychat.app.domain.model.SlashCommand
 import com.agychat.app.domain.model.ToolExecutionItem
 import com.agychat.app.domain.model.WsEvent
+import com.agychat.app.domain.model.CustomInstructions
 import com.agychat.app.data.local.MemoryDao
 import com.agychat.app.data.local.MemoryEntity
 import com.agychat.app.domain.model.ThinkingLevel
@@ -44,14 +45,53 @@ class ChatViewModel @Inject constructor(
     // ChatGPT-Style Persistent Memory System
     val memories = memoryDao.getAllMemoriesFlow()
     val enabledMemoriesCount = memoryDao.getEnabledCountFlow()
+    private var currentMemoriesList: List<MemoryEntity> = emptyList()
 
     private val _isMemoryEnabled = MutableStateFlow(true)
     val isMemoryEnabled: StateFlow<Boolean> = _isMemoryEnabled.asStateFlow()
+
+    private val _isAutoMemoryEnabled = MutableStateFlow(true)
+    val isAutoMemoryEnabled: StateFlow<Boolean> = _isAutoMemoryEnabled.asStateFlow()
+
+    private val _customInstructions = MutableStateFlow(CustomInstructions())
+    val customInstructions: StateFlow<CustomInstructions> = _customInstructions.asStateFlow()
+
+    private val _isTemporaryChat = MutableStateFlow(false)
+    val isTemporaryChat: StateFlow<Boolean> = _isTemporaryChat.asStateFlow()
 
     fun setMemoryEnabled(enabled: Boolean) {
         _isMemoryEnabled.value = enabled
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
         prefs.edit().putBoolean("memory_enabled", enabled).apply()
+    }
+
+    fun setAutoMemoryEnabled(enabled: Boolean) {
+        _isAutoMemoryEnabled.value = enabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("auto_memory_enabled", enabled).apply()
+    }
+
+    fun saveCustomInstructions(instructions: CustomInstructions) {
+        _customInstructions.value = instructions
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("custom_about_user", instructions.aboutUser)
+            .putString("custom_response_prefs", instructions.responsePreferences)
+            .putString("custom_tone_preset", instructions.tonePreset)
+            .putBoolean("custom_instructions_enabled", instructions.isEnabled)
+            .apply()
+    }
+
+    fun toggleTemporaryChat() {
+        _isTemporaryChat.value = !_isTemporaryChat.value
+        startNewConversation()
+    }
+
+    fun setTemporaryChat(enabled: Boolean) {
+        if (_isTemporaryChat.value != enabled) {
+            _isTemporaryChat.value = enabled
+            startNewConversation()
+        }
     }
 
     fun addMemory(content: String, category: String = "general") {
@@ -83,6 +123,73 @@ class ChatViewModel @Inject constructor(
     fun clearAllMemories() {
         viewModelScope.launch {
             memoryDao.clearAllMemories()
+        }
+    }
+
+    fun editMemory(id: String, content: String, category: String) {
+        viewModelScope.launch {
+            memoryDao.updateMemoryContent(id, content.trim(), category, System.currentTimeMillis())
+        }
+    }
+
+    fun exportMemoriesJson(): String {
+        return try {
+            val list = currentMemoriesList
+            val array = org.json.JSONArray()
+            list.forEach { mem ->
+                val obj = JSONObject().apply {
+                    put("content", mem.content)
+                    put("category", mem.category)
+                    put("isEnabled", mem.isEnabled)
+                    put("createdAt", mem.createdAt)
+                }
+                array.put(obj)
+            }
+            array.toString(2)
+        } catch (e: Exception) {
+            "[]"
+        }
+    }
+
+    fun importMemoriesJson(jsonStr: String): Boolean {
+        return try {
+            val array = org.json.JSONArray(jsonStr.trim())
+            val entities = mutableListOf<MemoryEntity>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val content = obj.optString("content", "")
+                if (content.isNotBlank()) {
+                    entities.add(
+                        MemoryEntity(
+                            id = UUID.randomUUID().toString(),
+                            content = content.trim(),
+                            category = obj.optString("category", "preference"),
+                            isEnabled = obj.optBoolean("isEnabled", true),
+                            createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+            }
+            if (entities.isNotEmpty()) {
+                viewModelScope.launch {
+                    memoryDao.insertAll(entities)
+                }
+                true
+            } else false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun forgetMemory(query: String) {
+        viewModelScope.launch {
+            val count = memoryDao.deleteMemoriesMatching(query.trim())
+            if (count > 0) {
+                appendSystemMessage("🗑️ Forgot $count memory/memories matching \"$query\"")
+            } else {
+                appendSystemMessage("ℹ️ No memories found matching \"$query\"")
+            }
         }
     }
 
@@ -157,7 +264,25 @@ class ChatViewModel @Inject constructor(
         val savedMemoryEnabled = prefs.getBoolean("memory_enabled", true)
         _isMemoryEnabled.value = savedMemoryEnabled
 
-        val savedUrl = prefs.getString("server_url", "wss://fell-worldwide-mistakes-asks.trycloudflare.com/ws")
+        val savedAutoMemory = prefs.getBoolean("auto_memory_enabled", true)
+        _isAutoMemoryEnabled.value = savedAutoMemory
+
+        val savedCustomEnabled = prefs.getBoolean("custom_instructions_enabled", true)
+        val savedAbout = prefs.getString("custom_about_user", "") ?: ""
+        val savedResp = prefs.getString("custom_response_prefs", "") ?: ""
+        val savedTone = prefs.getString("custom_tone_preset", "Balanced") ?: "Balanced"
+        _customInstructions.value = CustomInstructions(
+            aboutUser = savedAbout,
+            responsePreferences = savedResp,
+            tonePreset = savedTone,
+            isEnabled = savedCustomEnabled
+        )
+
+        viewModelScope.launch {
+            memories.collectLatest { currentMemoriesList = it }
+        }
+
+        val savedUrl = prefs.getString("server_url", "wss://ends-acid-risks-revised.trycloudflare.com/ws")
         if (!savedUrl.isNullOrBlank()) {
             connectToServer(savedUrl)
         }
@@ -182,17 +307,21 @@ class ChatViewModel @Inject constructor(
                     is WsEvent.Connected -> {
                         _connectionState.value = ConnectionState.CONNECTED
                         _currentStatus.value = null
+                        reconnectAttempts = 0
+                        reconnectJob?.cancel()
                     }
                     is WsEvent.Message -> handleIncomingMessage(event.text)
                     is WsEvent.Error -> {
                         _connectionState.value = ConnectionState.ERROR
                         _isLoading.value = false
-                        _currentStatus.value = "Disconnected. Tap to retry."
+                        _currentStatus.value = "Connection lost. Retrying..."
+                        scheduleAutoReconnect()
                     }
                     is WsEvent.Closed -> {
                         _connectionState.value = ConnectionState.DISCONNECTED
                         _isLoading.value = false
                         _currentStatus.value = null
+                        scheduleAutoReconnect()
                     }
                 }
             }
@@ -204,6 +333,28 @@ class ChatViewModel @Inject constructor(
         val url = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
         if (url.isNotBlank()) {
             connectToServer(url)
+        }
+    }
+
+    // Auto-reconnect with exponential backoff
+    private var reconnectJob: Job? = null
+    private var reconnectAttempts = 0
+
+    private fun scheduleAutoReconnect() {
+        reconnectJob?.cancel()
+        if (reconnectAttempts >= 5) {
+            _currentStatus.value = "Connection failed. Tap to retry manually."
+            reconnectAttempts = 0
+            return
+        }
+        val delayMs = minOf(2000L * (1 shl reconnectAttempts), 30_000L) // 2s, 4s, 8s, 16s, 30s
+        reconnectAttempts++
+        reconnectJob = viewModelScope.launch {
+            _currentStatus.value = "Reconnecting in ${delayMs / 1000}s... (attempt $reconnectAttempts)"
+            delay(delayMs)
+            if (_connectionState.value != ConnectionState.CONNECTED) {
+                reconnect()
+            }
         }
     }
 
@@ -223,6 +374,9 @@ class ChatViewModel @Inject constructor(
             val content = json.optString("content", "")
 
             when (type) {
+                "ping" -> {
+                    // Server keep-alive heartbeat to prevent Cloudflare 100s timeout
+                }
                 "connected" -> {
                     _connectionState.value = ConnectionState.CONNECTED
                     _currentStatus.value = null
@@ -241,6 +395,14 @@ class ChatViewModel @Inject constructor(
                         handleToolEvent(json)
                     } else {
                         updateToolStatus(content)
+                    }
+                }
+                "memory_updated" -> {
+                    val action = json.optString("action", "add")
+                    val memContent = json.optString("content", "")
+                    val category = json.optString("category", "general")
+                    if (memContent.isNotBlank()) {
+                        handleAutonomousMemoryUpdate(action, memContent, category)
                     }
                 }
                 "chunk" -> {
@@ -263,6 +425,46 @@ class ChatViewModel @Inject constructor(
             }
         } catch (e: Exception) {
             // Never append unparsed JSON or raw control text directly into message content
+        }
+    }
+
+    private fun handleAutonomousMemoryUpdate(action: String, content: String, category: String) {
+        if (!_isAutoMemoryEnabled.value || _isTemporaryChat.value) return
+        viewModelScope.launch {
+            if (action == "add") {
+                val existing = memoryDao.findMemoryByExactContent(content)
+                if (existing == null) {
+                    memoryDao.insertMemory(
+                        MemoryEntity(
+                            id = UUID.randomUUID().toString(),
+                            content = content.trim(),
+                            category = category,
+                            isEnabled = true,
+                            createdAt = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                // Attach memory update tag to the currently active assistant message
+                val currentMessages = _messages.value.toMutableList()
+                val targetIndex = currentMessages.indexOfLast { it.role == "assistant" }
+                if (targetIndex != -1) {
+                    val target = currentMessages[targetIndex]
+                    if (!target.memoryUpdates.contains(content)) {
+                        currentMessages[targetIndex] = target.copy(memoryUpdates = target.memoryUpdates + content)
+                        _messages.value = currentMessages
+                    }
+                }
+            } else if (action == "delete") {
+                memoryDao.deleteMemoriesMatching(content)
+                val currentMessages = _messages.value.toMutableList()
+                val targetIndex = currentMessages.indexOfLast { it.role == "assistant" }
+                if (targetIndex != -1) {
+                    val target = currentMessages[targetIndex]
+                    currentMessages[targetIndex] = target.copy(memoryUpdates = target.memoryUpdates + "Removed: $content")
+                    _messages.value = currentMessages
+                }
+            }
         }
     }
 
@@ -496,12 +698,18 @@ class ChatViewModel @Inject constructor(
             return
         }
 
-        // Automatic Memory Detection: If user starts with /remember
+        // Natural language & slash commands for memory management
         if (trimmed.startsWith("/remember", ignoreCase = true)) {
             val memContent = trimmed.removePrefix("/remember").removePrefix(":").trim()
             if (memContent.isNotBlank()) {
                 addMemory(memContent, "preference")
                 appendSystemMessage("🧠 Saved to Memory: \"$memContent\"")
+            }
+        } else if (trimmed.startsWith("/forget", ignoreCase = true)) {
+            val query = trimmed.removePrefix("/forget").removePrefix(":").trim()
+            if (query.isNotBlank()) {
+                forgetMemory(query)
+                return
             }
         }
 
@@ -516,7 +724,9 @@ class ChatViewModel @Inject constructor(
         )
         _selectedAttachment.value = null
         _messages.value = _messages.value + userMessage
-        saveMessageToDb(userMessage)
+        if (!_isTemporaryChat.value) {
+            saveMessageToDb(userMessage)
+        }
 
         var fileBase64: String? = null
         if (attachment != null) {
@@ -537,10 +747,15 @@ class ChatViewModel @Inject constructor(
             val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
             val effort = prefs.getString("reasoning_effort", "high") ?: "high"
 
-            // Collect enabled memories to include in context
-            val memoryList = if (_isMemoryEnabled.value) {
+            // Collect enabled memories to include in context if not in temporary chat
+            val memoryList = if (_isMemoryEnabled.value && !_isTemporaryChat.value) {
                 try {
-                    memoryDao.getAllEnabledMemories().map { it.content }
+                    memoryDao.getAllEnabledMemories().map {
+                        JSONObject().apply {
+                            put("content", it.content)
+                            put("category", it.category)
+                        }
+                    }
                 } catch (e: Exception) {
                     emptyList()
                 }
@@ -558,6 +773,16 @@ class ChatViewModel @Inject constructor(
                     memoryList.forEach { memArray.put(it) }
                     put("memories", memArray)
                 }
+                if (!_isTemporaryChat.value && _customInstructions.value.isEnabled) {
+                    put("custom_instructions", JSONObject().apply {
+                        put("about_user", _customInstructions.value.aboutUser)
+                        put("response_preferences", _customInstructions.value.responsePreferences)
+                        put("tone_preset", _customInstructions.value.tonePreset)
+                        put("is_enabled", _customInstructions.value.isEnabled)
+                    })
+                }
+                put("auto_memory", _isAutoMemoryEnabled.value && !_isTemporaryChat.value)
+                put("is_temporary", _isTemporaryChat.value)
                 if (attachment != null) {
                     put("file_name", attachment.name)
                     put("file_is_image", attachment.isImage)
@@ -592,13 +817,26 @@ class ChatViewModel @Inject constructor(
         _messages.value = _messages.value + msg
     }
 
+    private fun generateTitle(messages: List<Message>): String {
+        val firstUserMsg = messages.firstOrNull { it.role == "user" }?.content ?: return "New Chat"
+        val cleaned = firstUserMsg
+            .removePrefix("/boost").removePrefix("/goal").removePrefix("/plan")
+            .removePrefix("/browser").removePrefix("/learn").removePrefix("/grill-me")
+            .removePrefix("/schedule").removePrefix("/teamwork-preview").removePrefix("/remember")
+            .trim()
+        if (cleaned.isBlank()) return "New Chat"
+        // Use first sentence or first 50 chars
+        val firstSentence = cleaned.split(Regex("[.!?\\n]")).firstOrNull { it.trim().length > 3 }?.trim() ?: cleaned
+        return firstSentence.take(50).trimEnd().let { if (it.length < firstSentence.length) "$it…" else it }
+    }
+
     private fun saveMessageToDb(message: Message) {
         viewModelScope.launch {
-            val firstUserPrompt = _messages.value.firstOrNull { it.role == "user" }?.content?.take(45) ?: "New Chat"
+            val title = generateTitle(_messages.value)
             chatDao.insertConversation(
                 ConversationEntity(
                     id = currentConversationId,
-                    title = firstUserPrompt,
+                    title = title,
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
                 )
@@ -756,5 +994,6 @@ class ChatViewModel @Inject constructor(
         super.onCleared()
         webSocketClient.disconnect()
         connectionJob?.cancel()
+        reconnectJob?.cancel()
     }
 }

@@ -30,7 +30,8 @@ data class Message(
     val attachmentUri: String? = null,
     val attachmentName: String? = null,
     val attachmentIsImage: Boolean = false,
-    val feedback: String? = null // "like", "dislike", null
+    val feedback: String? = null, // "like", "dislike", null
+    val memoryUpdates: List<String> = emptyList() // Autonomous memory facts saved/updated in this turn
 )
 
 data class AttachmentItem(
@@ -53,10 +54,47 @@ data class Conversation(
 data class MemoryItem(
     val id: String,
     val content: String,
-    val category: String = "general", // "preference", "project", "personal", "general"
+    val category: String = "general", // "preference", "project", "personal", "style", "general"
     val isEnabled: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
 )
+
+@Serializable
+data class CustomInstructions(
+    val aboutUser: String = "",
+    val responsePreferences: String = "",
+    val tonePreset: String = "Balanced", // "Balanced", "Concise", "Technical", "Educational", "Warm"
+    val isEnabled: Boolean = true
+)
+
+object MemoryCategory {
+    val ALL = "All"
+    val PROJECT = "project"
+    val PREFERENCE = "preference"
+    val PERSONAL = "personal"
+    val STYLE = "style"
+    val GENERAL = "general"
+
+    val CATEGORIES = listOf(ALL, PROJECT, PREFERENCE, PERSONAL, STYLE, GENERAL)
+
+    fun getDisplayName(category: String): String = when (category.lowercase()) {
+        PROJECT -> "🎯 Project"
+        PREFERENCE -> "⚙️ Preference"
+        PERSONAL -> "👤 Personal"
+        STYLE -> "🎨 Style"
+        GENERAL -> "💡 General"
+        else -> "📌 $category"
+    }
+
+    fun getIconEmoji(category: String): String = when (category.lowercase()) {
+        PROJECT -> "🎯"
+        PREFERENCE -> "⚙️"
+        PERSONAL -> "👤"
+        STYLE -> "🎨"
+        else -> "💡"
+    }
+}
 
 enum class ThinkingLevel(
     val id: String,

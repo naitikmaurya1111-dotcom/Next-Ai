@@ -44,9 +44,12 @@ fun SettingsScreen(
     val connectionState by chatViewModel.connectionState.collectAsState()
     val selectedModel by chatViewModel.selectedModel.collectAsState()
     val isMemoryEnabled by chatViewModel.isMemoryEnabled.collectAsState()
+    val isAutoMemoryEnabled by chatViewModel.isAutoMemoryEnabled.collectAsState()
+    val customInstructions by chatViewModel.customInstructions.collectAsState()
     val enabledMemoriesCount by chatViewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val allMemories by chatViewModel.memories.collectAsState(initial = emptyList())
     var showMemorySheet by remember { mutableStateOf(false) }
+    var showCustomInstructionsSheet by remember { mutableStateOf(false) }
 
     var serverUrl by remember {
         mutableStateOf(
@@ -347,14 +350,65 @@ fun SettingsScreen(
                 badge = if (isMemoryEnabled) "ACTIVE ($enabledMemoriesCount)" to ClaudeTerracotta else "DISABLED" to Color.Gray
             ) {
                 Text(
-                    text = "Next AI remembers details across all conversations to give more relevant, personalized responses.",
+                    text = "Next AI remembers details across all conversations and tailors responses according to your profile and preferences.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 18.sp
                 )
 
+                Spacer(Modifier.height(14.dp))
+
+                // Custom Instructions Card
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Custom Instructions",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = if (customInstructions.isEnabled) {
+                                        val tone = customInstructions.tonePreset
+                                        val hasProfile = customInstructions.aboutUser.isNotBlank()
+                                        if (hasProfile) "Active · $tone" else "Active · $tone (Profile empty)"
+                                    } else "Disabled",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { showCustomInstructionsSheet = true },
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Customize", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(12.dp))
 
+                // Persistent Memory Switch
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -366,7 +420,7 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = if (isMemoryEnabled) "Enabled · Injecting $enabledMemoriesCount active memories into prompts" else "Disabled · Past memories won't be referenced",
+                            text = if (isMemoryEnabled) "Enabled · $enabledMemoriesCount active memories stored" else "Disabled · Past memories won't be referenced",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -385,13 +439,44 @@ fun SettingsScreen(
 
                 Spacer(Modifier.height(10.dp))
 
+                // Autonomous Memory Extraction Switch
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Autonomous Memory Extraction",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (isAutoMemoryEnabled) "Automatically learns preferences as you chat" else "Manual only (via /remember)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = isAutoMemoryEnabled,
+                        onCheckedChange = {
+                            chatViewModel.setAutoMemoryEnabled(it)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+
                 Button(
                     onClick = { showMemorySheet = true },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
                 ) {
-                    Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Psychology, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Manage Memories (${allMemories.size})")
                 }
@@ -458,17 +543,44 @@ fun SettingsScreen(
                 title = "About Next AI",
                 icon = Icons.Default.Info
             ) {
-                Text(
-                    text = "Next AI v1.1.0",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(ClaudeTerracotta.copy(alpha = 0.12f))
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("v2.0.0", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = ClaudeTerracotta)
+                    }
+                    Text(
+                        text = "Next AI",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                val features = listOf(
+                    "🤖 Antigravity CLI integration (stream-json)",
+                    "🧠 Persistent memory across sessions",
+                    "⚡ Auto-reconnect with exponential backoff",
+                    "🔊 Text-to-speech & voice dictation",
+                    "📎 File & image attachment support",
+                    "💡 /boost, /goal, /plan, /browser, /learn",
+                    "🛑 Stop generation mid-stream",
+                    "📜 Chat history with search & rename"
                 )
-                Text(
-                    text = "Connected Pair-Programming Assistant for Google Antigravity CLI.\nSupports /boost, /goal, /plan, /schedule, /browser, /learn, and multi-turn streaming.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 18.sp
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    features.forEach { feature ->
+                        Text(
+                            text = feature,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = 17.sp
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(24.dp))
@@ -479,6 +591,13 @@ fun SettingsScreen(
         ManageMemorySheet(
             viewModel = chatViewModel,
             onDismiss = { showMemorySheet = false }
+        )
+    }
+
+    if (showCustomInstructionsSheet) {
+        CustomInstructionsSheet(
+            viewModel = chatViewModel,
+            onDismiss = { showCustomInstructionsSheet = false }
         )
     }
 }
