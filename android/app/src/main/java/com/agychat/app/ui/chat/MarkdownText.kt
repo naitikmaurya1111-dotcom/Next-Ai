@@ -487,40 +487,42 @@ fun MathEquationBlockView(
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
-    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-    val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
-    val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
-    var measuredHeightDp by remember { mutableStateOf(58.dp) }
+    DisableSelection {
+        val context = LocalContext.current
+        val haptic = LocalHapticFeedback.current
+        val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+        val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
+        val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
+        var measuredHeightDp by remember { mutableStateOf(58.dp) }
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clickable {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
-                Toast.makeText(context, "Copied LaTeX equation", Toast.LENGTH_SHORT).show()
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        KaTeXDisplayView(
-            formula = normalizedFormula,
-            unicodeFallback = unicodePreview,
-            isDark = isDark,
-            onHeightMeasured = { cssPixels ->
-                // JavaScript WebView reports dimensions in CSS pixels (1 CSS px = 1 dp in viewport 1.0)
-                val dpVal = (cssPixels + 14).dp
-                if (dpVal in 44.dp..650.dp) {
-                    measuredHeightDp = dpVal
-                }
-            },
-            modifier = Modifier
+        Box(
+            modifier = modifier
                 .fillMaxWidth()
-                .height(measuredHeightDp)
-        )
+                .padding(vertical = 4.dp)
+                .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                    Toast.makeText(context, "Copied LaTeX equation", Toast.LENGTH_SHORT).show()
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            KaTeXDisplayView(
+                formula = normalizedFormula,
+                unicodeFallback = unicodePreview,
+                isDark = isDark,
+                onHeightMeasured = { cssPixels ->
+                    // JavaScript WebView reports dimensions in CSS pixels (1 CSS px = 1 dp in viewport 1.0)
+                    val dpVal = (cssPixels + 14).dp
+                    if (dpVal in 44.dp..650.dp) {
+                        measuredHeightDp = dpVal
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(measuredHeightDp)
+            )
+        }
     }
 }
 
