@@ -5,11 +5,11 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Ambient circular glow accent in center safe zone (14% opacity, API 26 compat) -->
+    <!-- Ambient circular glow accent using 100% compatible cubic Bezier circle (radius=36, center=54,54) -->
     <path
         android:fillColor="#D97757"
         android:fillAlpha="0.14"
-        android:pathData="M54,18 A36,36 0 1,0 54,90 A36,36 0 1,0 54,18 Z" />
+        android:pathData="M 54,18 C 73.88,18 90,34.12 90,54 C 90,73.88 73.88,90 54,90 C 34.12,90 18,73.88 18,54 C 18,34.12 34.12,18 54,18 Z" />
 
     <!-- Stylized Next "N" Monogram -->
     <path

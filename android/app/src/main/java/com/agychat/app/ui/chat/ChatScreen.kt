@@ -24,8 +24,6 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.ui.res.painterResource
-import com.agychat.app.R
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -143,17 +141,26 @@ fun ChatScreen(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
 
-    // Initialize TextToSpeech engine
+    // Initialize TextToSpeech engine safely
     DisposableEffect(context) {
-        val textToSpeech = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.US
+        var textToSpeech: TextToSpeech? = null
+        try {
+            textToSpeech = TextToSpeech(context) { status ->
+                if (status == TextToSpeech.SUCCESS) {
+                    try {
+                        tts?.language = Locale.US
+                    } catch (_: Throwable) {}
+                }
             }
+            tts = textToSpeech
+        } catch (t: Throwable) {
+            android.util.Log.w("ChatScreen", "TTS initialization failed, voice readout disabled", t)
         }
-        tts = textToSpeech
         onDispose {
-            textToSpeech.stop()
-            textToSpeech.shutdown()
+            try {
+                textToSpeech?.stop()
+                textToSpeech?.shutdown()
+            } catch (_: Throwable) {}
         }
     }
 

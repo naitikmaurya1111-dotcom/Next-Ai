@@ -1,11 +1,11 @@
 <resources>
-    <!-- Compose base theme using platform Material theme (no AppCompat dependency needed) -->
-    <!-- windowBackground matches app dark canvas to eliminate white flash on startup -->
+    <!-- Compose base theme using platform Material theme -->
+    <!-- windowBackground references @color/obsidian_background safely across all Android versions -->
     <style name="Theme.NextAI" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#0D0D12</item>
+        <item name="android:windowBackground">@color/obsidian_background</item>
         <item name="android:windowIsTranslucent">false</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:statusBarColor">#0D0D12</item>
-        <item name="android:navigationBarColor">#0D0D12</item>
+        <item name="android:statusBarColor">@color/obsidian_background</item>
+        <item name="android:navigationBarColor">@color/obsidian_background</item>
     </style>
 </resources>

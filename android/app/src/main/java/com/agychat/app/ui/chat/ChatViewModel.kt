@@ -33,6 +33,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import android.util.Log
@@ -50,8 +51,14 @@ class ChatViewModel @Inject constructor(
 ) : ViewModel() {
 
     // ChatGPT-Style Persistent Memory System
-    val memories = memoryDao.getAllMemoriesFlow()
-    val enabledMemoriesCount = memoryDao.getEnabledCountFlow()
+    val memories = memoryDao.getAllMemoriesFlow().catch { t ->
+        Log.e("ChatViewModel", "Error in memories flow", t)
+        emit(emptyList())
+    }
+    val enabledMemoriesCount = memoryDao.getEnabledCountFlow().catch { t ->
+        Log.e("ChatViewModel", "Error in enabledMemoriesCount flow", t)
+        emit(0)
+    }
     private var currentMemoriesList: List<MemoryEntity> = emptyList()
 
     private val _isMemoryEnabled = MutableStateFlow(true)
@@ -422,67 +429,78 @@ class ChatViewModel @Inject constructor(
     private var connectionJob: Job? = null
 
     // Real-time conversations list from Room DB
-    val conversations = chatDao.getAllConversations()
+    val conversations = chatDao.getAllConversations().catch { t ->
+        Log.e("ChatViewModel", "Error in conversations flow", t)
+        emit(emptyList())
+    }
 
     init {
-        // Load saved model preference
-        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
-        val savedModelId = prefs.getString("selected_model", ModelRegistry.DEFAULT_MODEL.id)
-        _selectedModel.value = ModelRegistry.findById(savedModelId)
+        try {
+            // Load saved model preference
+            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+            val savedModelId = prefs.getString("selected_model", ModelRegistry.DEFAULT_MODEL.id)
+            _selectedModel.value = ModelRegistry.findById(savedModelId)
 
-        val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
-        _reasoningEffort.value = savedEffort
+            val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
+            _reasoningEffort.value = savedEffort
 
-        val savedMemoryEnabled = prefs.getBoolean("memory_enabled", true)
-        _isMemoryEnabled.value = savedMemoryEnabled
+            val savedMemoryEnabled = prefs.getBoolean("memory_enabled", true)
+            _isMemoryEnabled.value = savedMemoryEnabled
 
-        val savedAutoMemory = prefs.getBoolean("auto_memory_enabled", true)
-        _isAutoMemoryEnabled.value = savedAutoMemory
+            val savedAutoMemory = prefs.getBoolean("auto_memory_enabled", true)
+            _isAutoMemoryEnabled.value = savedAutoMemory
 
-        val savedCustomEnabled = prefs.getBoolean("custom_instructions_enabled", true)
-        val savedAbout = prefs.getString("custom_about_user", "") ?: ""
-        val savedResp = prefs.getString("custom_response_prefs", "") ?: ""
-        val savedTone = prefs.getString("custom_tone_preset", "Balanced") ?: "Balanced"
-        _customInstructions.value = CustomInstructions(
-            aboutUser = savedAbout,
-            responsePreferences = savedResp,
-            tonePreset = savedTone,
-            isEnabled = savedCustomEnabled
-        )
+            val savedCustomEnabled = prefs.getBoolean("custom_instructions_enabled", true)
+            val savedAbout = prefs.getString("custom_about_user", "") ?: ""
+            val savedResp = prefs.getString("custom_response_prefs", "") ?: ""
+            val savedTone = prefs.getString("custom_tone_preset", "Balanced") ?: "Balanced"
+            _customInstructions.value = CustomInstructions(
+                aboutUser = savedAbout,
+                responsePreferences = savedResp,
+                tonePreset = savedTone,
+                isEnabled = savedCustomEnabled
+            )
 
-        // Load full Personalization profile
-        _personalization.value = Personalization(
-            name = prefs.getString("p_name", "") ?: "",
-            occupation = prefs.getString("p_occupation", "") ?: "",
-            expertise = prefs.getString("p_expertise", "") ?: "",
-            country = prefs.getString("p_country", "") ?: "",
-            age = prefs.getString("p_age", "") ?: "",
-            responseLength = prefs.getString("p_response_length", "Adaptive") ?: "Adaptive",
-            responseFormat = prefs.getString("p_response_format", "Auto") ?: "Auto",
-            toneStyle = prefs.getString("p_tone_style", "Direct") ?: "Direct",
-            depthLevel = prefs.getString("p_depth_level", "Expert") ?: "Expert",
-            codeLanguage = prefs.getString("p_code_lang", "Kotlin") ?: "Kotlin",
-            enableExamples = prefs.getBoolean("p_examples", true),
-            enableProactiveInsights = prefs.getBoolean("p_proactive", true),
-            enableCriticalFeedback = prefs.getBoolean("p_critical", true),
-            enableEmoji = prefs.getBoolean("p_emoji", false),
-            avoidTopics = prefs.getString("p_avoid", "") ?: "",
-            customContext = prefs.getString("p_context", "") ?: "",
-            extraInstructions = prefs.getString("p_extra", "") ?: "",
-            isEnabled = prefs.getBoolean("p_enabled", true),
-            memoryEnabled = prefs.getBoolean("memory_enabled", true),
-            autoMemoryEnabled = prefs.getBoolean("auto_memory_enabled", true)
-        )
+            // Load full Personalization profile
+            _personalization.value = Personalization(
+                name = prefs.getString("p_name", "") ?: "",
+                occupation = prefs.getString("p_occupation", "") ?: "",
+                expertise = prefs.getString("p_expertise", "") ?: "",
+                country = prefs.getString("p_country", "") ?: "",
+                age = prefs.getString("p_age", "") ?: "",
+                responseLength = prefs.getString("p_response_length", "Adaptive") ?: "Adaptive",
+                responseFormat = prefs.getString("p_response_format", "Auto") ?: "Auto",
+                toneStyle = prefs.getString("p_tone_style", "Direct") ?: "Direct",
+                depthLevel = prefs.getString("p_depth_level", "Expert") ?: "Expert",
+                codeLanguage = prefs.getString("p_code_lang", "Kotlin") ?: "Kotlin",
+                enableExamples = prefs.getBoolean("p_examples", true),
+                enableProactiveInsights = prefs.getBoolean("p_proactive", true),
+                enableCriticalFeedback = prefs.getBoolean("p_critical", true),
+                enableEmoji = prefs.getBoolean("p_emoji", false),
+                avoidTopics = prefs.getString("p_avoid", "") ?: "",
+                customContext = prefs.getString("p_context", "") ?: "",
+                extraInstructions = prefs.getString("p_extra", "") ?: "",
+                isEnabled = prefs.getBoolean("p_enabled", true),
+                memoryEnabled = prefs.getBoolean("memory_enabled", true),
+                autoMemoryEnabled = prefs.getBoolean("auto_memory_enabled", true)
+            )
 
-        viewModelScope.launch {
-            memories.collectLatest { currentMemoriesList = it }
-        }
+            viewModelScope.launch {
+                try {
+                    memories.collectLatest { currentMemoriesList = it }
+                } catch (t: Throwable) {
+                    Log.e("ChatViewModel", "Error collecting memories flow in init", t)
+                }
+            }
 
-        val rawSavedUrl = prefs.getString("server_url", "wss://olympic-understood-heater-angel.trycloudflare.com/ws")
-        val validUrl = UrlSanitizer.normalizeWebSocketUrl(rawSavedUrl)
-            ?: UrlSanitizer.normalizeWebSocketUrl("wss://olympic-understood-heater-angel.trycloudflare.com/ws")
-        if (!validUrl.isNullOrBlank()) {
-            connectToServer(validUrl)
+            val rawSavedUrl = prefs.getString("server_url", "wss://olympic-understood-heater-angel.trycloudflare.com/ws")
+            val validUrl = UrlSanitizer.normalizeWebSocketUrl(rawSavedUrl)
+                ?: UrlSanitizer.normalizeWebSocketUrl("wss://olympic-understood-heater-angel.trycloudflare.com/ws")
+            if (!validUrl.isNullOrBlank()) {
+                connectToServer(validUrl)
+            }
+        } catch (t: Throwable) {
+            Log.e("ChatViewModel", "Fatal error during ChatViewModel init, safely caught", t)
         }
     }
 

@@ -5,16 +5,16 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Obsidian Circular Base -->
+    <!-- Obsidian Circular Base using 100% compatible cubic Bezier circle (radius=54, center=54,54) -->
     <path
         android:fillColor="#0D0D12"
-        android:pathData="M54,0 A54,54 0 1,0 54,108 A54,54 0 1,0 54,0 Z" />
+        android:pathData="M 54,0 C 83.82,0 108,24.18 108,54 C 108,83.82 83.82,108 54,108 C 24.18,108 0,83.82 0,54 C 0,24.18 24.18,0 54,0 Z" />
 
-    <!-- Ambient circular glow (14% opacity terracotta - using fillAlpha for API 26 compat) -->
+    <!-- Ambient circular glow (14% opacity terracotta, radius=36, center=54,54) -->
     <path
         android:fillColor="#D97757"
         android:fillAlpha="0.14"
-        android:pathData="M54,18 A36,36 0 1,0 54,90 A36,36 0 1,0 54,18 Z" />
+        android:pathData="M 54,18 C 73.88,18 90,34.12 90,54 C 90,73.88 73.88,90 54,90 C 34.12,90 18,73.88 18,54 C 18,34.12 34.12,18 54,18 Z" />
 
     <!-- Stylized Next "N" Monogram -->
     <path
