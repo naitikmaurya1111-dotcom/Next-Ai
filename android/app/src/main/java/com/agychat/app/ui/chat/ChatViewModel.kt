@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.util.Log
 import org.json.JSONObject
 import java.util.UUID
@@ -627,20 +628,28 @@ class ChatViewModel @Inject constructor(
                         resolver.openOutputStream(uri)?.use { out ->
                             out.write(file.content.toByteArray(Charsets.UTF_8))
                         }
-                        onResult(true, "Saved $filename to Downloads")
+                        withContext(Dispatchers.Main) {
+                            onResult(true, "Saved $filename to Downloads")
+                        }
                     } else {
-                        onResult(false, "Failed to create file in Downloads")
+                        withContext(Dispatchers.Main) {
+                            onResult(false, "Failed to create file in Downloads")
+                        }
                     }
                 } else {
                     val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
                     dir.mkdirs()
                     val target = java.io.File(dir, filename)
                     target.writeText(file.content, Charsets.UTF_8)
-                    onResult(true, "Saved $filename to Downloads")
+                    withContext(Dispatchers.Main) {
+                        onResult(true, "Saved $filename to Downloads")
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "Error saving file to Downloads", e)
-                onResult(false, "Save error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    onResult(false, "Save error: ${e.message}")
+                }
             }
         }
     }

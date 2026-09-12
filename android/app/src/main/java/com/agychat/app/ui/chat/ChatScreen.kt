@@ -288,8 +288,8 @@ fun ChatScreen(
             val layoutInfo = listState.layoutInfo
             val totalItems = layoutInfo.totalItemsCount
             if (totalItems == 0) return@derivedStateOf true
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
-            lastVisible != null && lastVisible.index >= totalItems - 1
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            lastVisible.index >= totalItems - 1 && (lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset + 150)
         }
     }
 
@@ -303,7 +303,8 @@ fun ChatScreen(
     // Smooth auto-scroll when a new message is appended
     LaunchedEffect(displayedMessages.size) {
         if (displayedMessages.isNotEmpty()) {
-            listState.animateScrollToItem(displayedMessages.size - 1)
+            val count = listState.layoutInfo.totalItemsCount
+            listState.animateScrollToItem(if (count > 0) count - 1 else displayedMessages.size - 1)
         }
     }
 
@@ -314,7 +315,11 @@ fun ChatScreen(
 
     LaunchedEffect(streamContentLength) {
         if (isStreamingActive && isScrolledToBottom && !listState.isScrollInProgress && displayedMessages.isNotEmpty()) {
-            listState.scrollToItem(displayedMessages.size - 1)
+            kotlinx.coroutines.delay(40)
+            val count = listState.layoutInfo.totalItemsCount
+            if (count > 0) {
+                listState.scrollToItem(count - 1)
+            }
         }
     }
 
@@ -1346,9 +1351,14 @@ fun ChatScreen(
                         }
 
                         if (isLoading && messages.lastOrNull()?.isStreaming != true) {
-                            item {
+                            item(key = "typing_bubble") {
                                 ClaudeTypingBubble()
                             }
+                        }
+
+                        // Bottom anchor item for stable, bottom-aligned scrolling during streaming
+                        item(key = "bottom_anchor") {
+                            Spacer(Modifier.height(4.dp))
                         }
                     }
 
@@ -1365,7 +1375,10 @@ fun ChatScreen(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 scope.launch {
-                                    listState.animateScrollToItem(messages.size - 1)
+                                    val count = listState.layoutInfo.totalItemsCount
+                                    if (count > 0) {
+                                        listState.animateScrollToItem(count - 1)
+                                    }
                                 }
                             },
                             modifier = Modifier
@@ -3181,9 +3194,24 @@ fun QuickSlashChipsRow(
                     .background(MaterialTheme.colorScheme.surface)
                     .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
                     .clickable {
-                        val matching = plugins.firstOrNull { it.prefix == commandPrefix.trim() }
+                        val trimmedPrefix = commandPrefix.trim()
+                        val matching = plugins.firstOrNull { it.prefix == trimmedPrefix }
+                            ?: if (trimmedPrefix == "/remember") plugins.firstOrNull { it.prefix == "/learn" } else null
                         if (matching != null) {
                             onChipClick(matching)
+                        } else {
+                            onChipClick(
+                                PluginItem(
+                                    name = trimmedPrefix.removePrefix("/"),
+                                    title = label,
+                                    description = label,
+                                    icon = Icons.Default.Bolt,
+                                    prefix = trimmedPrefix,
+                                    tag = "TOOL",
+                                    examplePrompt = "$trimmedPrefix ",
+                                    badgeColor = 0xFFD4704B
+                                )
+                            )
                         }
                     }
                     .padding(horizontal = 11.dp, vertical = 6.dp),
@@ -3260,6 +3288,7 @@ fun ClaudeFloatingInputBar(
             ActiveSlashMode("/boost", "Deep Think", Icons.Default.AutoAwesome, ChatGptPurple),
             ActiveSlashMode("/plan", "Plan Mode", Icons.Default.Assignment, Color(0xFF0284C7)),
             ActiveSlashMode("/goal", "Autonomous Goal", Icons.Default.RocketLaunch, Color(0xFF10B981)),
+            ActiveSlashMode("/learn", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B)),
             ActiveSlashMode("/remember", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B)),
             ActiveSlashMode("/schedule", "Scheduled", Icons.Default.Schedule, Color(0xFF8B5CF6)),
             ActiveSlashMode("/grill-me", "Interview", Icons.Default.QuestionAnswer, ClaudeTerracotta),
@@ -3500,7 +3529,7 @@ fun ClaudeFloatingInputBar(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom
             ) {
-                // Plus button (+) for Attachments, Camera & Tools
+                // Plus button (+) for Attachments & Files
                 IconButton(
                     onClick = onAttachFile,
                     modifier = Modifier
@@ -3513,6 +3542,24 @@ fun ClaudeFloatingInputBar(
                         contentDescription = "Add attachment or tool",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                // Slash Commands & Tools Button (✦)
+                IconButton(
+                    onClick = onOpenPlugins,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(ClaudeTerracotta.copy(alpha = 0.12f))
+                ) {
+                    Icon(
+                        Icons.Default.AutoAwesome,
+                        contentDescription = "Slash Commands and Tools",
+                        tint = ClaudeTerracotta,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
@@ -3611,9 +3658,10 @@ fun ClaudeFloatingInputBar(
                 Spacer(Modifier.width(2.dp))
 
                 // Modern ChatGPT Dynamic Send / Stop / Mic Button with Smooth AnimatedContent Transitions
+                val hasInput = text.isNotBlank() || activeAttachments.isNotEmpty()
                 val actionButtonState = when {
                     isLoading -> ActionButtonState.STOP
-                    canSend -> ActionButtonState.SEND
+                    hasInput -> ActionButtonState.SEND
                     else -> ActionButtonState.MIC
                 }
 
@@ -3645,17 +3693,24 @@ fun ClaudeFloatingInputBar(
                         }
                         ActionButtonState.SEND -> {
                             FilledIconButton(
-                                onClick = onSend,
+                                onClick = {
+                                    if (canSend) {
+                                        onSend()
+                                    } else {
+                                        Toast.makeText(context, "Bridge offline. Tap Reconnect above.", Toast.LENGTH_SHORT).show()
+                                    }
+                                },
                                 modifier = Modifier.size(36.dp),
                                 colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = if (isDark) Color.White else Color(0xFF0D0D0D),
+                                    containerColor = if (canSend) (if (isDark) Color.White else Color(0xFF0D0D0D))
+                                                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
                                     contentColor = if (isDark) Color.Black else Color.White
                                 )
                             ) {
                                 Icon(
                                     Icons.Default.ArrowUpward,
                                     contentDescription = "Send",
-                                    tint = if (isDark) Color.Black else Color.White,
+                                    tint = if (canSend) (if (isDark) Color.Black else Color.White) else MaterialTheme.colorScheme.surface,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -4637,7 +4692,7 @@ fun FileViewerBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.88f)
+                .fillMaxHeight(0.94f)
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
             // Header Bar
@@ -5082,8 +5137,16 @@ fun SessionArtifactsBottomSheet(
                                             }
                                         }
                                     }
+                                    val fileObj = remember(filePath) { java.io.File(filePath) }
+                                    val sizeStr = remember(fileObj) {
+                                        if (fileObj.exists() && fileObj.length() > 0) {
+                                            val kb = fileObj.length() / 1024.0
+                                            String.format(java.util.Locale.US, "%.1f KB", kb)
+                                        } else null
+                                    }
+                                    val pathSubText = if (sizeStr != null) "$sizeStr • $filePath" else filePath
                                     Text(
-                                        text = filePath,
+                                        text = pathSubText,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                                         maxLines = 1,
@@ -5115,7 +5178,13 @@ fun SessionArtifactsBottomSheet(
                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                     modifier = Modifier.height(32.dp)
                                 ) {
-                                    Text("Open", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                    Icon(
+                                        Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Open & View", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
                                 }
                             }
                         }

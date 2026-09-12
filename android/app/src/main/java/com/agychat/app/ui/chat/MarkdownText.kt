@@ -29,6 +29,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -422,16 +425,16 @@ fun MarkdownContent(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(6.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                                .drawBehind {
+                                    drawRoundRect(
+                                        color = ClaudeTerracotta,
+                                        topLeft = Offset(0f, 0f),
+                                        size = Size(3.5.dp.toPx(), size.height),
+                                        cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx(), 2.dp.toPx())
+                                    )
+                                }
+                                .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 10.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(3.5.dp)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(ClaudeTerracotta)
-                            )
-                            Spacer(Modifier.width(10.dp))
                             FormattedMarkdownText(
                                 text = section.text,
                                 style = MaterialTheme.typography.bodyMedium.copy(
@@ -696,8 +699,9 @@ object SyntaxHighlighter {
         "nil", "none", "null", "object", "open", "operator", "out", "override", "package", "private",
         "protected", "public", "return", "sealed", "select", "self", "static", "struct", "super",
         "suspend", "switch", "then", "this", "throw", "true", "try", "type", "typeof", "val", "var",
-        "void", "when", "where", "while", "yield", "echo", "printf", "select", "insert", "update",
-        "delete", "from", "create", "table", "alter", "drop", "join"
+        "void", "when", "where", "while", "yield", "echo", "printf", "insert", "update",
+        "create", "table", "alter", "drop", "join", "True", "False", "None", "self", "cls",
+        "with", "lambda", "pass", "raise", "except", "global", "nonlocal", "assert", "and", "or", "not"
     )
 
     private val commonTypes = setOf(
@@ -969,7 +973,8 @@ fun CodeBlockView(
                     .fillMaxWidth()
                     .padding(vertical = 10.dp)
             ) {
-                if (showLineNumbers && lineCount > 1) {
+                val shouldShowLineNumbers = showLineNumbers && !isWrapped && lineCount > 1
+                if (shouldShowLineNumbers) {
                     DisableSelection {
                         val lineNumsText = (1..lineCount).joinToString("\n")
                         Text(
@@ -984,14 +989,17 @@ fun CodeBlockView(
                             modifier = Modifier
                                 .padding(start = 10.dp, end = 8.dp)
                                 .widthIn(min = 22.dp)
+                                .drawBehind {
+                                    // Clean vertical separator line without unbounded fillMaxHeight
+                                    drawLine(
+                                        color = borderColor.copy(alpha = 0.6f),
+                                        start = Offset(size.width, 0f),
+                                        end = Offset(size.width, size.height),
+                                        strokeWidth = 1.dp.toPx()
+                                    )
+                                }
                         )
                     }
-                    Box(
-                        modifier = Modifier
-                            .width(1.dp)
-                            .fillMaxHeight()
-                            .background(borderColor.copy(alpha = 0.6f))
-                    )
                 }
 
                 val codeModifier = if (isWrapped) {
@@ -1277,17 +1285,23 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                 }
                 fullMatch.startsWith("$") -> {
                     val mathContent = match.groupValues.getOrNull(9) ?: ""
-                    val cleanMath = formatLatexToUnicode(mathContent)
-                    withStyle(
-                        SpanStyle(
-                            fontFamily = FontFamily.Serif,
-                            fontStyle = FontStyle.Italic,
-                            fontWeight = FontWeight.Medium,
-                            color = mathColor,
-                            letterSpacing = 0.2.sp
-                        )
-                    ) {
-                        append(cleanMath)
+                    val isCurrencyOrPlain = mathContent.matches(Regex("""^\s*\d+(?:[.,]\d+)?\s*$""")) ||
+                        (mathContent.contains(" ") && !mathContent.contains("=") && !mathContent.contains("\\") && !mathContent.contains("^") && !mathContent.contains("_") && !mathContent.contains("+") && !mathContent.contains("-"))
+                    if (isCurrencyOrPlain) {
+                        append(fullMatch)
+                    } else {
+                        val cleanMath = formatLatexToUnicode(mathContent)
+                        withStyle(
+                            SpanStyle(
+                                fontFamily = FontFamily.Serif,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Medium,
+                                color = mathColor,
+                                letterSpacing = 0.2.sp
+                            )
+                        ) {
+                            append(cleanMath)
+                        }
                     }
                 }
                 fullMatch.startsWith("\\(") -> {
