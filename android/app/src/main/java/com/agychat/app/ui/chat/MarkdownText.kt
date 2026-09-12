@@ -1,8 +1,12 @@
 package com.agychat.app.ui.chat
 
+import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -25,19 +29,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.agychat.app.ui.theme.*
 import kotlinx.coroutines.delay
+import org.json.JSONObject
 
+/**
+ * Sanitizes markdown input by removing ANSI escape sequences and terminal noise.
+ */
 fun sanitizeMarkdownInput(raw: String): String {
     if (raw.isBlank()) return ""
     return raw
@@ -50,342 +63,46 @@ fun sanitizeMarkdownInput(raw: String): String {
         .replace(Regex("[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F-\\u009F]"), "")
 }
 
-@Composable
-fun MarkdownContent(
-    text: String,
-    modifier: Modifier = Modifier,
-    textColor: Color = MaterialTheme.colorScheme.onSurface
-) {
-    val cleanText = remember(text) { sanitizeMarkdownInput(text) }
-    val sections = remember(cleanText) { parseMarkdownBlocks(cleanText) }
-
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        for (section in sections) {
-            when (section) {
-                is MarkdownBlock.Code -> {
-                    CodeBlockView(language = section.language, code = section.code)
-                }
-                is MarkdownBlock.Table -> {
-                    TableBlockView(headers = section.headers, rows = section.rows)
-                }
-                is MarkdownBlock.Heading -> {
-                    val style = when (section.level) {
-                        1 -> MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = (-0.3).sp,
-                            lineHeight = 26.sp
-                        )
-                        2 -> MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = (-0.2).sp,
-                            lineHeight = 22.sp
-                        )
-                        else -> MaterialTheme.typography.titleSmall.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    Text(
-                        text = buildFormattedInlineText(section.text, textColor),
-                        style = style,
-                        color = textColor,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
-                    )
-                }
-                is MarkdownBlock.Blockquote -> {
-                    val isCallout = section.text.startsWith("[!") && section.text.contains("]")
-                    if (isCallout) {
-                        val calloutType = section.text.substringAfter("[!").substringBefore("]").uppercase()
-                        val calloutBody = section.text.substringAfter("]").trim()
-                        val (calloutColor, calloutIcon, calloutTitle) = when (calloutType) {
-                            "NOTE" -> Triple(ChatGptBlue, Icons.Default.Info, "Note")
-                            "TIP" -> Triple(ChatGptEmerald, Icons.Default.Lightbulb, "Tip")
-                            "WARNING" -> Triple(ChatGptAmber, Icons.Default.Warning, "Warning")
-                            "IMPORTANT" -> Triple(ClaudeTerracotta, Icons.Default.PriorityHigh, "Important")
-                            "CAUTION" -> Triple(MaterialTheme.colorScheme.error, Icons.Default.Error, "Caution")
-                            else -> Triple(ClaudeTerracotta, Icons.Default.Info, calloutType.lowercase().replaceFirstChar { it.uppercase() })
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = calloutColor.copy(alpha = 0.08f),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, calloutColor.copy(alpha = 0.35f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(calloutIcon, contentDescription = null, tint = calloutColor, modifier = Modifier.size(15.dp))
-                                    Text(
-                                        text = calloutTitle,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = calloutColor
-                                    )
-                                }
-                                if (calloutBody.isNotBlank()) {
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(
-                                        text = buildFormattedInlineText(calloutBody, textColor),
-                                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                                        color = textColor
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                                .padding(horizontal = 10.dp, vertical = 8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(3.5.dp)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(ClaudeTerracotta)
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                text = buildFormattedInlineText(section.text, MaterialTheme.colorScheme.onSurfaceVariant),
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontStyle = FontStyle.Italic,
-                                    lineHeight = 22.sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-                is MarkdownBlock.ListItem -> {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 4.dp, top = 2.dp, bottom = 2.dp),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        if (section.isOrdered) {
-                            Text(
-                                text = "${section.index}.",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = ClaudeTerracotta,
-                                modifier = Modifier.width(22.dp)
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .padding(top = 8.dp, end = 10.dp)
-                                    .size(5.dp)
-                                    .clip(CircleShape)
-                                    .background(ClaudeTerracotta)
-                            )
-                        }
-                        Text(
-                            text = buildFormattedInlineText(section.text, textColor),
-                            style = MaterialTheme.typography.bodyMedium,
-                            lineHeight = 22.sp,
-                            color = textColor,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                is MarkdownBlock.Divider -> {
-                    HorizontalDivider(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        thickness = 0.8.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
-                    )
-                }
-                is MarkdownBlock.Paragraph -> {
-                    Text(
-                        text = buildFormattedInlineText(section.text, textColor),
-                        style = MaterialTheme.typography.bodyMedium,
-                        lineHeight = 23.sp,
-                        color = textColor
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
-    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-    val headerBg = if (isDark) Color(0xFF1E1E22) else Color(0xFFECEAE4)
-    val rowAltBg = if (isDark) Color(0xFF18181C) else Color(0xFFF7F6F2)
-    val rowNormBg = if (isDark) Color(0xFF141416) else Color(0xFFFFFFFF)
-    val borderColor = if (isDark) Color(0xFF2E2E36) else Color(0xFFE2E0D8)
-
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .border(1.dp, borderColor, RoundedCornerShape(10.dp)),
-        shape = RoundedCornerShape(10.dp),
-        color = rowNormBg
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-        ) {
-            // Header Row
-            Row(
-                modifier = Modifier
-                    .background(headerBg)
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                headers.forEach { header ->
-                    Text(
-                        text = header.trim(),
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .widthIn(min = 90.dp, max = 220.dp)
-                            .padding(end = 12.dp)
-                    )
-                }
-            }
-            HorizontalDivider(thickness = 1.dp, color = borderColor)
-
-            // Data Rows
-            rows.forEachIndexed { index, row ->
-                val bg = if (index % 2 == 1) rowAltBg else rowNormBg
-                Row(
-                    modifier = Modifier
-                        .background(bg)
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    row.forEachIndexed { _, cell ->
-                        Text(
-                            text = cell.trim(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier
-                                .widthIn(min = 90.dp, max = 220.dp)
-                                .padding(end = 12.dp)
-                        )
-                    }
-                }
-                if (index < rows.size - 1) {
-                    HorizontalDivider(thickness = 0.5.dp, color = borderColor.copy(alpha = 0.5f))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun CodeBlockView(language: String, code: String) {
-    val context = LocalContext.current
-    val displayLang = if (language.isNotBlank()) language.lowercase() else "code"
-    var isCopied by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isCopied) {
-        if (isCopied) {
-            delay(2000)
-            isCopied = false
-        }
+/**
+ * Normalizes user-entered or LLM-streamed LaTeX formulas:
+ * - Strips enclosing delimiters ($$, \[, \], $)
+ * - Adds missing leading backslashes to common math operators (frac -> \frac)
+ * - Cleans dangling trailing backslashes or unfinished \left delimiters during streaming
+ */
+fun normalizeLatexFormula(raw: String): String {
+    var s = raw.trim()
+    if (s.startsWith("$$") && s.endsWith("$$") && s.length >= 4) {
+        s = s.substring(2, s.length - 2).trim()
+    } else if (s.startsWith("\\[") && s.endsWith("\\]") && s.length >= 4) {
+        s = s.substring(2, s.length - 2).trim()
+    } else if (s.startsWith("$") && s.endsWith("$") && s.length >= 2) {
+        s = s.substring(1, s.length - 1).trim()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(CodeBlockBg)
-            .border(1.dp, CodeBlockBorder, RoundedCornerShape(12.dp))
-    ) {
-        // Modern ChatGPT Code Header Bar
-        DisableSelection {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(CodeBlockHeader)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = displayLang,
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 0.5.sp
-                    ),
-                    color = Color(0xFFA6A6B0),
-                    fontWeight = FontWeight.Medium
-                )
+    // Fix missing leading backslashes on common LaTeX keywords (e.g. "frac{" -> "\frac{")
+    val missingSlashRegex = Regex("""(?<!\\)\b(frac|sqrt|sum|int|prod|partial|hbar|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|tau|phi|psi|omega|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|ket|bra|braket|hat|vec|mathcal|mathbf|mathbb)\b""")
+    s = s.replace(missingSlashRegex) { "\\${it.value}" }
 
-                Surface(
-                    onClick = {
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("Code", code))
-                        isCopied = true
-                        Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(6.dp),
-                    color = Color(0xFF2B2B32).copy(alpha = 0.7f),
-                    border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFF3E3E48))
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Icon(
-                            if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                            contentDescription = if (isCopied) "Copied" else "Copy code",
-                            modifier = Modifier.size(13.dp),
-                            tint = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
-                        )
-                        Text(
-                            text = if (isCopied) "Copied!" else "Copy code",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                            color = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
-                        )
-                    }
-                }
-            }
-        }
+    // Strip dangling backslash at the very end of string (common in streaming)
+    s = s.replace(Regex("""\\+\s*$"""), "")
 
-        // Code Content with Horizontal Scroll and full text selection
-        SelectionContainer {
-            Text(
-                text = code,
-                style = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    lineHeight = 19.sp,
-                    fontSize = 12.5.sp
-                ),
-                color = Color(0xFFEDEDF0),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(14.dp)
-            )
-        }
+    // Balance or strip lone trailing \left if not closed
+    if (s.contains("""\left""") && !s.contains("""\right""")) {
+        s = s.replace(Regex("""\\left\s*([(\[{|.])\s*$"""), "$1")
     }
+
+    return s.trim()
 }
 
 /**
- * Converts raw LaTeX math expressions and symbols into clean, human-readable Unicode text
- * seamlessly inline without boxes, cards, or webviews.
+ * High-quality Unicode mathematical symbol formatter.
+ * Converts LaTeX math notation into clean, human-readable Unicode math symbols.
+ * Used for instant previews, fallbacks, and inline math formatting.
  */
-fun formatLatexToReadableMath(raw: String): String {
-    if (raw.isBlank() || (!raw.contains('\\') && !raw.contains('$') && !raw.contains("frac{") && !raw.contains("sqrt{"))) {
-        return raw
-    }
+fun formatLatexToUnicode(raw: String): String {
+    var text = normalizeLatexFormula(raw)
 
-    var text = raw
-
-    // Strip LaTeX equation and align environments
+    // Strip LaTeX environments
     text = text.replace(Regex("""\\begin\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
     text = text.replace(Regex("""\\end\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
 
@@ -536,29 +253,554 @@ fun formatLatexToReadableMath(raw: String): String {
 }
 
 /**
- * Parses markdown inline styles like **bold**, *italic*, ~~strikethrough~~, `inline code`, and [link](url).
+ * Detects if a standalone line is purely a mathematical equation (like `\frac{d\rho}{dt} = ...`)
+ * while strictly ignoring regular English sentences/paragraphs.
+ */
+fun isPureEquationLine(raw: String): Boolean {
+    val s = raw.trim()
+    if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("*") || s.startsWith(">") || s.startsWith("|") || s.startsWith("```")) {
+        return false
+    }
+
+    // Common English prose words: if 2 or more are present, it is prose, NOT a standalone formula!
+    val englishWords = setOf(
+        "the", "is", "of", "and", "in", "to", "that", "this", "we", "can",
+        "for", "with", "as", "by", "from", "are", "which", "where", "quantum",
+        "physics", "system", "systems", "state", "states", "rather", "than",
+        "classical", "microscopic", "action", "scales", "comparable", "constant",
+        "pure", "physical", "space", "spaces", "represented", "vector", "vectors"
+    )
+
+    val words = s.split(Regex("\\s+")).map { it.lowercase().filter { ch -> ch.isLetter() } }.filter { it.isNotBlank() }
+    val matchedEng = words.count { it in englishWords }
+    if (matchedEng >= 2) return false
+
+    val mathTokens = listOf(
+        "\\frac", "frac{", "\\int", "\\sum", "\\prod", "\\sqrt", "\\partial",
+        "\\nabla", "\\hbar", "\\dagger", "\\ket{", "\\bra{", "\\hat{", "\\vec{"
+    )
+    val hasMathToken = mathTokens.any { s.contains(it) }
+    if (hasMathToken && (s.contains("=") || s.startsWith("\\frac") || s.startsWith("frac{") || s.startsWith("\\int") || s.startsWith("\\sum"))) {
+        return true
+    }
+
+    return false
+}
+
+/**
+ * Main ChatGPT-grade Response Panel Composable.
+ * Seamlessly integrates rich typography, syntax-highlighted code blocks, responsive tables,
+ * callouts, and pixel-perfect publication-quality LaTeX math equations (without boxed frames).
+ */
+@Composable
+fun MarkdownContent(
+    text: String,
+    modifier: Modifier = Modifier,
+    textColor: Color = MaterialTheme.colorScheme.onSurface
+) {
+    val cleanText = remember(text) { sanitizeMarkdownInput(text) }
+    val sections = remember(cleanText) { parseMarkdownBlocks(cleanText) }
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        for (section in sections) {
+            when (section) {
+                is MarkdownBlock.MathEquation -> {
+                    MathEquationBlockView(formula = section.formula, textColor = textColor)
+                }
+                is MarkdownBlock.Code -> {
+                    CodeBlockView(language = section.language, code = section.code)
+                }
+                is MarkdownBlock.Table -> {
+                    TableBlockView(headers = section.headers, rows = section.rows)
+                }
+                is MarkdownBlock.Heading -> {
+                    val style = when (section.level) {
+                        1 -> MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = (-0.4).sp,
+                            lineHeight = 28.sp,
+                            fontSize = 22.sp
+                        )
+                        2 -> MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = (-0.3).sp,
+                            lineHeight = 24.sp,
+                            fontSize = 18.sp
+                        )
+                        else -> MaterialTheme.typography.titleSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = (-0.1).sp,
+                            lineHeight = 22.sp,
+                            fontSize = 15.sp
+                        )
+                    }
+                    Text(
+                        text = buildFormattedInlineText(section.text, textColor),
+                        style = style,
+                        color = textColor,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                    )
+                }
+                is MarkdownBlock.Blockquote -> {
+                    val isCallout = section.text.startsWith("[!") && section.text.contains("]")
+                    if (isCallout) {
+                        val calloutType = section.text.substringAfter("[!").substringBefore("]").uppercase()
+                        val calloutBody = section.text.substringAfter("]").trim()
+                        val (calloutColor, calloutIcon, calloutTitle) = when (calloutType) {
+                            "NOTE" -> Triple(ChatGptBlue, Icons.Default.Info, "Note")
+                            "TIP" -> Triple(ChatGptEmerald, Icons.Default.Lightbulb, "Tip")
+                            "WARNING" -> Triple(ChatGptAmber, Icons.Default.Warning, "Warning")
+                            "IMPORTANT" -> Triple(ClaudeTerracotta, Icons.Default.PriorityHigh, "Important")
+                            "CAUTION" -> Triple(MaterialTheme.colorScheme.error, Icons.Default.Error, "Caution")
+                            else -> Triple(ClaudeTerracotta, Icons.Default.Info, calloutType.lowercase().replaceFirstChar { it.uppercase() })
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = calloutColor.copy(alpha = 0.08f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, calloutColor.copy(alpha = 0.35f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(calloutIcon, contentDescription = null, tint = calloutColor, modifier = Modifier.size(15.dp))
+                                    Text(
+                                        text = calloutTitle,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = calloutColor
+                                    )
+                                }
+                                if (calloutBody.isNotBlank()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = buildFormattedInlineText(calloutBody, textColor),
+                                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                                        color = textColor
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.5.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(ClaudeTerracotta)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                text = buildFormattedInlineText(section.text, MaterialTheme.colorScheme.onSurfaceVariant),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontStyle = FontStyle.Italic,
+                                    lineHeight = 22.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                is MarkdownBlock.ListItem -> {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 4.dp, top = 2.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        if (section.isOrdered) {
+                            Text(
+                                text = "${section.index}.",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = ClaudeTerracotta,
+                                modifier = Modifier.width(22.dp)
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .padding(top = 8.dp, end = 10.dp)
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(ClaudeTerracotta)
+                            )
+                        }
+                        Text(
+                            text = buildFormattedInlineText(section.text, textColor),
+                            style = MaterialTheme.typography.bodyMedium,
+                            lineHeight = 23.sp,
+                            color = textColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                is MarkdownBlock.Divider -> {
+                    HorizontalDivider(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        thickness = 0.8.dp,
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                    )
+                }
+                is MarkdownBlock.Paragraph -> {
+                    Text(
+                        text = buildFormattedInlineText(section.text, textColor),
+                        style = MaterialTheme.typography.bodyMedium,
+                        lineHeight = 24.sp,
+                        color = textColor
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * ChatGPT-style Display Math View.
+ * Seamless, centered, borderless equation presentation using KaTeX with instant Unicode preview.
+ * Allows long-press / tap to copy LaTeX equation source with haptic feedback.
+ */
+@Composable
+fun MathEquationBlockView(
+    formula: String,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
+    val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
+    var measuredHeightDp by remember { mutableStateOf(44.dp) }
+    val density = LocalDensity.current
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                Toast.makeText(context, "Copied LaTeX equation", Toast.LENGTH_SHORT).show()
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        KaTeXDisplayView(
+            formula = normalizedFormula,
+            unicodeFallback = unicodePreview,
+            isDark = isDark,
+            onHeightMeasured = { px ->
+                val dpVal = with(density) { px.toDp() }
+                if (dpVal in 28.dp..420.dp) {
+                    measuredHeightDp = dpVal
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(measuredHeightDp)
+        )
+    }
+}
+
+/**
+ * Transparent, borderless KaTeX WebView display engine.
+ * Renders publication-quality mathematical notation seamlessly inline on canvas.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun KaTeXDisplayView(
+    formula: String,
+    unicodeFallback: String,
+    isDark: Boolean,
+    onHeightMeasured: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var isLoaded by remember { mutableStateOf(false) }
+
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    setBackgroundColor(0) // Transparent background
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.allowFileAccess = true
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
+                    isVerticalScrollBarEnabled = false
+                    isHorizontalScrollBarEnabled = true
+                    isNestedScrollingEnabled = false
+
+                    addJavascriptInterface(object {
+                        @JavascriptInterface
+                        fun onHeight(h: Float) {
+                            post { onHeightMeasured(h.toInt()) }
+                        }
+                    }, "AndroidBridge")
+
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            isLoaded = true
+                            evaluateJavascript(
+                                "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                                null
+                            )
+                        }
+                    }
+
+                    loadUrl("file:///android_asset/katex/katex_container.html")
+                }
+            },
+            update = { webView ->
+                if (isLoaded) {
+                    webView.evaluateJavascript(
+                        "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                        null
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Instant mathematical Serif preview while WebView is evaluating KaTeX
+        if (!isLoaded) {
+            Text(
+                text = unicodeFallback,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 17.sp,
+                    letterSpacing = 0.4.sp
+                ),
+                color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+/**
+ * Modern ChatGPT Code Block with language badge, copy action, and monospace font.
+ */
+@Composable
+fun CodeBlockView(language: String, code: String) {
+    val context = LocalContext.current
+    val displayLang = if (language.isNotBlank()) language.lowercase() else "code"
+    var isCopied by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            delay(2000)
+            isCopied = false
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(CodeBlockBg)
+            .border(1.dp, CodeBlockBorder, RoundedCornerShape(12.dp))
+    ) {
+        // Modern ChatGPT Code Header Bar
+        DisableSelection {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CodeBlockHeader)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = displayLang,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.5.sp
+                    ),
+                    color = Color(0xFFA6A6B0),
+                    fontWeight = FontWeight.Medium
+                )
+
+                Surface(
+                    onClick = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("Code", code))
+                        isCopied = true
+                        Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFF2B2B32).copy(alpha = 0.7f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFF3E3E48))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = if (isCopied) "Copied" else "Copy code",
+                            modifier = Modifier.size(13.dp),
+                            tint = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                        )
+                        Text(
+                            text = if (isCopied) "Copied!" else "Copy code",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                            color = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Code Content with Horizontal Scroll and full text selection
+        SelectionContainer {
+            Text(
+                text = code,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 19.sp,
+                    fontSize = 12.5.sp
+                ),
+                color = Color(0xFFEDEDF0),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(14.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Modern Markdown Table with horizontal scroll, zebra rows, and sleek borders.
+ */
+@Composable
+fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val headerBg = if (isDark) Color(0xFF1E1E22) else Color(0xFFECEAE4)
+    val rowAltBg = if (isDark) Color(0xFF18181C) else Color(0xFFF7F6F2)
+    val rowNormBg = if (isDark) Color(0xFF141416) else Color(0xFFFFFFFF)
+    val borderColor = if (isDark) Color(0xFF2E2E36) else Color(0xFFE2E0D8)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(10.dp)),
+        shape = RoundedCornerShape(10.dp),
+        color = rowNormBg
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier
+                    .background(headerBg)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                headers.forEach { header ->
+                    Text(
+                        text = header.trim(),
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .widthIn(min = 90.dp, max = 220.dp)
+                            .padding(end = 12.dp)
+                    )
+                }
+            }
+            HorizontalDivider(thickness = 1.dp, color = borderColor)
+
+            // Data Rows
+            rows.forEachIndexed { index, row ->
+                val bg = if (index % 2 == 1) rowAltBg else rowNormBg
+                Row(
+                    modifier = Modifier
+                        .background(bg)
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                ) {
+                    row.forEachIndexed { _, cell ->
+                        Text(
+                            text = cell.trim(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .widthIn(min = 90.dp, max = 220.dp)
+                                .padding(end = 12.dp)
+                        )
+                    }
+                }
+                if (index < rows.size - 1) {
+                    HorizontalDivider(thickness = 0.5.dp, color = borderColor.copy(alpha = 0.5f))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Parses markdown inline styles including:
+ * - **bold**
+ * - *italic*
+ * - ~~strikethrough~~
+ * - `inline code`
+ * - [link](url)
+ * - $inline math$ and \(inline math\) with mathematical serif italic styling
  */
 @Composable
 fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui.text.AnnotatedString {
-    val clean = remember(raw) { formatLatexToReadableMath(raw) }
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val inlineCodeBg = if (isDark) Color(0xFF2C2B27) else Color(0xFFEFECE5)
     val inlineCodeText = if (isDark) Color(0xFFF0EBE1) else Color(0xFF9C4927)
+    val mathColor = if (isDark) Color(0xFFEAEAF2) else Color(0xFF202028)
 
     val pattern = remember {
-        Regex("(\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|`(.+?)`|\\[(.+?)\\]\\((.+?)\\))")
+        Regex(
+            "(\\*\\*(.+?)\\*\\*|" +
+            "\\*(.+?)\\*|" +
+            "~~(.+?)~~|" +
+            "`(.+?)`|" +
+            "\\[(.+?)\\]\\((.+?)\\)|" +
+            "\\$\\$([\\s\\S]+?)\\$\\$|" +
+            "\\$([^$\\n]+?)\\$|" +
+            "\\\\\\(([\\s\\S]+?)\\\\\\))"
+        )
     }
 
     return buildAnnotatedString {
         var cursor = 0
-        val matches = pattern.findAll(clean)
+        val matches = pattern.findAll(raw)
 
         for (match in matches) {
             val start = match.range.first
             val end = match.range.last + 1
 
             if (start > cursor) {
-                append(clean.substring(cursor, start))
+                val plainChunk = raw.substring(cursor, start)
+                append(formatLatexToUnicode(plainChunk))
             }
 
             val fullMatch = match.value
@@ -566,19 +808,19 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                 fullMatch.startsWith("**") -> {
                     val content = match.groupValues.getOrNull(2) ?: ""
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = baseColor)) {
-                        append(content)
+                        append(formatLatexToUnicode(content))
                     }
                 }
                 fullMatch.startsWith("*") -> {
                     val content = match.groupValues.getOrNull(3) ?: ""
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor)) {
-                        append(content)
+                        append(formatLatexToUnicode(content))
                     }
                 }
                 fullMatch.startsWith("~~") -> {
                     val content = match.groupValues.getOrNull(4) ?: ""
                     withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = baseColor.copy(alpha = 0.6f))) {
-                        append(content)
+                        append(formatLatexToUnicode(content))
                     }
                 }
                 fullMatch.startsWith("`") -> {
@@ -606,15 +848,61 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                         append(linkText)
                     }
                 }
+                fullMatch.startsWith("$$") -> {
+                    val mathContent = match.groupValues.getOrNull(8) ?: ""
+                    val cleanMath = formatLatexToUnicode(mathContent)
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Serif,
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.Medium,
+                            color = mathColor,
+                            letterSpacing = 0.3.sp
+                        )
+                    ) {
+                        append(" $cleanMath ")
+                    }
+                }
+                fullMatch.startsWith("$") -> {
+                    val mathContent = match.groupValues.getOrNull(9) ?: ""
+                    val cleanMath = formatLatexToUnicode(mathContent)
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Serif,
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.Medium,
+                            color = mathColor,
+                            letterSpacing = 0.2.sp
+                        )
+                    ) {
+                        append(cleanMath)
+                    }
+                }
+                fullMatch.startsWith("\\(") -> {
+                    val mathContent = match.groupValues.getOrNull(10) ?: ""
+                    val cleanMath = formatLatexToUnicode(mathContent)
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Serif,
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.Medium,
+                            color = mathColor,
+                            letterSpacing = 0.2.sp
+                        )
+                    ) {
+                        append(cleanMath)
+                    }
+                }
                 else -> {
-                    append(fullMatch)
+                    append(formatLatexToUnicode(fullMatch))
                 }
             }
             cursor = end
         }
 
-        if (cursor < clean.length) {
-            append(clean.substring(cursor))
+        if (cursor < raw.length) {
+            val remainingChunk = raw.substring(cursor)
+            append(formatLatexToUnicode(remainingChunk))
         }
     }
 }
@@ -626,9 +914,14 @@ sealed class MarkdownBlock {
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
     data class Blockquote(val text: String) : MarkdownBlock()
     data class ListItem(val isOrdered: Boolean, val index: Int, val text: String) : MarkdownBlock()
+    data class MathEquation(val formula: String) : MarkdownBlock()
     object Divider : MarkdownBlock()
 }
 
+/**
+ * Intelligent Markdown and Math block parser.
+ * Dispatches code blocks, tables, headings, lists, blockquotes, display math equations, and paragraphs.
+ */
 fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
     val blocks = mutableListOf<MarkdownBlock>()
     val lines = raw.split("\n")
@@ -642,7 +935,11 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (paraBuffer.isNotEmpty()) {
             val content = paraBuffer.toString().trim()
             if (content.isNotEmpty()) {
-                blocks.add(MarkdownBlock.Paragraph(content))
+                if (isPureEquationLine(content)) {
+                    blocks.add(MarkdownBlock.MathEquation(content))
+                } else {
+                    blocks.add(MarkdownBlock.Paragraph(content))
+                }
             }
             paraBuffer.clear()
         }
@@ -655,7 +952,11 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
         if (trimmed.startsWith("```")) {
             if (inCodeBlock) {
-                blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+                if (codeLang.equals("math", ignoreCase = true) || codeLang.equals("latex", ignoreCase = true) || codeLang.equals("katex", ignoreCase = true)) {
+                    blocks.add(MarkdownBlock.MathEquation(codeBuffer.toString().trimEnd()))
+                } else {
+                    blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+                }
                 codeBuffer.clear()
                 codeLang = ""
                 inCodeBlock = false
@@ -671,6 +972,78 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (inCodeBlock) {
             codeBuffer.append(line).append("\n")
             i++
+            continue
+        }
+
+        // Display Math Block $$ ... $$
+        if (trimmed.startsWith("$$")) {
+            flushPara()
+            if (trimmed.length > 2 && trimmed.endsWith("$$")) {
+                val formula = trimmed.removePrefix("$$").removeSuffix("$$").trim()
+                if (formula.isNotEmpty()) {
+                    blocks.add(MarkdownBlock.MathEquation(formula))
+                }
+                i++
+                continue
+            } else {
+                val mathBuffer = StringBuilder()
+                val first = trimmed.removePrefix("$$").trim()
+                if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
+                i++
+                while (i < lines.size && !lines[i].trim().startsWith("$$")) {
+                    mathBuffer.append(lines[i]).append("\n")
+                    i++
+                }
+                blocks.add(MarkdownBlock.MathEquation(mathBuffer.toString().trimEnd()))
+                i++
+                continue
+            }
+        }
+
+        // Display Math Block \[ ... \]
+        if (trimmed.startsWith("\\[")) {
+            flushPara()
+            if (trimmed.length > 2 && trimmed.endsWith("\\]")) {
+                val formula = trimmed.removePrefix("\\[").removeSuffix("\\]").trim()
+                if (formula.isNotEmpty()) {
+                    blocks.add(MarkdownBlock.MathEquation(formula))
+                }
+                i++
+                continue
+            } else {
+                val mathBuffer = StringBuilder()
+                val first = trimmed.removePrefix("\\[").trim()
+                if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
+                i++
+                while (i < lines.size && !lines[i].trim().contains("\\]")) {
+                    mathBuffer.append(lines[i]).append("\n")
+                    i++
+                }
+                if (i < lines.size) {
+                    val last = lines[i].trim().substringBefore("\\]").trim()
+                    if (last.isNotEmpty()) mathBuffer.append(last).append("\n")
+                    i++
+                }
+                blocks.add(MarkdownBlock.MathEquation(mathBuffer.toString().trimEnd()))
+                continue
+            }
+        }
+
+        // LaTeX environment blocks \begin{...} ... \end{...}
+        if (trimmed.startsWith("\\begin{")) {
+            flushPara()
+            val env = trimmed.substringAfter("\\begin{").substringBefore("}")
+            val mathBuffer = StringBuilder(line).append("\n")
+            i++
+            while (i < lines.size && !lines[i].contains("\\end{$env}")) {
+                mathBuffer.append(lines[i]).append("\n")
+                i++
+            }
+            if (i < lines.size) {
+                mathBuffer.append(lines[i]).append("\n")
+                i++
+            }
+            blocks.add(MarkdownBlock.MathEquation(mathBuffer.toString().trimEnd()))
             continue
         }
 
@@ -690,6 +1063,14 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 blocks.add(MarkdownBlock.Table(headers, rows))
                 continue
             }
+        }
+
+        // Bare mathematical equation detection
+        if (isPureEquationLine(trimmed)) {
+            flushPara()
+            blocks.add(MarkdownBlock.MathEquation(trimmed))
+            i++
+            continue
         }
 
         when {
@@ -743,7 +1124,11 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
     }
 
     if (inCodeBlock && codeBuffer.isNotEmpty()) {
-        blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+        if (codeLang.equals("math", ignoreCase = true) || codeLang.equals("latex", ignoreCase = true) || codeLang.equals("katex", ignoreCase = true)) {
+            blocks.add(MarkdownBlock.MathEquation(codeBuffer.toString().trimEnd()))
+        } else {
+            blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+        }
     } else {
         flushPara()
     }

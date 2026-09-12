@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
+    <link rel="stylesheet" href="katex.min.css">
+    <script src="katex.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: transparent !important;
+            overflow-x: auto;
+            overflow-y: hidden;
+            width: 100%;
+        }
+        body {
+            font-family: "KaTeX_Main", "Times New Roman", Times, serif;
+            padding: 4px 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 32px;
+        }
+        #math-container {
+            display: inline-block;
+            max-width: 100%;
+            text-align: center;
+            font-size: 1.12em;
+        }
+        .katex-display {
+            margin: 0.1em 0 !important;
+            text-align: center;
+        }
+        body.dark {
+            color: #ECECF1;
+        }
+        body.light {
+            color: #1A1A1E;
+        }
+        .katex-error {
+            color: #ECECF1 !important;
+            font-family: inherit !important;
+            font-size: 0.95em;
+        }
+    </style>
+</head>
+<body class="dark">
+    <div id="math-container"></div>
+    <script>
+        function renderMath(formula, isDark) {
+            document.body.className = isDark ? 'dark' : 'light';
+            var container = document.getElementById('math-container');
+            try {
+                katex.render(formula, container, {
+                    displayMode: true,
+                    throwOnError: false,
+                    output: 'htmlAndMathml',
+                    trust: true
+                });
+            } catch (err) {
+                container.innerText = formula;
+            }
+            requestAnimationFrame(function() {
+                var h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, 32);
+                if (window.AndroidBridge && window.AndroidBridge.onHeight) {
+                    window.AndroidBridge.onHeight(h);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
