@@ -33,6 +33,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -1748,14 +1749,12 @@ fun MessageItem(
                         }
 
                         if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:") && !message.content.startsWith("Sent ")) {
-                            Text(
-                                text = message.content,
-                                style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontSize = 15.sp,
-                                    lineHeight = 23.sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                            SelectionContainer {
+                                MarkdownContent(
+                                    text = message.content,
+                                    textColor = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
@@ -1967,7 +1966,9 @@ fun MessageItem(
 
                     // 3. Main Message Markdown Content with streaming cursor (Borderless Canvas Flow)
                     if (message.content.isNotBlank()) {
-                        MarkdownContent(text = message.content)
+                        SelectionContainer {
+                            MarkdownContent(text = message.content)
+                        }
                     }
                     // Streaming blinking cursor
                     if (message.isStreaming && message.content.isNotBlank()) {
@@ -2239,16 +2240,17 @@ fun ThinkingAccordionCard(
                         .background(textColor.copy(alpha = 0.45f))
                 )
                 Spacer(Modifier.width(10.dp))
-                Text(
-                    text = thinkingText,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        lineHeight = 19.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp
-                    ),
-                    color = textColor.copy(alpha = 0.9f),
-                    modifier = Modifier.weight(1f)
-                )
+                SelectionContainer(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = thinkingText,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            lineHeight = 19.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        color = textColor.copy(alpha = 0.9f)
+                    )
+                }
             }
         }
     }

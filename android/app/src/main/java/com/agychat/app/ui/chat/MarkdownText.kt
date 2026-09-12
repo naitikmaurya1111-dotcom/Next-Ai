@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -63,6 +65,9 @@ fun MarkdownContent(
     ) {
         for (section in sections) {
             when (section) {
+                is MarkdownBlock.Math -> {
+                    MathFormulaBlockView(formula = section.formula)
+                }
                 is MarkdownBlock.Code -> {
                     CodeBlockView(language = section.language, code = section.code)
                 }
@@ -302,69 +307,73 @@ fun CodeBlockView(language: String, code: String) {
             .border(1.dp, CodeBlockBorder, RoundedCornerShape(12.dp))
     ) {
         // Modern ChatGPT Code Header Bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(CodeBlockHeader)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = displayLang,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    letterSpacing = 0.5.sp
-                ),
-                color = Color(0xFFA6A6B0),
-                fontWeight = FontWeight.Medium
-            )
-
-            Surface(
-                onClick = {
-                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("Code", code))
-                    isCopied = true
-                    Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
-                },
-                shape = RoundedCornerShape(6.dp),
-                color = Color(0xFF2B2B32).copy(alpha = 0.7f),
-                border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFF3E3E48))
+        DisableSelection {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CodeBlockHeader)
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                Text(
+                    text = displayLang,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.5.sp
+                    ),
+                    color = Color(0xFFA6A6B0),
+                    fontWeight = FontWeight.Medium
+                )
+
+                Surface(
+                    onClick = {
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("Code", code))
+                        isCopied = true
+                        Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    color = Color(0xFF2B2B32).copy(alpha = 0.7f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, Color(0xFF3E3E48))
                 ) {
-                    Icon(
-                        if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                        contentDescription = if (isCopied) "Copied" else "Copy code",
-                        modifier = Modifier.size(13.dp),
-                        tint = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
-                    )
-                    Text(
-                        text = if (isCopied) "Copied!" else "Copy code",
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                        color = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = if (isCopied) "Copied" else "Copy code",
+                            modifier = Modifier.size(13.dp),
+                            tint = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                        )
+                        Text(
+                            text = if (isCopied) "Copied!" else "Copy code",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                            color = if (isCopied) ChatGptEmerald else Color(0xFFA6A6B0)
+                        )
+                    }
                 }
             }
         }
 
-        // Code Content with Horizontal Scroll
-        Text(
-            text = code,
-            style = MaterialTheme.typography.bodySmall.copy(
-                fontFamily = FontFamily.Monospace,
-                lineHeight = 19.sp,
-                fontSize = 12.5.sp
-            ),
-            color = Color(0xFFEDEDF0),
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(14.dp)
-        )
+        // Code Content with Horizontal Scroll and full text selection
+        SelectionContainer {
+            Text(
+                text = code,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 19.sp,
+                    fontSize = 12.5.sp
+                ),
+                color = Color(0xFFEDEDF0),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(14.dp)
+            )
+        }
     }
 }
 
@@ -376,9 +385,11 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val inlineCodeBg = if (isDark) Color(0xFF2C2B27) else Color(0xFFEFECE5)
     val inlineCodeText = if (isDark) Color(0xFFF0EBE1) else Color(0xFF9C4927)
+    val inlineMathBg = if (isDark) Color(0xFF1E1E28) else Color(0xFFECECF6)
+    val inlineMathText = ClaudeTerracotta
 
     val pattern = remember {
-        Regex("(\\*\\*(.+?)\\*\\*|\\*(.+?)\\*|~~(.+?)~~|`(.+?)`|\\[(.+?)\\]\\((.+?)\\))")
+        Regex("""(\*\*([^\*]+?)\*\*|\*([^\*]+?)\*|~~([^~]+?)~~|`([^`]+?)`|\[([^\]]+?)\]\(([^)]+?)\)|\$\$([^\$]+?)\$\$|\$([^\$\n]+?)\$|\\\((.+?)\\\))""")
     }
 
     return buildAnnotatedString {
@@ -438,6 +449,51 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                         append(linkText)
                     }
                 }
+                fullMatch.startsWith("$$") -> {
+                    val content = match.groupValues.getOrNull(8) ?: ""
+                    val unicode = formatLatexToUnicode(content)
+                    withStyle(
+                        SpanStyle(
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.SemiBold,
+                            background = inlineMathBg,
+                            color = inlineMathText,
+                            fontSize = 14.5.sp
+                        )
+                    ) {
+                        append(" $unicode ")
+                    }
+                }
+                fullMatch.startsWith("$") -> {
+                    val content = match.groupValues.getOrNull(9) ?: ""
+                    val unicode = formatLatexToUnicode(content)
+                    withStyle(
+                        SpanStyle(
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.SemiBold,
+                            background = inlineMathBg,
+                            color = inlineMathText,
+                            fontSize = 14.sp
+                        )
+                    ) {
+                        append(" $unicode ")
+                    }
+                }
+                fullMatch.startsWith("\\(") -> {
+                    val content = match.groupValues.getOrNull(10) ?: ""
+                    val unicode = formatLatexToUnicode(content)
+                    withStyle(
+                        SpanStyle(
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.SemiBold,
+                            background = inlineMathBg,
+                            color = inlineMathText,
+                            fontSize = 14.sp
+                        )
+                    ) {
+                        append(" $unicode ")
+                    }
+                }
                 else -> {
                     append(fullMatch)
                 }
@@ -458,6 +514,7 @@ sealed class MarkdownBlock {
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
     data class Blockquote(val text: String) : MarkdownBlock()
     data class ListItem(val isOrdered: Boolean, val index: Int, val text: String) : MarkdownBlock()
+    data class Math(val formula: String) : MarkdownBlock()
     object Divider : MarkdownBlock()
 }
 
@@ -474,7 +531,11 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (paraBuffer.isNotEmpty()) {
             val content = paraBuffer.toString().trim()
             if (content.isNotEmpty()) {
-                blocks.add(MarkdownBlock.Paragraph(content))
+                if (isLikelyMathBlock(content)) {
+                    blocks.add(MarkdownBlock.Math(content))
+                } else {
+                    blocks.add(MarkdownBlock.Paragraph(content))
+                }
             }
             paraBuffer.clear()
         }
@@ -487,7 +548,11 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
 
         if (trimmed.startsWith("```")) {
             if (inCodeBlock) {
-                blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+                if (codeLang.equals("math", ignoreCase = true) || codeLang.equals("latex", ignoreCase = true) || codeLang.equals("katex", ignoreCase = true)) {
+                    blocks.add(MarkdownBlock.Math(codeBuffer.toString().trimEnd()))
+                } else {
+                    blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+                }
                 codeBuffer.clear()
                 codeLang = ""
                 inCodeBlock = false
@@ -503,6 +568,78 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         if (inCodeBlock) {
             codeBuffer.append(line).append("\n")
             i++
+            continue
+        }
+
+        // Display Math Block $$ ... $$
+        if (trimmed.startsWith("$$")) {
+            flushPara()
+            if (trimmed.length > 2 && trimmed.endsWith("$$")) {
+                val formula = trimmed.removePrefix("$$").removeSuffix("$$").trim()
+                if (formula.isNotEmpty()) {
+                    blocks.add(MarkdownBlock.Math(formula))
+                }
+                i++
+                continue
+            } else {
+                val mathBuffer = StringBuilder()
+                val first = trimmed.removePrefix("$$").trim()
+                if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
+                i++
+                while (i < lines.size && !lines[i].trim().startsWith("$$")) {
+                    mathBuffer.append(lines[i]).append("\n")
+                    i++
+                }
+                blocks.add(MarkdownBlock.Math(mathBuffer.toString().trimEnd()))
+                i++
+                continue
+            }
+        }
+
+        // Display Math Block \[ ... \]
+        if (trimmed.startsWith("\\[")) {
+            flushPara()
+            if (trimmed.length > 2 && trimmed.endsWith("\\]")) {
+                val formula = trimmed.removePrefix("\\[").removeSuffix("\\]").trim()
+                if (formula.isNotEmpty()) {
+                    blocks.add(MarkdownBlock.Math(formula))
+                }
+                i++
+                continue
+            } else {
+                val mathBuffer = StringBuilder()
+                val first = trimmed.removePrefix("\\[").trim()
+                if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
+                i++
+                while (i < lines.size && !lines[i].trim().contains("\\]")) {
+                    mathBuffer.append(lines[i]).append("\n")
+                    i++
+                }
+                if (i < lines.size) {
+                    val last = lines[i].trim().substringBefore("\\]").trim()
+                    if (last.isNotEmpty()) mathBuffer.append(last).append("\n")
+                    i++
+                }
+                blocks.add(MarkdownBlock.Math(mathBuffer.toString().trimEnd()))
+                continue
+            }
+        }
+
+        // LaTeX environment blocks \begin{...} ... \end{...}
+        if (trimmed.startsWith("\\begin{")) {
+            flushPara()
+            val env = trimmed.substringAfter("\\begin{").substringBefore("}")
+            val mathBuffer = StringBuilder(line).append("\n")
+            i++
+            while (i < lines.size && !lines[i].contains("\\end{$env}")) {
+                mathBuffer.append(lines[i]).append("\n")
+                i++
+            }
+            if (i < lines.size) {
+                mathBuffer.append(lines[i]).append("\n")
+                i++
+            }
+            blocks.add(MarkdownBlock.Math(mathBuffer.toString().trimEnd()))
             continue
         }
 
@@ -522,6 +659,14 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 blocks.add(MarkdownBlock.Table(headers, rows))
                 continue
             }
+        }
+
+        // Bare mathematical equation detection
+        if (isLikelyMathBlock(trimmed)) {
+            flushPara()
+            blocks.add(MarkdownBlock.Math(trimmed))
+            i++
+            continue
         }
 
         when {
@@ -575,7 +720,11 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
     }
 
     if (inCodeBlock && codeBuffer.isNotEmpty()) {
-        blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+        if (codeLang.equals("math", ignoreCase = true) || codeLang.equals("latex", ignoreCase = true) || codeLang.equals("katex", ignoreCase = true)) {
+            blocks.add(MarkdownBlock.Math(codeBuffer.toString().trimEnd()))
+        } else {
+            blocks.add(MarkdownBlock.Code(codeLang, codeBuffer.toString().trimEnd()))
+        }
     } else {
         flushPara()
     }

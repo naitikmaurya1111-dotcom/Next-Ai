@@ -7,3 +7,7 @@
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn com.google.api.**
+
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
