@@ -86,9 +86,19 @@ fun normalizeLatexFormula(raw: String): String {
     // Strip dangling backslash at the very end of string (common in streaming)
     s = s.replace(Regex("""\\+\s*$"""), "")
 
-    // Balance or strip lone trailing \left if not closed
-    if (s.contains("""\left""") && !s.contains("""\right""")) {
-        s = s.replace(Regex("""\\left\s*([(\[{|.])\s*$"""), "$1")
+    // Balance unclosed \left and \right delimiters (unmatched delimiters cause KaTeX parse abort)
+    val leftCount = Regex("""\\left\b""").findAll(s).count()
+    val rightCount = Regex("""\\right\b""").findAll(s).count()
+    if (leftCount != rightCount) {
+        s = s.replace(Regex("""\\left\s*([(\[{|.])"""), "$1")
+            .replace(Regex("""\\right\s*([)\]}|.])"""), "$1")
+    }
+
+    // Auto-balance unclosed curly braces { } (common during streaming)
+    val openBraces = s.count { it == '{' }
+    val closeBraces = s.count { it == '}' }
+    if (openBraces > closeBraces) {
+        s += "}".repeat(openBraces - closeBraces)
     }
 
     return s.trim()
@@ -229,7 +239,7 @@ fun formatLatexToUnicode(raw: String): String {
     // Subscripts: _{content} or _char
     val subsMap = mapOf(
         '0' to '₀', '1' to '₁', '2' to '₂', '3' to '₃', '4' to '₄',
-        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '⁸', '9' to '₉',
+        '5' to '₅', '6' to '₆', '7' to '₇', '8' to '₈', '9' to '₉',
         '+' to '₊', '-' to '₋', '=' to '₌', '(' to '₍', ')' to '₎',
         'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ',
         'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
@@ -482,13 +492,12 @@ fun MathEquationBlockView(
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
     val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
-    var measuredHeightDp by remember { mutableStateOf(44.dp) }
-    val density = LocalDensity.current
+    var measuredHeightDp by remember { mutableStateOf(58.dp) }
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp)
+            .padding(vertical = 4.dp)
             .clickable {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -501,9 +510,10 @@ fun MathEquationBlockView(
             formula = normalizedFormula,
             unicodeFallback = unicodePreview,
             isDark = isDark,
-            onHeightMeasured = { px ->
-                val dpVal = with(density) { px.toDp() }
-                if (dpVal in 28.dp..420.dp) {
+            onHeightMeasured = { cssPixels ->
+                // JavaScript WebView reports dimensions in CSS pixels (1 CSS px = 1 dp in viewport 1.0)
+                val dpVal = (cssPixels + 14).dp
+                if (dpVal in 44.dp..650.dp) {
                     measuredHeightDp = dpVal
                 }
             },
@@ -837,7 +847,8 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
             "\\[(.+?)\\]\\((.+?)\\)|" +
             "\\$\\$([\\s\\S]+?)\\$\\$|" +
             "\\$([^$\\n]+?)\\$|" +
-            "\\\\\\(([\\s\\S]+?)\\\\\\))"
+            "\\\\\\(([\\s\\S]+?)\\\\\\)|" +
+            "\\\\\\[([\\s\\S]+?)\\\\\\])"
         )
     }
 
@@ -942,6 +953,21 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                         )
                     ) {
                         append(cleanMath)
+                    }
+                }
+                fullMatch.startsWith("\\[") -> {
+                    val mathContent = match.groupValues.getOrNull(11) ?: ""
+                    val cleanMath = formatLatexToUnicode(mathContent)
+                    withStyle(
+                        SpanStyle(
+                            fontFamily = FontFamily.Serif,
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.Medium,
+                            color = mathColor,
+                            letterSpacing = 0.3.sp
+                        )
+                    ) {
+                        append(" $cleanMath ")
                     }
                 }
                 else -> {
