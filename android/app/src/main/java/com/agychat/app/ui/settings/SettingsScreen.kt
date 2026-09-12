@@ -46,7 +46,8 @@ import com.agychat.app.ui.theme.ClaudeTerracotta
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    chatViewModel: ChatViewModel = hiltViewModel()
+    chatViewModel: ChatViewModel = hiltViewModel(),
+    onNavigateToPersonalization: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE) }
@@ -55,6 +56,7 @@ fun SettingsScreen(
     val isMemoryEnabled by chatViewModel.isMemoryEnabled.collectAsState()
     val isAutoMemoryEnabled by chatViewModel.isAutoMemoryEnabled.collectAsState()
     val customInstructions by chatViewModel.customInstructions.collectAsState()
+    val personalization by chatViewModel.personalization.collectAsState()
     val enabledMemoriesCount by chatViewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val allMemories by chatViewModel.memories.collectAsState(initial = emptyList())
     val cloudSyncStatus by chatViewModel.cloudSyncStatus.collectAsState()
@@ -422,50 +424,61 @@ fun SettingsScreen(
 
                 Spacer(Modifier.height(14.dp))
 
-                // Custom Instructions Card
+                // Memory & Personalization Hub Full Page Entry Card
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToPersonalization() },
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = ClaudeTerracotta.copy(alpha = 0.10f)
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.35f)),
+                    shape = RoundedCornerShape(14.dp)
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(ClaudeTerracotta.copy(alpha = 0.18f)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            Icon(
+                                Icons.Default.Tune,
+                                contentDescription = null,
+                                tint = ClaudeTerracotta,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(
-                                    text = "Custom Instructions",
+                                    "Personalization & Memory Hub",
                                     style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = if (customInstructions.isEnabled) {
-                                        val tone = customInstructions.tonePreset
-                                        val hasProfile = customInstructions.aboutUser.isNotBlank()
-                                        if (hasProfile) "Active · $tone" else "Active · $tone (Profile empty)"
-                                    } else "Disabled",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
-                            OutlinedButton(
-                                onClick = { showCustomInstructionsSheet = true },
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                            ) {
-                                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Customize", fontSize = 12.sp)
-                            }
+                            Text(
+                                text = if (personalization.isEnabled) {
+                                    val id = if (personalization.name.isNotBlank()) "${personalization.name} · " else ""
+                                    "${id}${personalization.toneStyle} tone · ${personalization.depthLevel} depth"
+                                } else "Personalization is OFF",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        FilledTonalButton(
+                            onClick = onNavigateToPersonalization,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Open", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(2.dp))
+                            Icon(Icons.Default.ChevronRight, contentDescription = null, modifier = Modifier.size(14.dp))
                         }
                     }
                 }

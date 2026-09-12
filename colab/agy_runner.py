@@ -70,30 +70,35 @@ def resolve_model_and_effort(model: str, effort: str) -> tuple[str, str | None]:
 
 # Autonomous Memory Tag Pattern (ChatGPT Memory Extraction)
 MEMORY_TAG_REGEX = re.compile(
-    r'<memory_update\s+action="(?P<action>[^"]+)"'
-    r'(?:\s+category="(?P<category>[^"]*)")?'
-    r'(?:\s+fact="(?P<fact>[^"]*)")?'
-    r'(?:\s+query="(?P<query>[^"]*)")?'
-    r'\s*(?:/>|>(?P<content>.*?)</memory_update>)',
+    r'<memory_update\s+([^>]*?)(?:/>|>([\s\S]*?)</memory_update>)',
     re.DOTALL | re.IGNORECASE
 )
+ATTR_REGEX = re.compile(r'(\w+)\s*=\s*["\']([^"\']*)["\']', re.IGNORECASE)
+PARTIAL_TAG_REGEX = re.compile(r'<memory_update(?:\s+[^>]*)?$', re.DOTALL | re.IGNORECASE)
 
-def extract_and_strip_memory_tags(text: str):
+def extract_and_strip_memory_tags(text: str, is_streaming: bool = False):
     """
-    Finds all <memory_update ... /> tags, returns list of dicts:
-    [{'action': 'add', 'category': '...', 'content': '...'}], and clean text with tags removed.
+    Finds all <memory_update ... /> tags regardless of quote style, multiline formatting,
+    or attribute order. Returns (updates: list, cleaned_text: str).
+    If is_streaming is True, suppresses trailing partial <memory_update tags
+    so no raw XML fragments leak to the UI.
     """
     updates = []
     def _repl(match):
-        action = match.group("action") or "add"
-        category = match.group("category") or "general"
-        fact = (match.group("fact") or match.group("content") or match.group("query") or "").strip()
+        attrs_str = match.group(1) or ""
+        body_content = (match.group(2) or "").strip()
+        attrs = dict(ATTR_REGEX.findall(attrs_str))
+        action = (attrs.get("action") or "add").strip().lower()
+        category = (attrs.get("category") or "general").strip().lower()
+        fact = (attrs.get("fact") or attrs.get("query") or body_content or "").strip()
         if fact:
-            updates.append({"action": action.lower(), "category": category.lower(), "content": fact})
+            updates.append({"action": action, "category": category, "content": fact})
         return ""
 
-    cleaned = MEMORY_TAG_REGEX.sub(_repl, text).strip()
-    return updates, cleaned
+    cleaned = MEMORY_TAG_REGEX.sub(_repl, text)
+    if is_streaming:
+        cleaned = PARTIAL_TAG_REGEX.sub("", cleaned)
+    return updates, cleaned.strip()
 
 def _build_identity_block(p: dict) -> str:
     """Build the user identity section from Personalization fields."""
@@ -581,7 +586,7 @@ async def run_agy_command(
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
                             # Check for memory update tags as they emerge
-                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk)
+                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk, is_streaming=True)
                             for u in updates:
                                 fact_key = f"{u['action']}:{u['content'].lower()}"
                                 if fact_key not in emitted_memory_facts:
@@ -594,7 +599,7 @@ async def run_agy_command(
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
-                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk)
+                            updates, stripped_chunk = extract_and_strip_memory_tags(cleaned_chunk, is_streaming=True)
                             for u in updates:
                                 fact_key = f"{u['action']}:{u['content'].lower()}"
                                 if fact_key not in emitted_memory_facts:

@@ -93,6 +93,23 @@ class ChatViewModel @Inject constructor(
         // Also sync memory/auto-memory toggles from personalization
         _isMemoryEnabled.value = p.memoryEnabled
         _isAutoMemoryEnabled.value = p.autoMemoryEnabled
+        _customInstructions.value = CustomInstructions(
+            aboutUser = listOfNotNull(
+                if (p.name.isNotBlank()) "Name: ${p.name}" else null,
+                if (p.occupation.isNotBlank()) "Role: ${p.occupation}" else null,
+                if (p.expertise.isNotBlank()) "Stack: ${p.expertise}" else null,
+                if (p.customContext.isNotBlank()) p.customContext else null
+            ).joinToString("\n"),
+            responsePreferences = listOfNotNull(
+                "Tone: ${p.toneStyle}",
+                "Depth: ${p.depthLevel}",
+                "Length: ${p.responseLength}",
+                if (p.codeLanguage.isNotBlank()) "Code Language: ${p.codeLanguage}" else null,
+                if (p.extraInstructions.isNotBlank()) p.extraInstructions else null
+            ).joinToString("\n"),
+            tonePreset = p.toneStyle,
+            isEnabled = p.isEnabled
+        )
         val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
         prefs.edit()
             .putBoolean("memory_enabled", p.memoryEnabled)
@@ -1010,18 +1027,54 @@ class ChatViewModel @Inject constructor(
             val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
             val effort = prefs.getString("reasoning_effort", "high") ?: "high"
 
-            // Collect enabled memories to include in context if not in temporary chat
+            val promptText = if (trimmed.isNotBlank()) {
+                trimmed
+            } else if (attachments.size == 1) {
+                "Please inspect the attached file: ${firstAtt?.name}"
+            } else {
+                "Please inspect the ${attachments.size} attached files: ${attachments.joinToString(", ") { it.name }}"
+            }
+
+            // Dynamic Hybrid Relevance Retrieval (ChatGPT-grade)
             val memoryList = if (_isMemoryEnabled.value && !_isTemporaryChat.value) {
                 try {
-                    memoryDao.getTopMemories(40).also { mems ->
+                    val allEnabled = memoryDao.getAllEnabledMemories()
+                    if (allEnabled.isEmpty()) {
+                        emptyList()
+                    } else {
+                        val stopWords = setOf(
+                            "the", "and", "that", "this", "with", "from", "for", "are", "was", "were",
+                            "what", "how", "when", "where", "which", "who", "why", "can", "could", "would",
+                            "should", "please", "make", "help", "want", "like", "need", "about", "your"
+                        )
+                        val queryTokens = promptText.lowercase()
+                            .split(Regex("[^a-zA-Z0-9_]+"))
+                            .filter { it.length >= 3 && it !in stopWords }
+                            .toSet()
+
+                        val selected = allEnabled.sortedByDescending { mem ->
+                            val memLower = mem.content.lowercase()
+                            val keywordMatches = queryTokens.count { token -> memLower.contains(token) }
+                            val categoryWeight = when (mem.category.lowercase()) {
+                                "facts", "personal" -> 16 // Always maintain core user background in context
+                                "goals", "project" -> 10
+                                "prefs", "preferences" -> 8
+                                "skills" -> 8
+                                else -> 2
+                            }
+                            (keywordMatches * 25) + categoryWeight + (mem.importance * 3) + (mem.accessCount.coerceAtMost(8))
+                        }.take(40)
+
                         viewModelScope.launch {
-                            mems.forEach { memoryDao.incrementAccessCount(it.id) }
+                            selected.forEach { memoryDao.incrementAccessCount(it.id) }
                         }
-                    }.map {
-                        JSONObject().apply {
-                            put("content", it.content)
-                            put("category", it.category)
-                            put("importance", it.importance)
+
+                        selected.map {
+                            JSONObject().apply {
+                                put("content", it.content)
+                                put("category", it.category)
+                                put("importance", it.importance)
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -1029,14 +1082,6 @@ class ChatViewModel @Inject constructor(
                 }
             } else {
                 emptyList()
-            }
-
-            val promptText = if (trimmed.isNotBlank()) {
-                trimmed
-            } else if (attachments.size == 1) {
-                "Please inspect the attached file: ${firstAtt?.name}"
-            } else {
-                "Please inspect the ${attachments.size} attached files: ${attachments.joinToString(", ") { it.name }}"
             }
 
             val p = _personalization.value

@@ -52,7 +52,7 @@ fun ManageMemorySheet(
     var showImportDialog by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
 
-    val categories = listOf("All", "project", "preference", "personal", "style", "general")
+    val categories = MemoryCategory.ALL_CATEGORIES
 
     val filteredMemories = remember(memories, searchQuery, selectedCategory) {
         memories.filter { mem ->
@@ -268,16 +268,8 @@ fun ManageMemorySheet(
             ) {
                 items(categories) { cat ->
                     val isSelected = selectedCategory == cat
-                    val count = if (cat == "All") memories.size else memories.count { it.category.equals(cat, ignoreCase = true) }
-                    val label = when (cat) {
-                        "All" -> "All ($count)"
-                        "project" -> "🎯 Project ($count)"
-                        "preference" -> "⚙️ Preference ($count)"
-                        "personal" -> "👤 Personal ($count)"
-                        "style" -> "🎨 Style ($count)"
-                        "general" -> "💡 General ($count)"
-                        else -> "$cat ($count)"
-                    }
+                    val count = if (cat == MemoryCategory.ALL) memories.size else memories.count { it.category.equals(cat, ignoreCase = true) }
+                    val label = if (cat == MemoryCategory.ALL) "All ($count)" else "${MemoryCategory.getIconEmoji(cat)} ${MemoryCategory.getDisplayName(cat).substringAfter(" ")} ($count)"
                     FilterChip(
                         selected = isSelected,
                         onClick = { selectedCategory = cat },
@@ -338,7 +330,8 @@ fun ManageMemorySheet(
                             memory = mem,
                             onToggle = { viewModel.toggleMemory(mem.id, it) },
                             onEdit = { editingMemory = mem },
-                            onDelete = { viewModel.deleteMemory(mem.id) }
+                            onDelete = { viewModel.deleteMemory(mem.id) },
+                            onImportanceChange = { imp -> viewModel.updateMemoryImportance(mem.id, imp) }
                         )
                     }
                 }
@@ -612,18 +605,22 @@ fun MemoryItemCard(
     memory: MemoryEntity,
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onImportanceChange: (Int) -> Unit = {}
 ) {
     val dateStr = remember(memory.updatedAt) {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(memory.updatedAt))
     }
 
-    val (categoryLabel, categoryColor) = when (memory.category.lowercase()) {
-        "project" -> "🎯 Project" to Color(0xFF1976D2)
-        "preference" -> "⚙️ Preference" to Color(0xFFE65100)
-        "personal" -> "👤 Personal" to Color(0xFF7B1FA2)
-        "style" -> "🎨 Style" to Color(0xFF00897B)
-        else -> "💡 General" to Color(0xFF455A64)
+    val categoryColor = remember(memory.category) {
+        try {
+            Color(android.graphics.Color.parseColor(MemoryCategory.getColor(memory.category)))
+        } catch (_: Exception) {
+            Color(0xFF455A64)
+        }
+    }
+    val categoryLabel = remember(memory.category) {
+        "${MemoryCategory.getIconEmoji(memory.category)} ${MemoryCategory.getDisplayName(memory.category).substringAfter(" ")}"
     }
 
     Card(
@@ -666,6 +663,21 @@ fun MemoryItemCard(
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                     )
+                }
+
+                // Importance stars
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    repeat(5) { i ->
+                        val filled = i < (memory.importance / 2)
+                        Icon(
+                            imageVector = if (filled) Icons.Default.Star else Icons.Default.StarBorder,
+                            contentDescription = "Importance",
+                            tint = if (filled) Color(0xFFFFB300) else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                            modifier = Modifier
+                                .size(13.dp)
+                                .clickable { onImportanceChange((i + 1) * 2) }
+                        )
+                    }
                 }
 
                 Row(
@@ -713,6 +725,15 @@ fun MemoryItemCard(
                 color = if (memory.isEnabled) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
+
+            if (memory.accessCount > 0) {
+                Text(
+                    text = "• Used ${memory.accessCount} times in context",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                    fontSize = 11.sp
+                )
+            }
         }
     }
 }

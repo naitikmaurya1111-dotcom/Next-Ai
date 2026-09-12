@@ -21,6 +21,7 @@ import com.agychat.app.domain.PluginManager
 import com.agychat.app.ui.chat.ChatScreen
 import com.agychat.app.ui.chat.ChatViewModel
 import com.agychat.app.ui.history.HistoryScreen
+import com.agychat.app.ui.personalization.PersonalizationScreen
 import com.agychat.app.ui.settings.SettingsScreen
 import com.agychat.app.ui.theme.AGYChatTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -30,6 +31,7 @@ object AppRoutes {
     const val CHAT = "chat"
     const val SETTINGS = "settings"
     const val HISTORY = "history"
+    const val PERSONALIZATION = "personalization"
 }
 
 @AndroidEntryPoint
@@ -72,7 +74,8 @@ fun AGYChatNavHost(pluginManager: PluginManager) {
             ChatScreen(
                 viewModel = sharedChatViewModel,
                 pluginManager = pluginManager,
-                onNavigateToSettings = { navController.navigate(AppRoutes.SETTINGS) }
+                onNavigateToSettings = { navController.navigate(AppRoutes.SETTINGS) },
+                onNavigateToPersonalization = { navController.navigate(AppRoutes.PERSONALIZATION) }
             )
         }
         composable(AppRoutes.HISTORY) {
@@ -84,7 +87,14 @@ fun AGYChatNavHost(pluginManager: PluginManager) {
         composable(AppRoutes.SETTINGS) {
             SettingsScreen(
                 onBack = { navController.popBackStack() },
-                chatViewModel = sharedChatViewModel
+                chatViewModel = sharedChatViewModel,
+                onNavigateToPersonalization = { navController.navigate(AppRoutes.PERSONALIZATION) }
+            )
+        }
+        composable(AppRoutes.PERSONALIZATION) {
+            PersonalizationScreen(
+                viewModel = sharedChatViewModel,
+                onBack = { navController.popBackStack() }
             )
         }
     }

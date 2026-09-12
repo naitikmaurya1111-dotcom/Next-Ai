@@ -109,7 +109,7 @@ class GoogleDriveManager @Inject constructor(
         }
         root.put("messages", msgArray)
 
-        // 3. Memories
+        // 3. Memories (full metadata: category, importance, access stats)
         val memories = memoryDao.getAllMemoriesList()
         val memArray = JSONArray()
         for (mem in memories) {
@@ -118,6 +118,9 @@ class GoogleDriveManager @Inject constructor(
                 put("content", mem.content)
                 put("category", mem.category)
                 put("isEnabled", mem.isEnabled)
+                put("importance", mem.importance)
+                put("lastAccessedAt", mem.lastAccessedAt)
+                put("accessCount", mem.accessCount)
                 put("createdAt", mem.createdAt)
                 put("updatedAt", mem.updatedAt)
             }
@@ -125,7 +128,32 @@ class GoogleDriveManager @Inject constructor(
         }
         root.put("memories", memArray)
 
-        // 4. Custom Instructions & Personalization
+        // 4. Personalization Profile (All 17 ChatGPT-grade behavioral directives)
+        val personalizationObj = JSONObject().apply {
+            put("name", prefs.getString("p_name", "") ?: "")
+            put("occupation", prefs.getString("p_occupation", "") ?: "")
+            put("expertise", prefs.getString("p_expertise", "") ?: "")
+            put("country", prefs.getString("p_country", "") ?: "")
+            put("age", prefs.getString("p_age", "") ?: "")
+            put("response_length", prefs.getString("p_response_length", "Adaptive") ?: "Adaptive")
+            put("response_format", prefs.getString("p_response_format", "Auto") ?: "Auto")
+            put("tone_style", prefs.getString("p_tone_style", "Direct") ?: "Direct")
+            put("depth_level", prefs.getString("p_depth_level", "Expert") ?: "Expert")
+            put("code_language", prefs.getString("p_code_lang", "Kotlin") ?: "Kotlin")
+            put("enable_examples", prefs.getBoolean("p_examples", true))
+            put("enable_proactive", prefs.getBoolean("p_proactive", true))
+            put("enable_critical", prefs.getBoolean("p_critical", true))
+            put("enable_emoji", prefs.getBoolean("p_emoji", false))
+            put("avoid_topics", prefs.getString("p_avoid", "") ?: "")
+            put("custom_context", prefs.getString("p_context", "") ?: "")
+            put("extra_instructions", prefs.getString("p_extra", "") ?: "")
+            put("is_enabled", prefs.getBoolean("p_enabled", true))
+            put("memory_enabled", prefs.getBoolean("memory_enabled", true))
+            put("auto_memory_enabled", prefs.getBoolean("auto_memory_enabled", true))
+        }
+        root.put("personalization", personalizationObj)
+
+        // Legacy Custom Instructions (for backward compatibility)
         val customInstrObj = JSONObject().apply {
             put("about_user", prefs.getString("custom_about_user", "") ?: "")
             put("response_preferences", prefs.getString("custom_response_prefs", "") ?: "")
@@ -205,7 +233,7 @@ class GoogleDriveManager @Inject constructor(
                 }
             }
 
-            // Restore Memories
+            // Restore Memories (with importance and access counts)
             var restoredMems = 0
             if (root.has("memories")) {
                 val memArray = root.getJSONArray("memories")
@@ -218,6 +246,9 @@ class GoogleDriveManager @Inject constructor(
                             content = obj.getString("content"),
                             category = obj.optString("category", "general"),
                             isEnabled = obj.optBoolean("isEnabled", true),
+                            importance = obj.optInt("importance", 5),
+                            lastAccessedAt = obj.optLong("lastAccessedAt", System.currentTimeMillis()),
+                            accessCount = obj.optInt("accessCount", 0),
                             createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
                             updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
                         )
@@ -229,7 +260,34 @@ class GoogleDriveManager @Inject constructor(
                 }
             }
 
-            // Restore Custom Instructions
+            // Restore Personalization Profile (17 behavioral directives)
+            if (root.has("personalization")) {
+                val pObj = root.getJSONObject("personalization")
+                prefs.edit()
+                    .putString("p_name", pObj.optString("name", ""))
+                    .putString("p_occupation", pObj.optString("occupation", ""))
+                    .putString("p_expertise", pObj.optString("expertise", ""))
+                    .putString("p_country", pObj.optString("country", ""))
+                    .putString("p_age", pObj.optString("age", ""))
+                    .putString("p_response_length", pObj.optString("response_length", "Adaptive"))
+                    .putString("p_response_format", pObj.optString("response_format", "Auto"))
+                    .putString("p_tone_style", pObj.optString("tone_style", "Direct"))
+                    .putString("p_depth_level", pObj.optString("depth_level", "Expert"))
+                    .putString("p_code_lang", pObj.optString("code_language", "Kotlin"))
+                    .putBoolean("p_examples", pObj.optBoolean("enable_examples", true))
+                    .putBoolean("p_proactive", pObj.optBoolean("enable_proactive", true))
+                    .putBoolean("p_critical", pObj.optBoolean("enable_critical", true))
+                    .putBoolean("p_emoji", pObj.optBoolean("enable_emoji", false))
+                    .putString("p_avoid", pObj.optString("avoid_topics", ""))
+                    .putString("p_context", pObj.optString("custom_context", ""))
+                    .putString("p_extra", pObj.optString("extra_instructions", ""))
+                    .putBoolean("p_enabled", pObj.optBoolean("is_enabled", true))
+                    .putBoolean("memory_enabled", pObj.optBoolean("memory_enabled", true))
+                    .putBoolean("auto_memory_enabled", pObj.optBoolean("auto_memory_enabled", true))
+                    .apply()
+            }
+
+            // Restore Custom Instructions (backward compatibility)
             if (root.has("custom_instructions")) {
                 val ciObj = root.getJSONObject("custom_instructions")
                 prefs.edit()
