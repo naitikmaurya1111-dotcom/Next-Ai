@@ -3266,7 +3266,7 @@ fun ClaudeFloatingInputBar(
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Replying to ${if (replyToMessage.isUser) "You" else "Assistant"}",
+                                    text = "Replying to ${if (replyToMessage.role == "user") "You" else "Assistant"}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = ClaudeTerracotta,
                                     fontWeight = FontWeight.Bold

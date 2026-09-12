@@ -47,6 +47,9 @@ data class Message(
     val replyToRole: String? = null,
     val modelName: String? = null
 ) {
+    val isUser: Boolean get() = role == "user"
+    val isAssistant: Boolean get() = role == "assistant"
+
     val allAttachments: List<AttachmentItem>
         get() = if (attachments.isNotEmpty()) {
             attachments
