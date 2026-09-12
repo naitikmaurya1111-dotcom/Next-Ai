@@ -1086,6 +1086,10 @@ fun ChatScreen(
     if (showModelSheet) {
         ModelBottomSheet(
             selectedModel = selectedModel,
+            reasoningEffort = reasoningEffort,
+            onSelectEffort = { effort ->
+                viewModel.setReasoningEffort(effort)
+            },
             onSelectModel = { model ->
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 viewModel.selectModel(model)
@@ -2035,40 +2039,86 @@ fun ToolExecutionItemRow(
 @Composable
 fun ClaudeTypingBubble() {
     Row(
-        modifier = Modifier.padding(start = 44.dp, top = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Circular Spark Badge Avatar matching Assistant messages
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(ClaudeTerracotta.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "✦",
+                color = ClaudeTerracotta,
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
+        }
+
+        Spacer(Modifier.width(12.dp))
+
         val infiniteTransition = rememberInfiniteTransition(label = "dots")
-        val alpha1 by infiniteTransition.animateFloat(
-            initialValue = 0.3f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(keyframes { durationMillis = 900; 0.3f at 0; 1f at 300; 0.3f at 600 }, RepeatMode.Restart), label = "a1"
+        val offset1 by infiniteTransition.animateFloat(
+            initialValue = 0f, targetValue = -4f,
+            animationSpec = infiniteRepeatable(
+                keyframes { durationMillis = 1000; 0f at 0; -4f at 250; 0f at 500; 0f at 1000 },
+                RepeatMode.Restart
+            ), label = "o1"
         )
-        val alpha2 by infiniteTransition.animateFloat(
-            initialValue = 0.3f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(keyframes { durationMillis = 900; 0.3f at 150; 1f at 450; 0.3f at 750 }, RepeatMode.Restart), label = "a2"
+        val offset2 by infiniteTransition.animateFloat(
+            initialValue = 0f, targetValue = -4f,
+            animationSpec = infiniteRepeatable(
+                keyframes { durationMillis = 1000; 0f at 150; -4f at 400; 0f at 650; 0f at 1000 },
+                RepeatMode.Restart
+            ), label = "o2"
         )
-        val alpha3 by infiniteTransition.animateFloat(
-            initialValue = 0.3f, targetValue = 1f,
-            animationSpec = infiniteRepeatable(keyframes { durationMillis = 900; 0.3f at 300; 1f at 600; 0.3f at 900 }, RepeatMode.Restart), label = "a3"
+        val offset3 by infiniteTransition.animateFloat(
+            initialValue = 0f, targetValue = -4f,
+            animationSpec = infiniteRepeatable(
+                keyframes { durationMillis = 1000; 0f at 300; -4f at 550; 0f at 800; 0f at 1000 },
+                RepeatMode.Restart
+            ), label = "o3"
+        )
+        val textAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.45f, targetValue = 0.9f,
+            animationSpec = infiniteRepeatable(
+                keyframes { durationMillis = 1200; 0.45f at 0; 0.9f at 600; 0.45f at 1200 },
+                RepeatMode.Restart
+            ), label = "textAlpha"
         )
 
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(12.dp))
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            listOf(alpha1, alpha2, alpha3).forEach { a ->
+            listOf(offset1, offset2, offset3).forEach { offset ->
                 Box(
                     modifier = Modifier
+                        .offset(y = offset.dp)
                         .size(6.dp)
                         .clip(CircleShape)
-                        .background(ClaudeTerracotta.copy(alpha = a))
+                        .background(ClaudeTerracotta)
                 )
             }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "Thinking…",
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 11.sp
+                ),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = textAlpha)
+            )
         }
     }
 }
@@ -2169,6 +2219,15 @@ fun QuickSlashChipsRow(
     }
 }
 
+enum class ActionButtonState { STOP, SEND, MIC }
+
+data class ActiveSlashMode(
+    val prefix: String,
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val color: Color
+)
+
 @Composable
 fun ClaudeFloatingInputBar(
     text: String,
@@ -2185,8 +2244,22 @@ fun ClaudeFloatingInputBar(
     isLoading: Boolean
 ) {
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-    val isWebSearchActive = text.startsWith("/browser")
     val canSend = (text.isNotBlank() || attachment != null) && isConnected
+
+    val recognizedModes = remember {
+        listOf(
+            ActiveSlashMode("/browser", "Web Search", Icons.Default.Language, ChatGptBlue),
+            ActiveSlashMode("/boost", "Deep Think", Icons.Default.AutoAwesome, ChatGptPurple),
+            ActiveSlashMode("/plan", "Plan Mode", Icons.Default.Assignment, Color(0xFF0284C7)),
+            ActiveSlashMode("/goal", "Autonomous Goal", Icons.Default.RocketLaunch, Color(0xFF10B981)),
+            ActiveSlashMode("/remember", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B)),
+            ActiveSlashMode("/schedule", "Scheduled", Icons.Default.Schedule, Color(0xFF8B5CF6)),
+            ActiveSlashMode("/grill-me", "Interview", Icons.Default.QuestionAnswer, ClaudeTerracotta),
+            ActiveSlashMode("/teamwork-preview", "Multi-Agent", Icons.Default.Groups, Color(0xFF06B6D4))
+        )
+    }
+    val activeMode = recognizedModes.firstOrNull { text.startsWith(it.prefix) }
+    val isWebSearchActive = activeMode?.prefix == "/browser"
 
     Surface(
         shape = RoundedCornerShape(26.dp),
@@ -2266,6 +2339,60 @@ fun ClaudeFloatingInputBar(
                                 contentDescription = "Remove attachment",
                                 modifier = Modifier.size(16.dp),
                                 tint = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Active Slash Mode Badge Pill (Dismissible)
+            AnimatedVisibility(
+                visible = activeMode != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                if (activeMode != null) {
+                    Row(
+                        modifier = Modifier
+                            .padding(bottom = 6.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(activeMode.color.copy(alpha = 0.12f))
+                            .border(0.8.dp, activeMode.color.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            activeMode.icon,
+                            contentDescription = null,
+                            tint = activeMode.color,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = activeMode.label,
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                            color = activeMode.color
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    val newText = if (text.startsWith("${activeMode.prefix} ")) {
+                                        text.removePrefix("${activeMode.prefix} ")
+                                    } else {
+                                        text.removePrefix(activeMode.prefix).trimStart()
+                                    }
+                                    onTextChange(newText)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Remove mode",
+                                tint = activeMode.color.copy(alpha = 0.8f),
+                                modifier = Modifier.size(12.dp)
                             )
                         }
                     }
@@ -2385,53 +2512,72 @@ fun ClaudeFloatingInputBar(
 
                 Spacer(Modifier.width(2.dp))
 
-                // Modern ChatGPT Dynamic Send / Stop / Mic Button
-                if (isLoading) {
-                    FilledIconButton(
-                        onClick = onStop,
-                        modifier = Modifier.size(36.dp),
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.onSurface,
-                            contentColor = MaterialTheme.colorScheme.surface
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.Stop,
-                            contentDescription = "Stop Generating",
-                            tint = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                } else if (canSend) {
-                    FilledIconButton(
-                        onClick = onSend,
-                        modifier = Modifier.size(36.dp),
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = if (isDark) Color.White else Color(0xFF0D0D0D),
-                            contentColor = if (isDark) Color.Black else Color.White
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.ArrowUpward,
-                            contentDescription = "Send",
-                            tint = if (isDark) Color.Black else Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                } else {
-                    IconButton(
-                        onClick = onVoiceInput,
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Icon(
-                            Icons.Default.Mic,
-                            contentDescription = "Voice dictation",
-                            tint = ClaudeTerracotta,
-                            modifier = Modifier.size(18.dp)
-                        )
+                // Modern ChatGPT Dynamic Send / Stop / Mic Button with Smooth AnimatedContent Transitions
+                val actionButtonState = when {
+                    isLoading -> ActionButtonState.STOP
+                    canSend -> ActionButtonState.SEND
+                    else -> ActionButtonState.MIC
+                }
+
+                AnimatedContent(
+                    targetState = actionButtonState,
+                    transitionSpec = {
+                        (scaleIn(animationSpec = tween(180)) + fadeIn(animationSpec = tween(180)))
+                            .togetherWith(scaleOut(animationSpec = tween(150)) + fadeOut(animationSpec = tween(150)))
+                    },
+                    label = "composerActionButton"
+                ) { state ->
+                    when (state) {
+                        ActionButtonState.STOP -> {
+                            FilledIconButton(
+                                onClick = onStop,
+                                modifier = Modifier.size(36.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.onSurface,
+                                    contentColor = MaterialTheme.colorScheme.surface
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Default.Stop,
+                                    contentDescription = "Stop Generating",
+                                    tint = MaterialTheme.colorScheme.surface,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        ActionButtonState.SEND -> {
+                            FilledIconButton(
+                                onClick = onSend,
+                                modifier = Modifier.size(36.dp),
+                                colors = IconButtonDefaults.filledIconButtonColors(
+                                    containerColor = if (isDark) Color.White else Color(0xFF0D0D0D),
+                                    contentColor = if (isDark) Color.Black else Color.White
+                                )
+                            ) {
+                                Icon(
+                                    Icons.Default.ArrowUpward,
+                                    contentDescription = "Send",
+                                    tint = if (isDark) Color.Black else Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        ActionButtonState.MIC -> {
+                            IconButton(
+                                onClick = onVoiceInput,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            ) {
+                                Icon(
+                                    Icons.Default.Mic,
+                                    contentDescription = "Voice dictation",
+                                    tint = ClaudeTerracotta,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -2712,18 +2858,23 @@ fun HistoryDrawerContent(
 
             Spacer(Modifier.height(12.dp))
 
-            // Group conversations by date
+            // Group conversations by date (ChatGPT 5-tier grouping)
             val now = System.currentTimeMillis()
             val todayStart = now - (now % 86_400_000)
             val yesterdayStart = todayStart - 86_400_000
+            val sevenDaysAgo = todayStart - (7 * 86_400_000)
+            val thirtyDaysAgo = todayStart - (30 * 86_400_000)
+
             val grouped = filteredConversations.groupBy { conv ->
                 when {
                     conv.updatedAt >= todayStart -> "Today"
                     conv.updatedAt >= yesterdayStart -> "Yesterday"
+                    conv.updatedAt >= sevenDaysAgo -> "Previous 7 Days"
+                    conv.updatedAt >= thirtyDaysAgo -> "Previous 30 Days"
                     else -> "Older"
                 }
             }
-            val groupOrder = listOf("Today", "Yesterday", "Older")
+            val groupOrder = listOf("Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older")
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
@@ -3005,6 +3156,8 @@ fun SlashCommandAutocompletePopup(
 @Composable
 fun ModelBottomSheet(
     selectedModel: AiModel,
+    reasoningEffort: String = "high",
+    onSelectEffort: (String) -> Unit = {},
     onSelectModel: (AiModel) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -3025,8 +3178,8 @@ fun ModelBottomSheet(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
                         .background(ClaudeTerracotta.copy(alpha = 0.14f)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -3042,15 +3195,117 @@ fun ModelBottomSheet(
 
                 Column {
                     Text(
-                        text = "Antigravity Models",
+                        text = "Model & Intelligence",
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Choose CLI intelligence running on Colab",
+                        text = "Choose model & configure reasoning depth",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // Reasoning Effort Segmented Card (ChatGPT / Claude 3.7 Thinking Control)
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Psychology,
+                                contentDescription = null,
+                                tint = ClaudeTerracotta,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Reasoning Depth",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        if (!selectedModel.supportsEffort) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = ClaudeTerracotta.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "Model Locked",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                                    color = ClaudeTerracotta,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    val effortOptions = listOf(
+                        Triple("low", "Fast", "🚀"),
+                        Triple("medium", "Balanced", "⚡"),
+                        Triple("high", "Deep", "🧠")
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        effortOptions.forEach { (effortKey, label, emoji) ->
+                            val isEffortSelected = reasoningEffort.equals(effortKey, ignoreCase = true)
+                            Surface(
+                                onClick = {
+                                    if (selectedModel.supportsEffort) {
+                                        onSelectEffort(effortKey)
+                                    }
+                                },
+                                enabled = selectedModel.supportsEffort,
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isEffortSelected) ClaudeTerracotta else MaterialTheme.colorScheme.surface,
+                                border = androidx.compose.foundation.BorderStroke(
+                                    0.8.dp,
+                                    if (isEffortSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .then(if (selectedModel.supportsEffort) Modifier else Modifier.padding(0.dp))
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "$emoji $label",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = if (isEffortSelected) FontWeight.Bold else FontWeight.Medium
+                                        ),
+                                        color = if (isEffortSelected) Color.White else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = when (effortKey) {
+                                            "low" -> "Speed"
+                                            "medium" -> "Normal"
+                                            else -> "Maximum"
+                                        },
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                        color = if (isEffortSelected) Color.White.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -3082,7 +3337,7 @@ fun ModelBottomSheet(
                         Surface(
                             onClick = { onSelectModel(model) },
                             shape = RoundedCornerShape(14.dp),
-                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceVariant,
+                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant,
                             border = androidx.compose.foundation.BorderStroke(
                                 width = if (isSelected) 1.5.dp else 0.8.dp,
                                 color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant
@@ -3095,15 +3350,31 @@ fun ModelBottomSheet(
                                     .padding(14.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                RadioButton(
-                                    selected = isSelected,
-                                    onClick = { onSelectModel(model) },
-                                    colors = RadioButtonDefaults.colors(
-                                        selectedColor = ClaudeTerracotta
+                                // Left Icon / Spark
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(
+                                            if (isSelected) ClaudeTerracotta.copy(alpha = 0.18f)
+                                            else MaterialTheme.colorScheme.surface
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val iconText = when {
+                                        model.provider == "Google" -> "✦"
+                                        model.provider == "Anthropic" -> "✻"
+                                        else -> "⚡"
+                                    }
+                                    Text(
+                                        text = iconText,
+                                        color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 18.sp
                                     )
-                                )
+                                }
 
-                                Spacer(Modifier.width(8.dp))
+                                Spacer(Modifier.width(12.dp))
 
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3150,11 +3421,22 @@ fun ModelBottomSheet(
                                         )
                                         Spacer(Modifier.width(4.dp))
                                         Text(
-                                            text = if (model.supportsEffort) "Reasoning effort: Low · Medium · High" else "Thinking: Fixed to CLI default (cannot change)",
+                                            text = if (model.supportsEffort) "Reasoning effort: Low · Medium · High" else "Thinking: Fixed to CLI default",
                                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                             color = if (model.supportsEffort) MaterialTheme.colorScheme.outline else ClaudeTerracotta
                                         )
                                     }
+                                }
+
+                                Spacer(Modifier.width(8.dp))
+
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = "Selected model",
+                                        tint = ClaudeTerracotta,
+                                        modifier = Modifier.size(22.dp)
+                                    )
                                 }
                             }
                         }

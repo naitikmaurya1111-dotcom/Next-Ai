@@ -20,13 +20,14 @@ val ChatGptBlue            = Color(0xFF3B82F6) // Web search & research blue
 val ChatGptPurple          = Color(0xFF8B5CF6) // Deep reasoning & intelligence purple
 val ChatGptAmber           = Color(0xFFF59E0B) // Active tool & warning amber
 
-// Dark Theme Surfaces (Modern ChatGPT 2025/2026 dark mode)
-val DarkBg                 = Color(0xFF171717) // ChatGPT pure dark canvas
-val DarkSurface            = Color(0xFF212121) // ChatGPT card & drawer surface
-val DarkSurfaceElevated    = Color(0xFF2F2F2F) // ChatGPT user message bubble & floating card
-val DarkBorder             = Color(0xFF383838) // Hairline border
+// Dark Theme Surfaces (Modern ChatGPT 2025/2026 dark obsidian mode)
+val DarkBg                 = Color(0xFF121212) // ChatGPT pure dark canvas
+val DarkSurface            = Color(0xFF1C1C1E) // ChatGPT card & drawer surface
+val DarkSurfaceElevated    = Color(0xFF28282B) // ChatGPT user message bubble & floating card
+val DarkBorder             = Color(0xFF333336) // Hairline border
+val DarkBorderSubtle       = Color(0xFF242426) // Subtle divider
 val DarkTextPrimary        = Color(0xFFECECEC) // Crisp white high-legibility text
-val DarkTextSecondary      = Color(0xFFB4B4B4) // Muted silver slate
+val DarkTextSecondary      = Color(0xFFA1A1AA) // Muted silver slate
 
 // Light Theme Surfaces (Modern ChatGPT 2025/2026 light mode)
 val LightBg                = Color(0xFFFFFFFF) // Pure clean white canvas
