@@ -42,7 +42,10 @@ data class Message(
     val attachments: List<AttachmentItem> = emptyList(),
     val feedback: String? = null, // "like", "dislike", null
     val memoryUpdates: List<String> = emptyList(), // Autonomous memory facts saved/updated in this turn
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    val replyToContent: String? = null,
+    val replyToRole: String? = null,
+    val modelName: String? = null
 ) {
     val allAttachments: List<AttachmentItem>
         get() = if (attachments.isNotEmpty()) {

@@ -133,6 +133,9 @@ fun ChatScreen(
     val enabledMemoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val isTemporaryChat by viewModel.isTemporaryChat.collectAsState()
     val customInstructions by viewModel.customInstructions.collectAsState()
+    val replyToMessage by viewModel.replyToMessage.collectAsState()
+    val sessionFiles by viewModel.sessionFiles.collectAsState()
+    var showArtifactsSheet by remember { mutableStateOf(false) }
     var speakingMessageId by remember { mutableStateOf<String?>(null) }
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
 
@@ -443,6 +446,25 @@ fun ChatScreen(
                                     )
                                 }
 
+                                if (sessionFiles.isNotEmpty()) {
+                                    IconButton(onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        showArtifactsSheet = true
+                                    }) {
+                                        BadgedBox(badge = {
+                                            Badge(containerColor = ClaudeTerracotta) {
+                                                Text("${sessionFiles.size}")
+                                            }
+                                        }) {
+                                            Icon(
+                                                Icons.Default.FolderOpen,
+                                                contentDescription = "Session Artifacts",
+                                                tint = ClaudeTerracotta
+                                            )
+                                        }
+                                    }
+                                }
+
                                 IconButton(onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     isInChatSearchOpen = !isInChatSearchOpen
@@ -596,9 +618,38 @@ fun ChatScreen(
 
                                         DropdownMenuItem(
                                             leadingIcon = {
+                                                Icon(Icons.Default.FolderOpen, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text("Artifacts & Files", style = MaterialTheme.typography.bodyMedium)
+                                                    if (sessionFiles.isNotEmpty()) {
+                                                        Spacer(Modifier.width(6.dp))
+                                                        Surface(
+                                                            shape = RoundedCornerShape(8.dp),
+                                                            color = ClaudeTerracotta.copy(alpha = 0.15f)
+                                                        ) {
+                                                            Text(
+                                                                "${sessionFiles.size}",
+                                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                                                color = ClaudeTerracotta,
+                                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                showArtifactsSheet = true
+                                            }
+                                        )
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
                                                 Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                                             },
-                                            text = { Text("Export Chat", style = MaterialTheme.typography.bodyMedium) },
+                                            text = { Text("Share / Export Chat", style = MaterialTheme.typography.bodyMedium) },
                                             onClick = {
                                                 showMoreMenu = false
                                                 val md = viewModel.exportConversationToMarkdown()
@@ -608,6 +659,19 @@ fun ChatScreen(
                                                     type = "text/plain"
                                                 }
                                                 context.startActivity(Intent.createChooser(sendIntent, "Export Chat"))
+                                            }
+                                        )
+
+                                        DropdownMenuItem(
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Download, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = { Text("Save Chat to Phone (.md)", style = MaterialTheme.typography.bodyMedium) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                viewModel.saveExportToDownloads { success, msg ->
+                                                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         )
 
@@ -638,6 +702,92 @@ fun ChatScreen(
                                 containerColor = MaterialTheme.colorScheme.surface
                             )
                         )
+
+                        // Connection Resilience Banner
+                        AnimatedVisibility(
+                            visible = connectionState == ConnectionState.ERROR || connectionState == ConnectionState.DISCONNECTED,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Icon(
+                                            Icons.Default.CloudOff,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = if (connectionState == ConnectionState.ERROR) "Disconnected from Colab Bridge" else "Bridge Offline",
+                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                    TextButton(
+                                        onClick = { viewModel.reconnect() },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            "Reconnect",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Incognito Mode Banner
+                        AnimatedVisibility(
+                            visible = isTemporaryChat,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Surface(
+                                color = Color(0xFF2E1065).copy(alpha = 0.92f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Default.VisibilityOff,
+                                            contentDescription = null,
+                                            tint = Color(0xFFD8B4FE),
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            text = "Incognito Mode • History & memories are not saved",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                                            color = Color(0xFFF3E8FF)
+                                        )
+                                    }
+                                    Text(
+                                        text = "Exit",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = Color(0xFFD8B4FE),
+                                        modifier = Modifier.clickable { viewModel.toggleTemporaryChat() }
+                                    )
+                                }
+                            }
+                        }
 
                         // Expandable In-Chat Search Bar (Ctrl+F for mobile)
                         AnimatedVisibility(
@@ -1034,6 +1184,8 @@ fun ChatScreen(
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             showAttachmentMenu = true
                         },
+                        replyToMessage = replyToMessage,
+                        onCancelReply = { viewModel.setReplyToMessage(null) },
                         isConnected = connectionState == ConnectionState.CONNECTED,
                         isLoading = isLoading
                     )
@@ -1157,6 +1309,13 @@ fun ChatScreen(
                                 },
                                 onOpenFile = { filePath ->
                                     viewModel.fetchAndOpenFile(filePath)
+                                },
+                                onReply = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setReplyToMessage(msg)
+                                },
+                                onSendSuggestion = { prompt ->
+                                    viewModel.sendMessage(prompt)
                                 }
                             )
                         }
@@ -1550,6 +1709,22 @@ fun ChatScreen(
             }
         )
     }
+
+    if (showArtifactsSheet) {
+        SessionArtifactsBottomSheet(
+            sessionFiles = sessionFiles,
+            onClose = { showArtifactsSheet = false },
+            onOpenFile = { path ->
+                showArtifactsSheet = false
+                viewModel.fetchAndOpenFile(path)
+            },
+            onCopyPath = { path ->
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("File Path", path))
+                Toast.makeText(context, "Copied file path to clipboard", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
 }
 
 @Composable
@@ -1654,7 +1829,9 @@ fun MessageItem(
     onTogglePin: () -> Unit = {},
     onFeedback: (String) -> Unit = {},
     onOpenMemory: () -> Unit = {},
-    onOpenFile: (String) -> Unit = {}
+    onOpenFile: (String) -> Unit = {},
+    onReply: () -> Unit = {},
+    onSendSuggestion: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -1687,6 +1864,44 @@ fun MessageItem(
                             .padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
                         Column {
+                            if (!message.replyToContent.isNullOrBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                                    border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .width(3.dp)
+                                                .height(24.dp)
+                                                .background(ClaudeTerracotta, RoundedCornerShape(2.dp))
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column {
+                                            Text(
+                                                text = "Quoting ${if (message.replyToRole == "user") "User" else "Next AI"}",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.5.sp),
+                                                color = ClaudeTerracotta
+                                            )
+                                            Text(
+                                                text = message.replyToContent,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
                             if (message.isPinned) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
@@ -1828,6 +2043,21 @@ fun MessageItem(
                             contentDescription = "Copy",
                             modifier = Modifier.size(13.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onReply()
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Reply,
+                            contentDescription = "Reply / Quote",
+                            modifier = Modifier.size(13.dp),
+                            tint = ClaudeTerracotta.copy(alpha = 0.8f)
                         )
                     }
 
@@ -2230,6 +2460,23 @@ fun MessageItem(
                                 Spacer(Modifier.width(2.dp))
                             }
 
+                            // Reply / Quote
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onReply()
+                                },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Reply,
+                                    contentDescription = "Reply to message",
+                                    modifier = Modifier.size(15.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
+
                             // Delete message
                             IconButton(
                                 onClick = onDeleteMessage,
@@ -2241,6 +2488,45 @@ fun MessageItem(
                                     modifier = Modifier.size(15.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
+                            }
+                        }
+
+                        // 5. Contextual Quick Follow-Up Suggestion Chips
+                        if (isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
+                            val suggestions = remember(message.content) {
+                                val list = mutableListOf<Pair<String, String>>()
+                                val cLower = message.content.lowercase()
+                                if (cLower.contains("formula") || cLower.contains("```") || cLower.contains("1.") || cLower.contains("step") || message.content.length > 200) {
+                                    list.add("📄 Make a file of this" to "Please create a formatted file of this complete content using the write_to_file tool.")
+                                }
+                                list.add("🔍 Explain in detail" to "Please explain this step-by-step in detail.")
+                                list.add("⚡ Key takeaways" to "What are the key takeaways from this?")
+                                list.add("🧪 Give examples" to "Can you provide concrete practical examples for this?")
+                                list.take(3)
+                            }
+
+                            LazyRow(
+                                modifier = Modifier.padding(top = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items(suggestions) { (label, prompt) ->
+                                    Surface(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSendSuggestion(prompt)
+                                        },
+                                        shape = RoundedCornerShape(16.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                                        border = androidx.compose.foundation.BorderStroke(0.7.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -2918,6 +3204,8 @@ fun ClaudeFloatingInputBar(
     attachment: AttachmentItem? = null,
     onRemoveAttachment: (AttachmentItem) -> Unit = {},
     onAddMoreAttachments: () -> Unit = onAttachFile,
+    replyToMessage: Message? = null,
+    onCancelReply: () -> Unit = {},
     isConnected: Boolean,
     isLoading: Boolean
 ) {
@@ -2953,6 +3241,60 @@ fun ClaudeFloatingInputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
+            // Quoted Reply Preview Bar
+            AnimatedVisibility(visible = replyToMessage != null) {
+                if (replyToMessage != null) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.dp)
+                                    .height(26.dp)
+                                    .background(ClaudeTerracotta, RoundedCornerShape(2.dp))
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Replying to ${if (replyToMessage.isUser) "You" else "Assistant"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTerracotta,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = replyToMessage.content.lines().firstOrNull()?.take(80) ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(
+                                onClick = onCancelReply,
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Close,
+                                    contentDescription = "Cancel reply",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // Multi-Attachment Preview Bar (ChatGPT modern carousel / row of attached files/images)
             AnimatedVisibility(visible = activeAttachments.isNotEmpty()) {
                 LazyRow(
@@ -4406,6 +4748,219 @@ fun FileViewerBottomSheet(
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Modern Session Artifacts & Files Bottom Sheet.
+ * Displays all files generated or edited in the current chat session
+ * (physics formula sheets, markdown notes, source code files, analysis reports, etc.)
+ * with quick direct viewing and phone Downloads export.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SessionArtifactsBottomSheet(
+    sessionFiles: List<String>,
+    onClose: () -> Unit,
+    onOpenFile: (String) -> Unit,
+    onCopyPath: (String) -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.75f)
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = ClaudeTerracotta,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "Session Artifacts",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = ClaudeTerracotta.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "${sessionFiles.size} files",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ClaudeTerracotta,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Files & notes generated by Next AI in this chat",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            if (sessionFiles.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(vertical = 36.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "No Artifacts Yet",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "When you ask Next AI to create scripts, derivations, notes, or physics formula sheets, they will appear here for instant preview and download.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(sessionFiles) { filePath ->
+                        val fileName = filePath.substringAfterLast('/')
+                        val ext = fileName.substringAfterLast('.', "")
+                        val icon = when (ext.lowercase()) {
+                            "md", "txt" -> Icons.Default.Description
+                            "py", "kt", "js", "html", "sh" -> Icons.Default.Code
+                            else -> Icons.Default.Description
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.8.dp,
+                                MaterialTheme.colorScheme.outlineVariant
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(ClaudeTerracotta.copy(alpha = 0.12f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = null,
+                                        tint = ClaudeTerracotta,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = fileName,
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = filePath,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                IconButton(
+                                    onClick = { onCopyPath(filePath) },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ContentCopy,
+                                        contentDescription = "Copy Path",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Button(
+                                    onClick = { onOpenFile(filePath) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(32.dp)
+                                ) {
+                                    Text("Open", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Spacer(Modifier.height(16.dp))
                     }
                 }
             }

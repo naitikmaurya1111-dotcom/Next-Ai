@@ -67,6 +67,18 @@ class ChatViewModel @Inject constructor(
         _activeFileViewer.value = null
     }
 
+    // Reply / Quote state
+    private val _replyToMessage = MutableStateFlow<Message?>(null)
+    val replyToMessage: StateFlow<Message?> = _replyToMessage.asStateFlow()
+
+    fun setReplyToMessage(msg: Message?) {
+        _replyToMessage.value = msg
+    }
+
+    // Session Artifacts / Files tracking
+    private val _sessionFiles = MutableStateFlow<List<String>>(emptyList())
+    val sessionFiles: StateFlow<List<String>> = _sessionFiles.asStateFlow()
+
     // ChatGPT-Style Persistent Memory System
     val memories = memoryDao.getAllMemoriesFlow().catch { t ->
         Log.e("ChatViewModel", "Error in memories flow", t)
@@ -800,7 +812,7 @@ class ChatViewModel @Inject constructor(
                 }
                 "file_data" -> {
                     val status = json.optString("status", "ok")
-                    if (status == "ok") {
+                    if (status == "ok" || status == "success") {
                         val fn = json.optString("filename", "file.txt")
                         val fp = json.optString("path", "")
                         val fsize = json.optLong("size", 0L)
@@ -945,6 +957,12 @@ class ChatViewModel @Inject constructor(
             paramsObj?.has("Pattern") == true -> "Pattern: \"" + paramsObj.optString("Pattern") + "\""
             paramsObj?.has("Instruction") == true -> paramsObj.optString("Instruction")
             else -> null
+        }
+
+        if (!targetFile.isNullOrBlank() && (toolName == "write_to_file" || toolName == "replace_file_content" || toolName.contains("file"))) {
+            if (!_sessionFiles.value.contains(targetFile)) {
+                _sessionFiles.value = _sessionFiles.value + targetFile
+            }
         }
 
         val list = _messages.value.toMutableList()
@@ -1199,6 +1217,9 @@ class ChatViewModel @Inject constructor(
             "Sent ${attachments.size} attachments (${attachments.count { it.isImage }} photos, ${attachments.count { !it.isImage }} files)"
         }
 
+        val reply = _replyToMessage.value
+        _replyToMessage.value = null
+
         val userMessage = Message(
             id = UUID.randomUUID().toString(),
             role = "user",
@@ -1207,7 +1228,9 @@ class ChatViewModel @Inject constructor(
             attachmentUri = firstAtt?.uri,
             attachmentName = firstAtt?.name,
             attachmentIsImage = firstAtt?.isImage ?: false,
-            attachments = attachments
+            attachments = attachments,
+            replyToContent = reply?.content?.take(250),
+            replyToRole = reply?.role
         )
         _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
@@ -1243,12 +1266,19 @@ class ChatViewModel @Inject constructor(
             val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
             val effort = prefs.getString("reasoning_effort", "high") ?: "high"
 
-            val promptText = if (trimmed.isNotBlank()) {
+            val basePrompt = if (trimmed.isNotBlank()) {
                 trimmed
             } else if (attachments.size == 1) {
                 "Please inspect the attached file: ${firstAtt?.name}"
             } else {
                 "Please inspect the ${attachments.size} attached files: ${attachments.joinToString(", ") { it.name }}"
+            }
+
+            val promptText = if (reply != null) {
+                val who = if (reply.role == "user") "User" else "Next AI"
+                "> Quoting $who: \"${reply.content.take(300).replace("\n", " ")}\"\n\n$basePrompt"
+            } else {
+                basePrompt
             }
 
             // Dynamic Hybrid Relevance Retrieval (ChatGPT-grade)
@@ -1300,12 +1330,28 @@ class ChatViewModel @Inject constructor(
                 emptyList()
             }
 
+            // Multi-turn conversation turns for complete contextual memory across turns
+            val historyArray = org.json.JSONArray()
+            val priorTurns = _messages.value
+                .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != userMessage.id }
+                .takeLast(20)
+            for (m in priorTurns) {
+                val item = JSONObject().apply {
+                    put("role", m.role)
+                    put("content", m.content.take(3000))
+                }
+                historyArray.put(item)
+            }
+
             val p = _personalization.value
             val payload = JSONObject().apply {
                 put("message", promptText)
                 put("conversation_id", currentConversationId)
                 put("effort", effort)
                 put("model", _selectedModel.value.id)
+                if (historyArray.length() > 0) {
+                    put("history", historyArray)
+                }
                 if (memoryList.isNotEmpty()) {
                     val memArray = org.json.JSONArray()
                     memoryList.forEach { memArray.put(it) }
@@ -1485,14 +1531,29 @@ class ChatViewModel @Inject constructor(
             }
         }
         
-        // Resend the last user message text
+        // Resend the last user message text with previous conversation history
         val effort = _reasoningEffort.value
+
+        val historyArray = org.json.JSONArray()
+        val priorTurns = msgs
+            .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != lastUserMsg.id && it.id != lastMsg?.id }
+            .takeLast(20)
+        for (m in priorTurns) {
+            val item = JSONObject().apply {
+                put("role", m.role)
+                put("content", m.content.take(3000))
+            }
+            historyArray.put(item)
+        }
 
         val payload = JSONObject().apply {
             put("message", lastUserMsg.content)
             put("conversation_id", currentConversationId)
             put("effort", effort)
             put("model", _selectedModel.value.id)
+            if (historyArray.length() > 0) {
+                put("history", historyArray)
+            }
         }.toString()
 
         webSocketClient.sendMessage(payload)
@@ -1524,6 +1585,8 @@ class ChatViewModel @Inject constructor(
         _messages.value = emptyList()
         _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
+        _replyToMessage.value = null
+        _sessionFiles.value = emptyList()
         streamingMessageId = null
         currentConversationId = UUID.randomUUID().toString()
         _currentStatus.value = null
@@ -1539,12 +1602,13 @@ class ChatViewModel @Inject constructor(
         streamingMessageId = null
         _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
+        _replyToMessage.value = null
         _isLoading.value = false
         _currentStatus.value = null
 
         viewModelScope.launch {
             chatDao.getMessagesForConversation(conversationId).collectLatest { entities ->
-                _messages.value = entities.map { entity ->
+                val loadedMessages = entities.map { entity ->
                     val parsedAttachments = if (!entity.attachmentsJson.isNullOrBlank()) {
                         try {
                             val arr = org.json.JSONArray(entity.attachmentsJson)
@@ -1591,6 +1655,13 @@ class ChatViewModel @Inject constructor(
                         isPinned = entity.isPinned
                     )
                 }
+                _messages.value = loadedMessages
+
+                // Extract all file references generated in this conversation
+                val files = loadedMessages.flatMap { msg ->
+                    msg.toolExecutions.mapNotNull { it.targetFile }
+                }.filter { it.isNotBlank() }.distinct()
+                _sessionFiles.value = files
             }
         }
     }
@@ -1600,6 +1671,40 @@ class ChatViewModel @Inject constructor(
             chatDao.deleteConversation(conversationId)
             if (currentConversationId == conversationId) {
                 startNewConversation()
+            }
+        }
+    }
+
+    fun saveExportToDownloads(onResult: (Boolean, String) -> Unit) {
+        val md = exportConversationToMarkdown()
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val filename = "NextAI_Chat_${System.currentTimeMillis()}.md"
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val resolver = context.contentResolver
+                    val contentValues = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/markdown")
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS + "/NextAI")
+                    }
+                    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                    if (uri != null) {
+                        resolver.openOutputStream(uri)?.use { stream ->
+                            stream.write(md.toByteArray(Charsets.UTF_8))
+                        }
+                        onResult(true, "Saved to Downloads/NextAI/$filename")
+                    } else {
+                        onResult(false, "Could not create file in Downloads")
+                    }
+                } else {
+                    val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    val nextAiDir = java.io.File(downloadsDir, "NextAI").apply { mkdirs() }
+                    val targetFile = java.io.File(nextAiDir, filename)
+                    targetFile.writeText(md, Charsets.UTF_8)
+                    onResult(true, "Saved to Downloads/NextAI/$filename")
+                }
+            } catch (e: Exception) {
+                onResult(false, "Save failed: ${e.message}")
             }
         }
     }

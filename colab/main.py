@@ -380,7 +380,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 f_content = f.read()
                             await manager.send(json.dumps({
                                 "type": "file_data",
-                                "status": "success",
+                                "status": "ok",
                                 "path": resolved,
                                 "filename": os.path.basename(resolved),
                                 "content": f_content,
@@ -409,6 +409,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 personalization = payload.get("personalization")  # Full Personalization profile
                 auto_memory = payload.get("auto_memory", True)
                 is_temporary = payload.get("is_temporary", False)
+                history = payload.get("history", [])  # Multi-turn conversation turns for full context retention
 
                 # Multi-attachment files processing
                 attached_files = payload.get("files", [])
@@ -445,6 +446,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 personalization = None
                 auto_memory = True
                 is_temporary = False
+                history = []
 
             # Stream agy command with full personalization profile, memories, and model settings
             async for event in run_agy_command(
@@ -456,7 +458,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 custom_instructions=custom_instructions,
                 personalization=personalization,
                 is_auto_memory=auto_memory,
-                is_temporary=is_temporary
+                is_temporary=is_temporary,
+                history=history
             ):
                 await manager.send(event, websocket)
 

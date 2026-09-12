@@ -9,8 +9,26 @@ from typing import Dict
 
 logger = logging.getLogger(__name__)
 
+CONV_MAP_FILE = "/tmp/agy_conversation_map.json"
+
+def _load_conversation_map() -> Dict[str, str]:
+    if os.path.exists(CONV_MAP_FILE):
+        try:
+            with open(CONV_MAP_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_conversation_map(m: Dict[str, str]):
+    try:
+        with open(CONV_MAP_FILE, "w") as f:
+            json.dump(m, f)
+    except Exception:
+        pass
+
 # Map Android client conversation IDs to agy conversation IDs
-conversation_map: Dict[str, str] = {}
+conversation_map: Dict[str, str] = _load_conversation_map()
 # Track active processes for cancellation
 active_processes: Dict[str, asyncio.subprocess.Process] = {}
 
@@ -199,22 +217,51 @@ def format_prompt_with_personalization(
     custom_instructions: dict = None,
     personalization: dict = None,
     is_auto_memory: bool = True,
-    is_temporary: bool = False
+    is_temporary: bool = False,
+    history: list = None
 ) -> str:
     """
-    Build the complete AI system context from the user's Personalization profile, memories, and settings.
-    This is the single source of truth for how the AI behaves — every field of Personalization
-    translates into a concrete behavioral directive the model must follow.
+    Build the complete AI system context from the user's Personalization profile, memories, settings,
+    and verbatim multi-turn conversation history for unbreakable conversational continuity.
     """
+    sections = []
+
+    # ── 0. Prior Conversation History (Multi-turn Context Persistence) ─────────
+    if history and isinstance(history, list) and len(history) > 0:
+        history_lines = []
+        for turn in history[-20:]:  # Keep up to 20 turns
+            role = turn.get("role", "user") if isinstance(turn, dict) else "user"
+            content = turn.get("content", "").strip() if isinstance(turn, dict) else str(turn).strip()
+            if not content:
+                continue
+            if len(content) > 3000:
+                content = content[:3000] + "... [truncated]"
+            role_label = "User" if role == "user" else "Next AI"
+            history_lines.append(f"[{role_label}]:\n{content}")
+
+        if history_lines:
+            sections.append(
+                "<prior_conversation_history>\n"
+                "The following is the verbatim preceding conversation turns of this ongoing chat session.\n"
+                "CRITICAL CONTINUITY DIRECTIVE:\n"
+                "1. Maintain 100% conversational memory of everything discussed above.\n"
+                "2. When the user asks for 'these formulas', 'this list', 'that file', or 'what we just discussed', "
+                "refer directly to the content in these previous turns.\n"
+                "3. If the user asks you to 'make a file', 'save as file', or 'create a file' of anything discussed, "
+                "IMMEDIATELY execute the `write_to_file` tool with an appropriate filename (e.g. /content/...) and complete contents, "
+                "and provide a clickable markdown link [filename](file:///path).\n"
+                + "\n---\n".join(history_lines) + "\n"
+                "</prior_conversation_history>"
+            )
+
     if is_temporary:
-        return (
+        sections.append(
             "<temporary_chat>\n"
             "This is an Incognito/Temporary Chat. Do NOT reference any past memories "
             "and do NOT emit any <memory_update> tags.\n"
-            "</temporary_chat>\n\n" + message
+            "</temporary_chat>"
         )
-
-    sections = []
+        return "\n\n".join(sections) + "\n\n" + message
 
     # ── 1. Full Personalization Profile (new Personalization model) ───────────
     if personalization and isinstance(personalization, dict):
@@ -475,7 +522,8 @@ async def run_agy_command(
     custom_instructions: dict = None,
     personalization: dict = None,
     is_auto_memory: bool = True,
-    is_temporary: bool = False
+    is_temporary: bool = False,
+    history: list = None
 ):
     """
     Runs agy command asynchronously with native stream-json output
@@ -498,14 +546,15 @@ async def run_agy_command(
     if agy_conv_id:
         cmd_args.extend(["--conversation", agy_conv_id])
 
-    # Inject full personalization, memories, and custom instructions into prompt
+    # Inject full personalization, memories, custom instructions, and prior history into prompt
     full_prompt = format_prompt_with_personalization(
         message_trimmed,
         memories=memories or [],
         custom_instructions=custom_instructions,
         personalization=personalization,
         is_auto_memory=is_auto_memory,
-        is_temporary=is_temporary
+        is_temporary=is_temporary,
+        history=history
     )
 
     cmd_args.extend([
@@ -551,6 +600,7 @@ async def run_agy_command(
                     new_conv_id = data.get("conversation_id")
                     if new_conv_id and client_conv_id:
                         conversation_map[client_conv_id] = new_conv_id
+                        _save_conversation_map(conversation_map)
                         logger.info(f"Mapped {client_conv_id} -> {new_conv_id}")
 
                 elif event_type == "step_update":
