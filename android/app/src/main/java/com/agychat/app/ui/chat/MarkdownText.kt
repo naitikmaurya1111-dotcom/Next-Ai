@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
@@ -33,6 +34,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -178,8 +180,10 @@ fun formatLatexToUnicode(raw: String): String {
             num == "1" && den == "3" -> "⅓"
             num == "2" && den == "3" -> "⅔"
             num == "1" && den == "8" -> "⅛"
-            num.contains("+") || num.contains("-") -> "($num)/$den"
-            den.contains("+") || den.contains("-") -> "$num/($den)"
+            den.length > 2 || den.contains("+") || den.contains("-") || den.contains(" ") || den.contains("\\") -> {
+                if (num.contains("+") || num.contains("-") || num.contains(" ")) "($num)/($den)" else "$num/($den)"
+            }
+            num.contains("+") || num.contains("-") || num.contains(" ") -> "($num)/$den"
             else -> "$num/$den"
         }
         text = text.replaceRange(m.range, rep)
@@ -189,8 +193,14 @@ fun formatLatexToUnicode(raw: String): String {
     // Square roots: \sqrt{x} -> √(x)
     text = text.replace(Regex("""\\?sqrt\{([^{}]+)\}""")) { "√(${it.groupValues[1]})" }
 
-    // Greek letters and math symbols
+    // Greek letters and math symbols (ordered from specific to general)
     val symbols = listOf(
+        "\\varepsilon_0" to "ε₀", "\\epsilon_0" to "ε₀", "\\theta_0" to "θ₀",
+        "\\vec{\\tau}" to "τ⃗", "\\vec{\\mu}" to "μ⃗", "\\vec{p}" to "p⃗",
+        "\\vec{r}" to "r⃗", "\\vec{E}" to "E⃗", "\\vec{B}" to "B⃗",
+        "\\vec{F}" to "F⃗", "\\vec{v}" to "v⃗", "\\vec{A}" to "A⃗",
+        "\\hat{r}" to "r̂", "\\hat{p}" to "p̂", "\\hat{n}" to "n̂",
+        "\\hat{i}" to "î", "\\hat{j}" to "ĵ", "\\hat{k}" to "k̂",
         "\\hbar" to "ℏ", "\\dagger" to "†", "\\partial" to "∂", "\\nabla" to "∇", "\\infty" to "∞",
         "\\sum" to "∑", "\\prod" to "∏", "\\int" to "∫", "\\iint" to "∬", "\\iiint" to "∭", "\\oint" to "∮",
         "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ", "\\epsilon" to "ε",
@@ -213,6 +223,8 @@ fun formatLatexToUnicode(raw: String): String {
         "\\forall" to "∀", "\\exists" to "∃", "\\nexists" to "∄",
         "\\circ" to "°", "\\degree" to "°", "\\prime" to "′",
         "\\ldots" to "…", "\\cdots" to "⋯", "\\dots" to "…",
+        "\\cos" to "cos", "\\sin" to "sin", "\\tan" to "tan",
+        "\\ln" to "ln", "\\log" to "log", "\\exp" to "exp",
         "\\{" to "{", "\\}" to "}", "\\," to " ", "\\;" to " ", "\\quad" to " ", "\\qquad" to "  "
     )
     for ((k, v) in symbols) {
@@ -244,9 +256,10 @@ fun formatLatexToUnicode(raw: String): String {
         'a' to 'ₐ', 'e' to 'ₑ', 'h' to 'ₕ', 'i' to 'ᵢ', 'j' to 'ⱼ',
         'k' to 'ₖ', 'l' to 'ₗ', 'm' to 'ₘ', 'n' to 'ₙ', 'o' to 'ₒ',
         'p' to 'ₚ', 'r' to 'ᵣ', 's' to 'ₛ', 't' to 'ₜ', 'u' to 'ᵤ',
-        'v' to 'ᵥ', 'x' to 'ₓ'
+        'v' to 'ᵥ', 'x' to 'ₓ', 'θ' to 'θ', 'ϕ' to 'ϕ'
     )
-    text = text.replace(Regex("""_\{([^{}]+)\}|_([0-9a-zA-Z\+\-])""")) { matchResult ->
+    text = text.replace("_{θ}", "θ").replace("_{ϕ}", "ϕ")
+    text = text.replace(Regex("""_\{([^{}]+)\}|_([0-9a-zA-Z\+\-θϕ])""")) { matchResult ->
         val content = matchResult.groupValues[1].ifEmpty { matchResult.groupValues[2] }
         content.map { subsMap[it] ?: it }.joinToString("")
     }
@@ -264,26 +277,31 @@ fun formatLatexToUnicode(raw: String): String {
 
 /**
  * Detects if a standalone line is purely a mathematical equation (like `\frac{d\rho}{dt} = ...`)
- * while strictly ignoring regular English sentences/paragraphs.
+ * while strictly ignoring regular English sentences/paragraphs and list items.
  */
 fun isPureEquationLine(raw: String): Boolean {
     val s = raw.trim()
-    if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("*") || s.startsWith(">") || s.startsWith("|") || s.startsWith("```")) {
+    if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("*") ||
+        s.startsWith(">") || s.startsWith("|") || s.startsWith("```") ||
+        s.matches(Regex("""^\d+\.\s+.*""")) || s.contains("**") || s.contains("~~") || s.contains("[")
+    ) {
         return false
     }
 
-    // Common English prose words: if 2 or more are present, it is prose, NOT a standalone formula!
+    // Common English prose words: if present with spaces, it is prose, NOT a standalone formula!
     val englishWords = setOf(
         "the", "is", "of", "and", "in", "to", "that", "this", "we", "can",
         "for", "with", "as", "by", "from", "are", "which", "where", "quantum",
         "physics", "system", "systems", "state", "states", "rather", "than",
         "classical", "microscopic", "action", "scales", "comparable", "constant",
-        "pure", "physical", "space", "spaces", "represented", "vector", "vectors"
+        "pure", "physical", "space", "spaces", "represented", "vector", "vectors",
+        "potential", "electric", "dipole", "field", "charge", "energy", "force",
+        "surface", "volume", "point", "distance", "plane", "line", "axis", "note"
     )
 
     val words = s.split(Regex("\\s+")).map { it.lowercase().filter { ch -> ch.isLetter() } }.filter { it.isNotBlank() }
     val matchedEng = words.count { it in englishWords }
-    if (matchedEng >= 2) return false
+    if (matchedEng >= 1 && words.size > 2) return false
 
     val mathTokens = listOf(
         "\\frac", "frac{", "\\int", "\\sum", "\\prod", "\\sqrt", "\\partial",
@@ -306,7 +324,8 @@ fun isPureEquationLine(raw: String): Boolean {
 fun MarkdownContent(
     text: String,
     modifier: Modifier = Modifier,
-    textColor: Color = MaterialTheme.colorScheme.onSurface
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
+    onLinkClick: ((String) -> Unit)? = null
 ) {
     val cleanText = remember(text) { sanitizeMarkdownInput(text) }
     val sections = remember(cleanText) { parseMarkdownBlocks(cleanText) }
@@ -324,7 +343,7 @@ fun MarkdownContent(
                     CodeBlockView(language = section.language, code = section.code)
                 }
                 is MarkdownBlock.Table -> {
-                    TableBlockView(headers = section.headers, rows = section.rows)
+                    TableBlockView(headers = section.headers, rows = section.rows, onLinkClick = onLinkClick)
                 }
                 is MarkdownBlock.Heading -> {
                     val style = when (section.level) {
@@ -347,11 +366,12 @@ fun MarkdownContent(
                             fontSize = 15.sp
                         )
                     }
-                    Text(
-                        text = buildFormattedInlineText(section.text, textColor),
+                    FormattedMarkdownText(
+                        text = section.text,
                         style = style,
                         color = textColor,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+                        onLinkClick = onLinkClick
                     )
                 }
                 is MarkdownBlock.Blockquote -> {
@@ -387,10 +407,11 @@ fun MarkdownContent(
                                 }
                                 if (calloutBody.isNotBlank()) {
                                     Spacer(Modifier.height(6.dp))
-                                    Text(
-                                        text = buildFormattedInlineText(calloutBody, textColor),
+                                    FormattedMarkdownText(
+                                        text = calloutBody,
                                         style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                                        color = textColor
+                                        color = textColor,
+                                        onLinkClick = onLinkClick
                                     )
                                 }
                             }
@@ -411,13 +432,14 @@ fun MarkdownContent(
                                     .background(ClaudeTerracotta)
                             )
                             Spacer(Modifier.width(10.dp))
-                            Text(
-                                text = buildFormattedInlineText(section.text, MaterialTheme.colorScheme.onSurfaceVariant),
+                            FormattedMarkdownText(
+                                text = section.text,
                                 style = MaterialTheme.typography.bodyMedium.copy(
                                     fontStyle = FontStyle.Italic,
                                     lineHeight = 22.sp
                                 ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                onLinkClick = onLinkClick
                             )
                         }
                     }
@@ -445,12 +467,12 @@ fun MarkdownContent(
                                     .background(ClaudeTerracotta)
                             )
                         }
-                        Text(
-                            text = buildFormattedInlineText(section.text, textColor),
-                            style = MaterialTheme.typography.bodyMedium,
-                            lineHeight = 23.sp,
+                        FormattedMarkdownText(
+                            text = section.text,
+                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 23.sp),
                             color = textColor,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            onLinkClick = onLinkClick
                         )
                     }
                 }
@@ -464,11 +486,11 @@ fun MarkdownContent(
                     )
                 }
                 is MarkdownBlock.Paragraph -> {
-                    Text(
-                        text = buildFormattedInlineText(section.text, textColor),
-                        style = MaterialTheme.typography.bodyMedium,
-                        lineHeight = 24.sp,
-                        color = textColor
+                    FormattedMarkdownText(
+                        text = section.text,
+                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp),
+                        color = textColor,
+                        onLinkClick = onLinkClick
                     )
                 }
             }
@@ -755,15 +777,29 @@ fun CodeBlockView(language: String, code: String) {
 }
 
 /**
- * Modern Markdown Table with horizontal scroll, zebra rows, and sleek borders.
+ * Modern Markdown Table with horizontal scroll, zebra rows, and synchronized columns.
  */
 @Composable
-fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
+fun TableBlockView(
+    headers: List<String>,
+    rows: List<List<String>>,
+    onLinkClick: ((String) -> Unit)? = null
+) {
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val headerBg = if (isDark) Color(0xFF1E1E22) else Color(0xFFECEAE4)
     val rowAltBg = if (isDark) Color(0xFF18181C) else Color(0xFFF7F6F2)
     val rowNormBg = if (isDark) Color(0xFF141416) else Color(0xFFFFFFFF)
     val borderColor = if (isDark) Color(0xFF2E2E36) else Color(0xFFE2E0D8)
+
+    val colCount = maxOf(headers.size, rows.maxOfOrNull { it.size } ?: 1)
+    val colWidths = remember(headers, rows) {
+        (0 until colCount).map { colIdx ->
+            val hLen = headers.getOrNull(colIdx)?.length ?: 0
+            val rMaxLen = rows.maxOfOrNull { it.getOrNull(colIdx)?.length ?: 0 } ?: 0
+            val maxLen = maxOf(hLen, rMaxLen)
+            (maxLen * 9.5).coerceIn(100.0, 320.0).dp
+        }
+    }
 
     Surface(
         modifier = Modifier
@@ -784,15 +820,21 @@ fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
                     .background(headerBg)
                     .padding(horizontal = 14.dp, vertical = 10.dp)
             ) {
-                headers.forEach { header ->
-                    Text(
-                        text = header.trim(),
-                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurface,
+                (0 until colCount).forEach { colIdx ->
+                    val header = headers.getOrNull(colIdx) ?: ""
+                    val colWidth = colWidths.getOrElse(colIdx) { 120.dp }
+                    Box(
                         modifier = Modifier
-                            .widthIn(min = 90.dp, max = 220.dp)
+                            .width(colWidth)
                             .padding(end = 12.dp)
-                    )
+                    ) {
+                        FormattedMarkdownText(
+                            text = header.trim(),
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            onLinkClick = onLinkClick
+                        )
+                    }
                 }
             }
             HorizontalDivider(thickness = 1.dp, color = borderColor)
@@ -805,15 +847,21 @@ fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
                         .background(bg)
                         .padding(horizontal = 14.dp, vertical = 8.dp)
                 ) {
-                    row.forEachIndexed { _, cell ->
-                        Text(
-                            text = cell.trim(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
+                    (0 until colCount).forEach { colIdx ->
+                        val cell = row.getOrNull(colIdx) ?: ""
+                        val colWidth = colWidths.getOrElse(colIdx) { 120.dp }
+                        Box(
                             modifier = Modifier
-                                .widthIn(min = 90.dp, max = 220.dp)
+                                .width(colWidth)
                                 .padding(end = 12.dp)
-                        )
+                        ) {
+                            FormattedMarkdownText(
+                                text = cell.trim(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                onLinkClick = onLinkClick
+                            )
+                        }
                     }
                 }
                 if (index < rows.size - 1) {
@@ -825,8 +873,55 @@ fun TableBlockView(headers: List<String>, rows: List<List<String>>) {
 }
 
 /**
+ * Clickable and richly formatted markdown text block.
+ * Supports inline annotations, clickable links, and graceful fallback.
+ */
+@Composable
+fun FormattedMarkdownText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+    modifier: Modifier = Modifier,
+    onLinkClick: ((String) -> Unit)? = null
+) {
+    val annotatedString = buildFormattedInlineText(text, color)
+    val hasUrl = remember(annotatedString) {
+        annotatedString.getStringAnnotations(tag = "URL", start = 0, end = annotatedString.length).isNotEmpty()
+    }
+    val uriHandler = LocalUriHandler.current
+
+    if (hasUrl) {
+        ClickableText(
+            text = annotatedString,
+            style = style.copy(color = color),
+            modifier = modifier,
+            onClick = { offset ->
+                annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                    .firstOrNull()?.let { annotation ->
+                        val url = annotation.item
+                        if (onLinkClick != null) {
+                            onLinkClick(url)
+                        } else {
+                            try {
+                                uriHandler.openUri(url)
+                            } catch (_: Throwable) {}
+                        }
+                    }
+            }
+        )
+    } else {
+        Text(
+            text = annotatedString,
+            style = style,
+            color = color,
+            modifier = modifier
+        )
+    }
+}
+
+/**
  * Parses markdown inline styles including:
- * - **bold**
+ * - **bold** (with inline math support)
  * - *italic*
  * - ~~strikethrough~~
  * - `inline code`
@@ -864,27 +959,34 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
 
             if (start > cursor) {
                 val plainChunk = raw.substring(cursor, start)
-                append(formatLatexToUnicode(plainChunk))
+                // Append plain English chunks exactly as-is to preserve spacing
+                append(plainChunk)
             }
 
             val fullMatch = match.value
             when {
                 fullMatch.startsWith("**") -> {
                     val content = match.groupValues.getOrNull(2) ?: ""
+                    val inlineFormatted = if (content.contains("$")) {
+                        content.replace(Regex("""\$([^$]+)\$""")) { formatLatexToUnicode(it.groupValues[1]) }
+                    } else content
                     withStyle(SpanStyle(fontWeight = FontWeight.Bold, color = baseColor)) {
-                        append(formatLatexToUnicode(content))
+                        append(inlineFormatted)
                     }
                 }
                 fullMatch.startsWith("*") -> {
                     val content = match.groupValues.getOrNull(3) ?: ""
+                    val inlineFormatted = if (content.contains("$")) {
+                        content.replace(Regex("""\$([^$]+)\$""")) { formatLatexToUnicode(it.groupValues[1]) }
+                    } else content
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = baseColor)) {
-                        append(formatLatexToUnicode(content))
+                        append(inlineFormatted)
                     }
                 }
                 fullMatch.startsWith("~~") -> {
                     val content = match.groupValues.getOrNull(4) ?: ""
                     withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough, color = baseColor.copy(alpha = 0.6f))) {
-                        append(formatLatexToUnicode(content))
+                        append(content)
                     }
                 }
                 fullMatch.startsWith("`") -> {
@@ -902,15 +1004,18 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                 }
                 fullMatch.startsWith("[") -> {
                     val linkText = match.groupValues.getOrNull(6) ?: ""
+                    val linkUrl = match.groupValues.getOrNull(7) ?: ""
+                    pushStringAnnotation(tag = "URL", annotation = linkUrl)
                     withStyle(
                         SpanStyle(
                             color = ChatGptBlue,
                             textDecoration = TextDecoration.Underline,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.SemiBold
                         )
                     ) {
                         append(linkText)
                     }
+                    pop()
                 }
                 fullMatch.startsWith("$$") -> {
                     val mathContent = match.groupValues.getOrNull(8) ?: ""
@@ -973,7 +1078,7 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
                     }
                 }
                 else -> {
-                    append(formatLatexToUnicode(fullMatch))
+                    append(fullMatch)
                 }
             }
             cursor = end
@@ -981,7 +1086,7 @@ fun buildFormattedInlineText(raw: String, baseColor: Color): androidx.compose.ui
 
         if (cursor < raw.length) {
             val remainingChunk = raw.substring(cursor)
-            append(formatLatexToUnicode(remainingChunk))
+            append(remainingChunk)
         }
     }
 }
@@ -1144,14 +1249,6 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
             }
         }
 
-        // Bare mathematical equation detection
-        if (isPureEquationLine(trimmed)) {
-            flushPara()
-            blocks.add(MarkdownBlock.MathEquation(trimmed))
-            i++
-            continue
-        }
-
         when {
             trimmed.startsWith("### ") -> {
                 flushPara()
@@ -1189,6 +1286,10 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 } else {
                     blocks.add(MarkdownBlock.Paragraph(trimmed))
                 }
+            }
+            isPureEquationLine(trimmed) -> {
+                flushPara()
+                blocks.add(MarkdownBlock.MathEquation(trimmed))
             }
             trimmed.isEmpty() -> {
                 flushPara()

@@ -41,6 +41,15 @@ import org.json.JSONObject
 import java.util.UUID
 import javax.inject.Inject
 
+data class FileViewerData(
+    val filename: String,
+    val path: String,
+    val size: Long = 0L,
+    val content: String = "",
+    val error: String? = null,
+    val isLoading: Boolean = false
+)
+
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -49,6 +58,14 @@ class ChatViewModel @Inject constructor(
     private val memoryDao: MemoryDao,
     val driveManager: com.agychat.app.data.drive.GoogleDriveManager
 ) : ViewModel() {
+
+    // Remote Colab File Viewer State
+    private val _activeFileViewer = MutableStateFlow<FileViewerData?>(null)
+    val activeFileViewer: StateFlow<FileViewerData?> = _activeFileViewer.asStateFlow()
+
+    fun closeFileViewer() {
+        _activeFileViewer.value = null
+    }
 
     // ChatGPT-Style Persistent Memory System
     val memories = memoryDao.getAllMemoriesFlow().catch { t ->
@@ -504,6 +521,118 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    fun fetchAndOpenFile(rawPathOrUrl: String) {
+        val cleanPath = cleanFilePathOrUrl(rawPathOrUrl)
+        val filename = cleanPath.substringAfterLast("/").ifBlank { "file.txt" }
+
+        _activeFileViewer.value = FileViewerData(
+            filename = filename,
+            path = cleanPath,
+            size = 0L,
+            content = "",
+            isLoading = true
+        )
+
+        // 1. Send WebSocket request
+        try {
+            val json = JSONObject().apply {
+                put("action", "get_file")
+                put("path", cleanPath)
+            }
+            webSocketClient.sendMessage(json.toString())
+        } catch (t: Throwable) {
+            Log.e("ChatViewModel", "Failed to send WS get_file", t)
+        }
+
+        // 2. OkHttp fallback in background for resilience
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                val base = _serverUrl.value.ifBlank {
+                    prefs.getString("server_url", "") ?: ""
+                }
+                if (base.isNotBlank()) {
+                    val httpUrl = when {
+                        base.startsWith("ws://") -> base.replace("ws://", "http://")
+                        base.startsWith("wss://") -> base.replace("wss://", "https://")
+                        !base.startsWith("http") -> "https://$base"
+                        else -> base
+                    }
+                    val cleanBase = httpUrl.removeSuffix("/").removeSuffix("/ws")
+                    val fullUrl = "$cleanBase/api/file?path=${Uri.encode(cleanPath)}"
+
+                    val request = okhttp3.Request.Builder().url(fullUrl).build()
+                    val response = okhttp3.OkHttpClient().newCall(request).execute()
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: ""
+                        val respJson = JSONObject(body)
+                        if (respJson.optString("status") == "ok") {
+                            val fName = respJson.optString("filename", filename)
+                            val fPath = respJson.optString("path", cleanPath)
+                            val fSize = respJson.optLong("size", 0L)
+                            val fContent = respJson.optString("content", "")
+                            _activeFileViewer.value = FileViewerData(
+                                filename = fName,
+                                path = fPath,
+                                size = fSize,
+                                content = fContent,
+                                isLoading = false
+                            )
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w("ChatViewModel", "OkHttp fallback get_file failed: ${t.message}")
+            }
+        }
+    }
+
+    private fun cleanFilePathOrUrl(raw: String): String {
+        var s = raw.trim()
+        if (s.startsWith("file://")) s = s.removePrefix("file://")
+        if (s.contains("?path=")) s = s.substringAfter("?path=").substringBefore("&")
+        return s.trim()
+    }
+
+    fun saveActiveFileToPhone(onResult: (Boolean, String) -> Unit) {
+        val file = _activeFileViewer.value ?: return
+        if (file.content.isBlank()) {
+            onResult(false, "File content is empty")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val filename = file.filename
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val resolver = context.contentResolver
+                    val contentValues = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, if (filename.endsWith(".md")) "text/markdown" else "text/plain")
+                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                    }
+                    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                    if (uri != null) {
+                        resolver.openOutputStream(uri)?.use { out ->
+                            out.write(file.content.toByteArray(Charsets.UTF_8))
+                        }
+                        onResult(true, "Saved $filename to Downloads")
+                    } else {
+                        onResult(false, "Failed to create file in Downloads")
+                    }
+                } else {
+                    val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                    dir.mkdirs()
+                    val target = java.io.File(dir, filename)
+                    target.writeText(file.content, Charsets.UTF_8)
+                    onResult(true, "Saved $filename to Downloads")
+                }
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Error saving file to Downloads", e)
+                onResult(false, "Save error: ${e.message}")
+            }
+        }
+    }
+
     private val connectionExceptionHandler = CoroutineExceptionHandler { _, throwable ->
         Log.e("ChatViewModel", "WebSocket connection coroutine caught error", throwable)
         _connectionState.value = ConnectionState.ERROR
@@ -667,6 +796,33 @@ class ChatViewModel @Inject constructor(
                     } else {
                         _cloudSyncStatus.value = "⚠️ No backup found on Google Drive"
                         _isSyncing.value = false
+                    }
+                }
+                "file_data" -> {
+                    val status = json.optString("status", "ok")
+                    if (status == "ok") {
+                        val fn = json.optString("filename", "file.txt")
+                        val fp = json.optString("path", "")
+                        val fsize = json.optLong("size", 0L)
+                        val fcontent = json.optString("content", "")
+                        _activeFileViewer.value = FileViewerData(
+                            filename = fn,
+                            path = fp,
+                            size = fsize,
+                            content = fcontent,
+                            isLoading = false
+                        )
+                    } else {
+                        val errMsg = json.optString("error", "File not found on Colab server")
+                        _activeFileViewer.value = _activeFileViewer.value?.copy(
+                            error = errMsg,
+                            isLoading = false
+                        ) ?: FileViewerData(
+                            filename = "Error",
+                            path = "",
+                            error = errMsg,
+                            isLoading = false
+                        )
                     }
                 }
                 "chunk" -> {

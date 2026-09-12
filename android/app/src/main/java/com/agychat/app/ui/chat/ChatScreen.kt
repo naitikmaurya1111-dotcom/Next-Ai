@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1153,6 +1154,9 @@ fun ChatScreen(
                                 },
                                 onFeedback = { type ->
                                     viewModel.toggleFeedback(msg.id, type)
+                                },
+                                onOpenFile = { filePath ->
+                                    viewModel.fetchAndOpenFile(filePath)
                                 }
                             )
                         }
@@ -1515,6 +1519,37 @@ fun ChatScreen(
             onDismiss = { showCustomInstructionsSheet = false }
         )
     }
+
+    val activeFileViewer by viewModel.activeFileViewer.collectAsState()
+    if (activeFileViewer != null) {
+        val fileData = activeFileViewer!!
+        FileViewerBottomSheet(
+            fileData = fileData,
+            onClose = { viewModel.closeFileViewer() },
+            onSaveToPhone = {
+                viewModel.saveActiveFileToPhone { success, msg ->
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onCopy = {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText(fileData.filename, fileData.content))
+                Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+            },
+            onShare = {
+                try {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, fileData.filename)
+                        putExtra(Intent.EXTRA_TEXT, fileData.content)
+                    }
+                    context.startActivity(Intent.createChooser(shareIntent, "Share ${fileData.filename}"))
+                } catch (t: Throwable) {
+                    Toast.makeText(context, "Share failed: ${t.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1618,7 +1653,8 @@ fun MessageItem(
     onToggleSpeak: () -> Unit = {},
     onTogglePin: () -> Unit = {},
     onFeedback: (String) -> Unit = {},
-    onOpenMemory: () -> Unit = {}
+    onOpenMemory: () -> Unit = {},
+    onOpenFile: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -1758,7 +1794,8 @@ fun MessageItem(
                             if (message.content.isNotBlank() && !message.content.startsWith("Sent an attachment:") && !message.content.startsWith("Sent ")) {
                                 MarkdownContent(
                                     text = message.content,
-                                    textColor = MaterialTheme.colorScheme.onSurface
+                                    textColor = MaterialTheme.colorScheme.onSurface,
+                                    onLinkClick = onOpenFile
                                 )
                             }
                         }
@@ -1907,9 +1944,87 @@ fun MessageItem(
                             toolItems = message.toolExecutions,
                             singleStatus = message.toolExecution,
                             isExpanded = message.isToolsExpanded,
-                            onToggle = onToggleTools
+                            onToggle = onToggleTools,
+                            onOpenFile = onOpenFile
                         )
                         Spacer(Modifier.height(10.dp))
+                    }
+
+                    // 2b. Generated Files Artifact Cards (Derivations, markdown notes, code files created by agent)
+                    val generatedFiles = remember(message.toolExecutions) {
+                        message.toolExecutions
+                            .filter { (it.toolName == "write_to_file" || it.toolName == "replace_file_content") && !it.targetFile.isNullOrBlank() }
+                            .mapNotNull { it.targetFile }
+                            .distinct()
+                    }
+                    if (generatedFiles.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier.padding(bottom = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            generatedFiles.forEach { filePath ->
+                                val fileName = filePath.substringAfterLast("/").ifBlank { "file" }
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.4f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onOpenFile(filePath) }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.Description,
+                                                    contentDescription = null,
+                                                    tint = ClaudeTerracotta,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            Spacer(Modifier.width(10.dp))
+                                            Column {
+                                                Text(
+                                                    text = fileName,
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = "Artifact created • Tap to view & save to phone",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                                )
+                                            }
+                                        }
+                                        Button(
+                                            onClick = { onOpenFile(filePath) },
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier.height(30.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                                        ) {
+                                            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(13.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("Open", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.SemiBold))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // Autonomous Memory Update Banner (ChatGPT Style)
@@ -1953,7 +2068,10 @@ fun MessageItem(
                     // 3. Main Message Markdown Content with streaming cursor (Borderless Canvas Flow)
                     if (message.content.isNotBlank()) {
                         SelectionContainer {
-                            MarkdownContent(text = message.content)
+                            MarkdownContent(
+                                text = message.content,
+                                onLinkClick = onOpenFile
+                            )
                         }
                     }
                     // Streaming blinking cursor
@@ -2247,7 +2365,8 @@ fun AgyTerminalExecutionCard(
     toolItems: List<ToolExecutionItem>,
     singleStatus: String?,
     isExpanded: Boolean,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onOpenFile: ((String) -> Unit)? = null
 ) {
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
 
@@ -2364,7 +2483,8 @@ fun AgyTerminalExecutionCard(
                             item = item,
                             codeBg = terminalCodeBg,
                             borderColor = terminalCodeBorder,
-                            isDark = isDark
+                            isDark = isDark,
+                            onOpenFile = onOpenFile
                         )
                     }
                 }
@@ -2378,7 +2498,8 @@ fun ToolExecutionItemRow(
     item: ToolExecutionItem,
     codeBg: Color,
     borderColor: Color,
-    isDark: Boolean
+    isDark: Boolean,
+    onOpenFile: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var isOutputExpanded by remember { mutableStateOf(false) }
@@ -2451,6 +2572,29 @@ fun ToolExecutionItemRow(
             }
 
             Spacer(Modifier.width(6.dp))
+
+            if (!item.targetFile.isNullOrBlank() && onOpenFile != null) {
+                Surface(
+                    shape = RoundedCornerShape(5.dp),
+                    color = ClaudeTerracotta.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.4f)),
+                    modifier = Modifier.clickable { onOpenFile(item.targetFile) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(11.dp))
+                        Text(
+                            text = "View",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold),
+                            color = ClaudeTerracotta
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+            }
 
             // Duration or Active status pill
             if (item.state == "ACTIVE") {
@@ -4075,4 +4219,196 @@ fun ModelBottomSheet(
         }
     }
 }
+}
+
+/**
+ * Modern Full-Screen File Viewer & Downloader Modal.
+ * Opens files created by Antigravity CLI agents (derivations, markdown notes, code, etc.)
+ * Allows user to view with rich Markdown/LaTeX typography, copy, share, and save to phone Downloads.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FileViewerBottomSheet(
+    fileData: FileViewerData,
+    onClose: () -> Unit,
+    onSaveToPhone: () -> Unit,
+    onShare: () -> Unit,
+    onCopy: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onClose,
+        containerColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        dragHandle = { BottomSheetDefaults.DragHandle() }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.85f)
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            // Header Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Description,
+                            contentDescription = null,
+                            tint = ClaudeTerracotta,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = fileData.filename,
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val sizeStr = if (fileData.size > 0) {
+                            val kb = fileData.size / 1024.0
+                            String.format(java.util.Locale.US, "%.1f KB", kb)
+                        } else if (fileData.content.isNotBlank()) {
+                            val kb = fileData.content.toByteArray(Charsets.UTF_8).size / 1024.0
+                            String.format(java.util.Locale.US, "%.1f KB", kb)
+                        } else ""
+                        Text(
+                            text = listOfNotNull(sizeStr.takeIf { it.isNotBlank() }, fileData.path.takeIf { it.isNotBlank() }).joinToString(" • "),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Quick Actions Bar
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onSaveToPhone,
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Save to Phone", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                }
+
+                OutlinedButton(
+                    onClick = onCopy,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(0.7f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Copy", style = MaterialTheme.typography.labelMedium)
+                }
+
+                OutlinedButton(
+                    onClick = onShare,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(0.7f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Share", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(thickness = 0.8.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(8.dp))
+
+            // File Content Display Area
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                when {
+                    fileData.isLoading -> {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(color = ClaudeTerracotta, modifier = Modifier.size(36.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "Loading file from Colab server...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    fileData.error != null -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp),
+                            verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(40.dp)
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = fileData.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                    else -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .padding(bottom = 24.dp)
+                        ) {
+                            SelectionContainer {
+                                MarkdownContent(
+                                    text = fileData.content,
+                                    textColor = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
