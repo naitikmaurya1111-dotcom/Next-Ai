@@ -1,9 +1,11 @@
 <resources>
-    <!-- Compose full-screen night theme: deep obsidian dark background, no white flash -->
-    <style name="Theme.NextAI" parent="Theme.AppCompat.Light.NoActionBar">
+    <!-- Compose dark night theme using platform Material theme (no AppCompat dependency needed) -->
+    <!-- windowBackground matches app dark canvas to eliminate dark/white flash on startup -->
+    <style name="Theme.NextAI" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">#0D0D12</item>
         <item name="android:windowIsTranslucent">false</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowActionBar">false</item>
+        <item name="android:statusBarColor">#0D0D12</item>
+        <item name="android:navigationBarColor">#0D0D12</item>
     </style>
 </resources>
