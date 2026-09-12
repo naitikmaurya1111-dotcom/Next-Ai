@@ -85,14 +85,20 @@ fun SettingsScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(padding),
+            contentAlignment = Alignment.TopCenter
         ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 680.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
             Spacer(Modifier.height(4.dp))
 
             // ── Section 1: Colab Bridge Connection ────────────────────────
@@ -586,6 +592,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
 
     if (showMemorySheet) {
         ManageMemorySheet(

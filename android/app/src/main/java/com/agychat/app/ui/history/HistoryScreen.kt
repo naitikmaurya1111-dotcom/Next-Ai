@@ -159,11 +159,17 @@ fun HistoryScreen(
             )
         }
 
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
+                .padding(padding),
+            contentAlignment = Alignment.TopCenter
         ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxSize()
+            ) {
             // Search input
             OutlinedTextField(
                 value = searchQuery,
@@ -233,6 +239,7 @@ fun HistoryScreen(
             }
         }
     }
+}
 }
 
 @Composable

@@ -40,6 +40,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
@@ -259,41 +260,12 @@ fun ChatScreen(
         }
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            HistoryDrawerContent(
-                conversations = conversations,
-                activeId = viewModel.currentConversationId,
-                onSelectConversation = { id ->
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.loadConversation(id)
-                    scope.launch { drawerState.close() }
-                },
-                onNewChat = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.startNewConversation()
-                    scope.launch { drawerState.close() }
-                },
-                onDelete = { id ->
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.deleteConversation(id)
-                },
-                onOpenSettings = {
-                    scope.launch { drawerState.close() }
-                    onNavigateToSettings()
-                },
-                onOpenMemory = {
-                    scope.launch { drawerState.close() }
-                    showMemorySheet = true
-                },
-                onOpenCustomInstructions = {
-                    scope.launch { drawerState.close() }
-                    showCustomInstructionsSheet = true
-                }
-            )
-        }
-    ) {
+    val configuration = LocalConfiguration.current
+    val screenWidthDp = configuration.screenWidthDp
+    val isTablet = screenWidthDp >= 600
+    var isTabletSidebarExpanded by remember { mutableStateOf(screenWidthDp >= 720) }
+
+    val chatScaffoldContent = @Composable {
         Scaffold(
             topBar = {
                 Surface(
@@ -305,11 +277,15 @@ fun ChatScreen(
                             navigationIcon = {
                                 IconButton(onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    scope.launch { drawerState.open() }
+                                    if (isTablet) {
+                                        isTabletSidebarExpanded = !isTabletSidebarExpanded
+                                    } else {
+                                        scope.launch { drawerState.open() }
+                                    }
                                 }) {
                                     Icon(
                                         Icons.Default.Menu,
-                                        contentDescription = "History Drawer",
+                                        contentDescription = if (isTablet) "Toggle Sidebar" else "History Drawer",
                                         tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
@@ -660,14 +636,20 @@ fun ChatScreen(
                 }
             },
             bottomBar = {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.background)
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
                         .navigationBarsPadding()
-                        .imePadding()
+                        .imePadding(),
+                    contentAlignment = Alignment.Center
                 ) {
+                    Column(
+                        modifier = Modifier
+                            .widthIn(max = 840.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
                     // Slash Command Autocomplete Suggestions Popup (shown when typing /)
                     val isSlashActive = inputText.startsWith("/")
                     val matchingSlashCommands = remember(inputText) {
@@ -788,13 +770,21 @@ fun ChatScreen(
                         isLoading = isLoading
                     )
                 }
-            },
-            containerColor = MaterialTheme.colorScheme.background
-        ) { paddingValues ->
+            }
+        },
+        containerColor = MaterialTheme.colorScheme.background
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues),
+            contentAlignment = Alignment.TopCenter
+        ) {
             Box(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues)
+                    .fillMaxHeight()
+                    .widthIn(max = 840.dp)
+                    .fillMaxWidth()
             ) {
                 if (messages.isEmpty()) {
                     EmptyChatGreeting(
@@ -898,6 +888,97 @@ fun ChatScreen(
             }
         }
     }
+    }
+
+    if (isTablet) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            AnimatedVisibility(
+                visible = isTabletSidebarExpanded,
+                enter = expandHorizontally() + fadeIn(),
+                exit = shrinkHorizontally() + fadeOut()
+            ) {
+                Row(modifier = Modifier.fillMaxHeight()) {
+                    Surface(
+                        modifier = Modifier
+                            .width(280.dp)
+                            .fillMaxHeight(),
+                        color = MaterialTheme.colorScheme.surface
+                    ) {
+                        HistoryDrawerContent(
+                            conversations = conversations,
+                            activeId = viewModel.currentConversationId,
+                            onSelectConversation = { id ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.loadConversation(id)
+                            },
+                            onNewChat = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.startNewConversation()
+                            },
+                            onDelete = { id ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.deleteConversation(id)
+                            },
+                            onOpenSettings = onNavigateToSettings,
+                            onOpenMemory = { showMemorySheet = true },
+                            onOpenCustomInstructions = { showCustomInstructionsSheet = true }
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.outlineVariant)
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                chatScaffoldContent()
+            }
+        }
+    } else {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                HistoryDrawerContent(
+                    conversations = conversations,
+                    activeId = viewModel.currentConversationId,
+                    onSelectConversation = { id ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.loadConversation(id)
+                        scope.launch { drawerState.close() }
+                    },
+                    onNewChat = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.startNewConversation()
+                        scope.launch { drawerState.close() }
+                    },
+                    onDelete = { id ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.deleteConversation(id)
+                    },
+                    onOpenSettings = {
+                        scope.launch { drawerState.close() }
+                        onNavigateToSettings()
+                    },
+                    onOpenMemory = {
+                        scope.launch { drawerState.close() }
+                        showMemorySheet = true
+                    },
+                    onOpenCustomInstructions = {
+                        scope.launch { drawerState.close() }
+                        showCustomInstructionsSheet = true
+                    }
+                )
+            }
+        ) {
+            chatScaffoldContent()
+        }
+    }
 
     if (showPluginBottomSheet) {
         PluginDrawer(
@@ -917,13 +998,18 @@ fun ChatScreen(
             containerColor = MaterialTheme.colorScheme.surface,
             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 14.dp)
-                    .navigationBarsPadding(),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
             ) {
+                Column(
+                    modifier = Modifier
+                        .widthIn(max = 640.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 14.dp)
+                        .navigationBarsPadding(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -1085,6 +1171,7 @@ fun ChatScreen(
                 Spacer(Modifier.height(8.dp))
             }
         }
+    }
     }
 
     if (showModelSheet) {
@@ -2709,51 +2796,110 @@ fun EmptyChatGreeting(
 
         Spacer(Modifier.height(28.dp))
 
-        // Modern 2x2 Action Starter Grid (ChatGPT Web & App Style)
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            val starterPrompts = listOf(
-                Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
-                Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
-                Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
-                Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
-            )
+        val isTablet = LocalConfiguration.current.screenWidthDp >= 600
 
-            for ((title, subtitle, prompt) in starterPrompts) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { onPromptCardClick(prompt) },
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant)
-                ) {
+        val starterPrompts = listOf(
+            Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
+            Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
+            Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
+            Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
+        )
+
+        if (isTablet) {
+            // Modern 2x2 Action Starter Grid for Tablets
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 720.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                starterPrompts.chunked(2).forEach { rowItems ->
                     Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.height(2.dp))
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                        rowItems.forEach { (title, subtitle, prompt) ->
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { onPromptCardClick(prompt) },
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = title,
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            text = subtitle,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Icon(
+                                        Icons.Default.ArrowForward,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = ClaudeTerracotta
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // Single Column Stack for Phones
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                starterPrompts.forEach { (title, subtitle, prompt) ->
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { onPromptCardClick(prompt) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ArrowForward,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                                tint = ClaudeTerracotta
                             )
                         }
-                        Icon(
-                            Icons.Default.ArrowForward,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = ClaudeTerracotta
-                        )
                     }
                 }
             }
@@ -3170,12 +3316,17 @@ fun ModelBottomSheet(
         containerColor = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-                .navigationBarsPadding()
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 640.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+                    .navigationBarsPadding()
+            ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -3453,4 +3604,5 @@ fun ModelBottomSheet(
             }
         }
     }
+}
 }
