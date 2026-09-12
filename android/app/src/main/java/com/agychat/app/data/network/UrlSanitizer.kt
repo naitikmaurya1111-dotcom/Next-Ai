@@ -2,6 +2,7 @@ package com.agychat.app.data.network
 
 import android.util.Log
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * Industrial-grade URL sanitizer and validator for WebSocket endpoints.
@@ -82,9 +83,9 @@ object UrlSanitizer {
 
             // Validate syntax strictly with OkHttp HttpUrl
             val httpEquivalent = if (scheme == "ws") "http://$pathPart" else "https://$pathPart"
-            val parsed = HttpUrl.parse(httpEquivalent) ?: return null
+            val parsed = httpEquivalent.toHttpUrlOrNull() ?: return null
 
-            if (parsed.host().isBlank() || parsed.host().contains(" ") || parsed.host().length < 3) {
+            if (parsed.host.isBlank() || parsed.host.contains(" ") || parsed.host.length < 3) {
                 return null
             }
 
