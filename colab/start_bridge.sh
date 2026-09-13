@@ -71,4 +71,8 @@ else
     echo "   $WS_URL"
     echo "==============================================================="
     echo "$WS_URL" > /tmp/live_ws_url.txt
+    if [ -d "/content/drive/MyDrive" ]; then
+        echo "$WS_URL" > /content/drive/MyDrive/active_url.txt 2>/dev/null || true
+    fi
+    python3 /content/Next-Ai/colab/update_gist_url.py "$WS_URL" "$TUNNEL_URL" || true
 fi

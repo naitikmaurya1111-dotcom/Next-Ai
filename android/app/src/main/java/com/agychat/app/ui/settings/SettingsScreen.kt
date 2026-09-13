@@ -121,9 +121,19 @@ fun SettingsScreen(
 
     var serverUrl by remember {
         mutableStateOf(
-            prefs.getString("server_url", "wss://english-memories-opens-judicial.trycloudflare.com/ws") ?: "wss://english-memories-opens-judicial.trycloudflare.com/ws"
+            prefs.getString("server_url", "wss://andy-viruses-she-performs.trycloudflare.com/ws") ?: "wss://andy-viruses-she-performs.trycloudflare.com/ws"
         )
     }
+    var autoResolveGist by remember {
+        mutableStateOf(prefs.getBoolean("auto_resolve_gist_url", true))
+    }
+    var gistId by remember {
+        mutableStateOf(
+            prefs.getString("gist_id", com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID)
+                ?: com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID
+        )
+    }
+    var isSyncingGist by remember { mutableStateOf(false) }
     var driveAutoBackup by remember {
         mutableStateOf(prefs.getBoolean("drive_auto_backup", true))
     }
@@ -256,6 +266,65 @@ fun SettingsScreen(
                     Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Connect to CLI")
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Auto-Sync URL via GitHub Gist",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "Automatically detects and updates the Colab tunnel URL on runtime restart without manual copy-pasting.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = autoResolveGist,
+                        onCheckedChange = {
+                            autoResolveGist = it
+                            prefs.edit().putBoolean("auto_resolve_gist_url", it).apply()
+                        }
+                    )
+                }
+
+                if (autoResolveGist) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            isSyncingGist = true
+                            chatViewModel.syncUrlFromGist(gistId) { success, result ->
+                                isSyncingGist = false
+                                if (success) {
+                                    serverUrl = result
+                                    Toast.makeText(context, "Synced Live URL from Gist!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Sync failed: $result", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isSyncingGist
+                    ) {
+                        if (isSyncingGist) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Syncing from Gist...")
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Sync Live URL from Gist Now")
+                        }
+                    }
                 }
             }
 

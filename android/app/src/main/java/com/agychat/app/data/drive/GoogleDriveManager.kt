@@ -180,6 +180,8 @@ class GoogleDriveManager @Inject constructor(
         // 5. App Settings
         val settingsObj = JSONObject().apply {
             put("server_url", prefs.getString("server_url", "") ?: "")
+            put("auto_resolve_gist_url", prefs.getBoolean("auto_resolve_gist_url", true))
+            put("gist_id", prefs.getString("gist_id", "93a5f994e43134016362692fe4bfc510") ?: "93a5f994e43134016362692fe4bfc510")
             put("selected_model", prefs.getString("selected_model", "gemini-3.8-flash-high") ?: "gemini-3.8-flash-high")
             put("reasoning_effort", prefs.getString("reasoning_effort", "high") ?: "high")
             put("is_memory_enabled", prefs.getBoolean("memory_enabled", true))
@@ -334,6 +336,12 @@ class GoogleDriveManager @Inject constructor(
                 val editor = prefs.edit()
                 if (setObj.has("server_url") && setObj.getString("server_url").isNotBlank()) {
                     editor.putString("server_url", setObj.getString("server_url"))
+                }
+                if (setObj.has("auto_resolve_gist_url")) {
+                    editor.putBoolean("auto_resolve_gist_url", setObj.getBoolean("auto_resolve_gist_url"))
+                }
+                if (setObj.has("gist_id") && setObj.getString("gist_id").isNotBlank()) {
+                    editor.putString("gist_id", setObj.getString("gist_id"))
                 }
                 if (setObj.has("selected_model")) {
                     editor.putString("selected_model", setObj.getString("selected_model"))

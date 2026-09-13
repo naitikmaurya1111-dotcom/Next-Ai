@@ -39,6 +39,12 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideGistUrlResolver(okHttpClient: OkHttpClient): com.agychat.app.data.network.GistUrlResolver {
+        return com.agychat.app.data.network.GistUrlResolver(okHttpClient)
+    }
+
+    @Provides
+    @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
         return Room.databaseBuilder(
             context,

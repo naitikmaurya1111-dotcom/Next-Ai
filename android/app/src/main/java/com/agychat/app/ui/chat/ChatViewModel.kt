@@ -76,7 +76,8 @@ class ChatViewModel @Inject constructor(
     private val memoryDao: MemoryDao,
     val localFileManager: com.agychat.app.data.local.LocalFileManager,
     val fileDao: com.agychat.app.data.local.FileDao,
-    val driveManager: com.agychat.app.data.drive.GoogleDriveManager
+    val driveManager: com.agychat.app.data.drive.GoogleDriveManager,
+    val gistUrlResolver: com.agychat.app.data.network.GistUrlResolver
 ) : ViewModel() {
 
     // Remote Colab File Viewer State
@@ -743,11 +744,31 @@ class ChatViewModel @Inject constructor(
                 consolidateMemories()
             }
 
-            val rawSavedUrl = prefs.getString("server_url", "wss://olympic-understood-heater-angel.trycloudflare.com/ws")
-            val validUrl = UrlSanitizer.normalizeWebSocketUrl(rawSavedUrl)
-                ?: UrlSanitizer.normalizeWebSocketUrl("wss://olympic-understood-heater-angel.trycloudflare.com/ws")
-            if (!validUrl.isNullOrBlank()) {
-                connectToServer(validUrl)
+            val autoResolveGist = prefs.getBoolean("auto_resolve_gist_url", true)
+            val savedGistId = prefs.getString("gist_id", com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID)
+                ?: com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID
+            val rawSavedUrl = prefs.getString("server_url", "wss://andy-viruses-she-performs.trycloudflare.com/ws")
+            val fallbackUrl = UrlSanitizer.normalizeWebSocketUrl(rawSavedUrl)
+
+            if (autoResolveGist) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    _currentStatus.value = "Auto-syncing Colab tunnel via Gist..."
+                    val res = gistUrlResolver.resolveLiveUrl(savedGistId)
+                    withContext(Dispatchers.Main) {
+                        if (res.isSuccess && !res.wsUrl.isNullOrBlank()) {
+                            Log.i("ChatViewModel", "Resolved live URL from Gist on startup: ${res.wsUrl}")
+                            connectToServer(res.wsUrl)
+                        } else if (!fallbackUrl.isNullOrBlank()) {
+                            Log.i("ChatViewModel", "Gist resolve failed, connecting to fallback: $fallbackUrl")
+                            connectToServer(fallbackUrl)
+                        } else {
+                            _connectionState.value = ConnectionState.DISCONNECTED
+                            _currentStatus.value = "Colab URL not detected. Check Settings."
+                        }
+                    }
+                }
+            } else if (!fallbackUrl.isNullOrBlank()) {
+                connectToServer(fallbackUrl)
             }
 
             // Restore last active conversation on launch
@@ -1142,7 +1163,43 @@ class ChatViewModel @Inject constructor(
             _currentStatus.value = "Reconnecting in ${delayMs / 1000}s... (attempt $reconnectAttempts)"
             delay(delayMs)
             if (_connectionState.value != ConnectionState.CONNECTED) {
-                reconnect()
+                val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                if (reconnectAttempts >= 2 && prefs.getBoolean("auto_resolve_gist_url", true)) {
+                    val gid = prefs.getString("gist_id", com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID)
+                    val gistRes = gistUrlResolver.resolveLiveUrl(gid)
+                    if (gistRes.isSuccess && !gistRes.wsUrl.isNullOrBlank() && gistRes.wsUrl != _serverUrl.value) {
+                        Log.i("ChatViewModel", "Detected updated Colab tunnel URL in Gist: ${gistRes.wsUrl}")
+                        withContext(Dispatchers.Main) {
+                            connectToServer(gistRes.wsUrl)
+                        }
+                        return@launch
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    reconnect()
+                }
+            }
+        }
+    }
+
+    fun syncUrlFromGist(customGistId: String? = null, onResult: ((Boolean, String) -> Unit)? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+            val gid = customGistId?.trim()?.ifBlank { null }
+                ?: prefs.getString("gist_id", com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID)
+                ?: com.agychat.app.data.network.GistUrlResolver.DEFAULT_GIST_ID
+            _currentStatus.value = "Syncing live URL from GitHub Gist..."
+            val result = gistUrlResolver.resolveLiveUrl(gid)
+            withContext(Dispatchers.Main) {
+                if (result.isSuccess && !result.wsUrl.isNullOrBlank()) {
+                    prefs.edit().putString("server_url", result.wsUrl).apply()
+                    connectToServer(result.wsUrl)
+                    onResult?.invoke(true, result.wsUrl)
+                } else {
+                    val msg = result.errorMessage ?: "Failed to resolve live URL from Gist"
+                    _currentStatus.value = msg
+                    onResult?.invoke(false, msg)
+                }
             }
         }
     }

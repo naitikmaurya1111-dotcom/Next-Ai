@@ -89,6 +89,13 @@ def main():
         print(f"   {ws_url}\n")
         with open("/tmp/live_ws_url.txt", "w") as f:
             f.write(ws_url + "\n")
+        try:
+            if os.path.isdir("/content/drive/MyDrive"):
+                with open("/content/drive/MyDrive/active_url.txt", "w") as df:
+                    df.write(ws_url + "\n")
+            subprocess.run([sys.executable, "/content/Next-Ai/colab/update_gist_url.py", ws_url, public_url], check=False)
+        except Exception as ge:
+            print(f"[!] Gist update error: {ge}")
     else:
         print("[!] Tunnel starting in background. Check /tmp/agy_cloudflared.log for URL.")
 
