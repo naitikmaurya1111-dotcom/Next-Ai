@@ -366,6 +366,18 @@ fun ChatScreen(
         }
     }
 
+    // Anchor scroll to bottom when soft keyboard opens
+    val imeBottom = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0 && isScrolledToBottom && displayedMessages.isNotEmpty()) {
+            kotlinx.coroutines.delay(60)
+            val count = listState.layoutInfo.totalItemsCount
+            if (count > 0) {
+                listState.animateScrollToItem(count - 1)
+            }
+        }
+    }
+
     // Smooth jitter-free follow-scroll during streaming (only if user was already at bottom)
     val lastStreamingMsg = displayedMessages.lastOrNull()
     val isStreamingActive = lastStreamingMsg?.isStreaming == true
@@ -1289,12 +1301,17 @@ fun ChatScreen(
                         text = inputText,
                         onTextChange = { inputText = it },
                         onSend = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (connectionState != ConnectionState.CONNECTED) {
+                                Toast.makeText(context, "Not connected. Reconnecting to Colab Bridge...", Toast.LENGTH_SHORT).show()
+                                viewModel.reconnect()
+                                return@ClaudeFloatingInputBar
+                            }
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         },
                         onStop = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             viewModel.stopGenerating()
                         },
                         onOpenPlugins = {
@@ -3095,8 +3112,36 @@ fun MessageItem(
                         text = message.content.removePrefix("⚠️").trim(),
                         style = MaterialTheme.typography.labelSmall,
                         color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3
+                        maxLines = 3,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
+                    if (isError) {
+                        Surface(
+                            onClick = onRetry,
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Retry",
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Text(
+                                    text = "Retry",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3776,17 +3821,23 @@ fun ClaudeFloatingInputBar(
     val isWebSearchActive = activeMode?.prefix == "/browser"
 
     Surface(
-        shape = RoundedCornerShape(26.dp),
+        shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        shadowElevation = 4.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(3.dp, RoundedCornerShape(26.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(26.dp))
+            .border(
+                1.dp,
+                if (text.isNotBlank()) ClaudeTerracotta.copy(alpha = 0.45f)
+                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                RoundedCornerShape(24.dp)
+            )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             // Quoted Reply Preview Bar
             AnimatedVisibility(visible = replyToMessage != null) {
@@ -4001,93 +4052,21 @@ fun ClaudeFloatingInputBar(
                 }
             }
 
-            // Main Input Action Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Bottom
+            // ── Tier 1: Expansive Full-Width Text Input ──
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
-                // Plus button (+) for Attachments & Files
-                IconButton(
-                    onClick = onAttachFile,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = "Add attachment or tool",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Spacer(Modifier.width(4.dp))
-
-                // Slash Commands & Tools Button (✦)
-                IconButton(
-                    onClick = onOpenPlugins,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(ClaudeTerracotta.copy(alpha = 0.12f))
-                ) {
-                    Icon(
-                        Icons.Default.AutoAwesome,
-                        contentDescription = "Slash Commands and Tools",
-                        tint = ClaudeTerracotta,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                Spacer(Modifier.width(4.dp))
-
-                // Quick Web Search Toggle Pill
-                Surface(
-                    onClick = onToggleWebSearch,
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.15f) else Color.Transparent,
-                    border = androidx.compose.foundation.BorderStroke(
-                        0.8.dp,
-                        if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-                    ),
-                    modifier = Modifier.padding(bottom = 2.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Language,
-                            contentDescription = "Toggle Web Search",
-                            modifier = Modifier.size(14.dp),
-                            tint = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (isWebSearchActive) {
-                            Spacer(Modifier.width(3.dp))
-                            Text(
-                                text = "Search",
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
-                                color = ChatGptBlue
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.width(4.dp))
-
-                // Multi-line Text input
                 OutlinedTextField(
                     value = text,
                     onValueChange = onTextChange,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 2.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     placeholder = {
                         Text(
-                            if (isConnected) "Message Next AI..." else "Connect in Settings to chat...",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 15.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                            text = if (isConnected) "Message Next AI or type / for tools..." else "Connect in Settings to chat...",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
                         )
                     },
                     maxLines = 6,
@@ -4101,111 +4080,238 @@ fun ClaudeFloatingInputBar(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
                         cursorColor = ClaudeTerracotta
+                    ),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        fontSize = 15.5.sp,
+                        lineHeight = 22.sp,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 )
 
-                // Live Word & Token Counter in Composer
-                if (text.isNotBlank()) {
+                // Word / Token Count Badge if long prompt
+                if (text.length > 80) {
                     val words = remember(text) { text.trim().split(Regex("\\s+")).count { it.isNotBlank() } }
                     val estTokens = (words * 1.33).toInt()
-                    Text(
-                        text = if (words >= 15) "$words w · ~$estTokens t" else "${text.length}",
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                        color = if (text.length > 4000) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(end = 2.dp, bottom = 8.dp)
-                    )
-                }
-
-                // Clear (✕) Button if text non-empty
-                if (text.isNotBlank()) {
-                    IconButton(
-                        onClick = { onTextChange("") },
-                        modifier = Modifier.size(32.dp).padding(bottom = 2.dp)
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 8.dp, end = 6.dp)
                     ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Clear input",
-                            tint = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(16.dp)
+                        Text(
+                            text = "$words w · ~$estTokens t",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
+                            color = if (text.length > 4000) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
+            }
 
-                Spacer(Modifier.width(2.dp))
+            Spacer(Modifier.height(4.dp))
 
-                // Modern ChatGPT Dynamic Send / Stop / Mic Button with Smooth AnimatedContent Transitions
-                val hasInput = text.isNotBlank() || activeAttachments.isNotEmpty()
-                val actionButtonState = when {
-                    isLoading -> ActionButtonState.STOP
-                    hasInput -> ActionButtonState.SEND
-                    else -> ActionButtonState.MIC
+            // ── Tier 2: Refined Action Toolbar (Left Tools & Right Send/Stop) ──
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Left Toolbar cluster: Attachments (+), Tools (✦), Web Search pill
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Plus button (+) for Attachments & Files
+                    Surface(
+                        onClick = onAttachFile,
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.6.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Default.Add,
+                                contentDescription = "Add attachment or file",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    // Slash Commands & Tools Button (✦)
+                    Surface(
+                        onClick = onOpenPlugins,
+                        shape = RoundedCornerShape(16.dp),
+                        color = ClaudeTerracotta.copy(alpha = 0.12f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.6.dp,
+                            ClaudeTerracotta.copy(alpha = 0.3f)
+                        ),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AutoAwesome,
+                                contentDescription = "Slash Commands and Tools",
+                                tint = ClaudeTerracotta,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = "Tools",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 11.sp
+                                ),
+                                color = ClaudeTerracotta
+                            )
+                        }
+                    }
+
+                    // Quick Web Search Toggle Pill
+                    Surface(
+                        onClick = onToggleWebSearch,
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.15f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.8.dp,
+                            if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Language,
+                                contentDescription = "Toggle Web Search",
+                                modifier = Modifier.size(14.dp),
+                                tint = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = if (isWebSearchActive) "Search On" else "Search",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isWebSearchActive) FontWeight.Bold else FontWeight.Medium,
+                                    fontSize = 11.sp
+                                ),
+                                color = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
 
-                AnimatedContent(
-                    targetState = actionButtonState,
-                    transitionSpec = {
-                        (scaleIn(animationSpec = tween(180)) + fadeIn(animationSpec = tween(180)))
-                            .togetherWith(scaleOut(animationSpec = tween(150)) + fadeOut(animationSpec = tween(150)))
-                    },
-                    label = "composerActionButton"
-                ) { state ->
-                    when (state) {
-                        ActionButtonState.STOP -> {
-                            FilledIconButton(
-                                onClick = onStop,
-                                modifier = Modifier.size(36.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.onSurface,
-                                    contentColor = MaterialTheme.colorScheme.surface
-                                )
-                            ) {
-                                Icon(
-                                    Icons.Default.Stop,
-                                    contentDescription = "Stop Generating",
-                                    tint = MaterialTheme.colorScheme.surface,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
+                // Right Action cluster: Clear text (✕) & Action Button (Send / Stop / Mic)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Clear (✕) Button if text non-empty
+                    if (text.isNotBlank()) {
+                        IconButton(
+                            onClick = { onTextChange("") },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Clear input",
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(17.dp)
+                            )
                         }
-                        ActionButtonState.SEND -> {
-                            FilledIconButton(
-                                onClick = {
-                                    if (canSend) {
-                                        onSend()
-                                    } else {
-                                        Toast.makeText(context, "Bridge offline. Tap Reconnect above.", Toast.LENGTH_SHORT).show()
+                    }
+
+                    // Modern ChatGPT Dynamic Send / Stop / Mic Button with Smooth AnimatedContent Transitions
+                    val hasInput = text.isNotBlank() || activeAttachments.isNotEmpty()
+                    val actionButtonState = when {
+                        isLoading -> ActionButtonState.STOP
+                        hasInput -> ActionButtonState.SEND
+                        else -> ActionButtonState.MIC
+                    }
+
+                    AnimatedContent(
+                        targetState = actionButtonState,
+                        transitionSpec = {
+                            (scaleIn(animationSpec = tween(180)) + fadeIn(animationSpec = tween(180)))
+                                .togetherWith(scaleOut(animationSpec = tween(150)) + fadeOut(animationSpec = tween(150)))
+                        },
+                        label = "composerActionButton"
+                    ) { state ->
+                        when (state) {
+                            ActionButtonState.STOP -> {
+                                FilledIconButton(
+                                    onClick = onStop,
+                                    modifier = Modifier.size(38.dp),
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Default.Stop,
+                                        contentDescription = "Stop Generating",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            ActionButtonState.SEND -> {
+                                FilledIconButton(
+                                    onClick = {
+                                        if (canSend) {
+                                            onSend()
+                                        } else {
+                                            Toast.makeText(context, "Bridge offline. Tap Reconnect above.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.size(38.dp),
+                                    colors = IconButtonDefaults.filledIconButtonColors(
+                                        containerColor = if (canSend) ClaudeTerracotta
+                                                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
+                                        contentColor = Color.White
+                                    )
+                                ) {
+                                    Icon(
+                                        Icons.Default.ArrowUpward,
+                                        contentDescription = "Send",
+                                        tint = if (canSend) Color.White else MaterialTheme.colorScheme.surface,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            ActionButtonState.MIC -> {
+                                Surface(
+                                    onClick = onVoiceInput,
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        0.6.dp,
+                                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    ),
+                                    modifier = Modifier.size(38.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Default.Mic,
+                                            contentDescription = "Voice dictation",
+                                            tint = ClaudeTerracotta,
+                                            modifier = Modifier.size(19.dp)
+                                        )
                                     }
-                                },
-                                modifier = Modifier.size(36.dp),
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = if (canSend) (if (isDark) Color.White else Color(0xFF0D0D0D))
-                                                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                                    contentColor = if (isDark) Color.Black else Color.White
-                                )
-                            ) {
-                                Icon(
-                                    Icons.Default.ArrowUpward,
-                                    contentDescription = "Send",
-                                    tint = if (canSend) (if (isDark) Color.Black else Color.White) else MaterialTheme.colorScheme.surface,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                        ActionButtonState.MIC -> {
-                            IconButton(
-                                onClick = onVoiceInput,
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                            ) {
-                                Icon(
-                                    Icons.Default.Mic,
-                                    contentDescription = "Voice dictation",
-                                    tint = ClaudeTerracotta,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                }
                             }
                         }
                     }
