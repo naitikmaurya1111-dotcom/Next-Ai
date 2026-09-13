@@ -133,12 +133,21 @@ fun ChatScreen(
     var showMoreMenu by remember { mutableStateOf(false) }
     val enabledMemoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val isTemporaryChat by viewModel.isTemporaryChat.collectAsState()
+    val currentCwd by viewModel.currentCwd.collectAsState()
+    val activeTasksCount by viewModel.activeTasksCount.collectAsState()
     val customInstructions by viewModel.customInstructions.collectAsState()
+    val personalization by viewModel.personalization.collectAsState()
+    val showFollowupSuggestions by viewModel.showFollowupSuggestions.collectAsState()
+    val showStreamingCursor by viewModel.showStreamingCursor.collectAsState()
+    val compactMessageDensity by viewModel.compactMessageDensity.collectAsState()
+    val showMemoryActivityBadges by viewModel.showMemoryActivityBadges.collectAsState()
     val replyToMessage by viewModel.replyToMessage.collectAsState()
     val sessionFiles by viewModel.sessionFiles.collectAsState()
     var showArtifactsSheet by remember { mutableStateOf(false) }
     var speakingMessageId by remember { mutableStateOf<String?>(null) }
     var tts: TextToSpeech? by remember { mutableStateOf(null) }
+    var editingMessage by remember { mutableStateOf<Message?>(null) }
+    var editingMessageText by remember { mutableStateOf("") }
 
     val listState = rememberLazyListState()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -300,11 +309,28 @@ fun ChatScreen(
         }
     }
 
-    // Smooth auto-scroll when a new message is appended
+    var unreadNewMessagesCount by remember { mutableStateOf(0) }
+    var previousMessagesCount by remember { mutableStateOf(displayedMessages.size) }
+
+    LaunchedEffect(isScrolledToBottom) {
+        if (isScrolledToBottom) {
+            unreadNewMessagesCount = 0
+        }
+    }
+
+    // Smart auto-scroll: only scrolls to bottom if user was already at bottom, otherwise badges new messages
     LaunchedEffect(displayedMessages.size) {
+        val countDiff = displayedMessages.size - previousMessagesCount
+        previousMessagesCount = displayedMessages.size
+
         if (displayedMessages.isNotEmpty()) {
-            val count = listState.layoutInfo.totalItemsCount
-            listState.animateScrollToItem(if (count > 0) count - 1 else displayedMessages.size - 1)
+            if (isScrolledToBottom) {
+                val count = listState.layoutInfo.totalItemsCount
+                listState.animateScrollToItem(if (count > 0) count - 1 else displayedMessages.size - 1)
+                unreadNewMessagesCount = 0
+            } else if (countDiff > 0) {
+                unreadNewMessagesCount += countDiff
+            }
         }
     }
 
@@ -849,6 +875,70 @@ fun ChatScreen(
                             }
                         }
 
+                        // Terminal Workspace Environment Bar (AGY CLI Connection)
+                        AnimatedVisibility(
+                            visible = connectionState == ConnectionState.CONNECTED && !isTemporaryChat,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Terminal,
+                                            contentDescription = "Workspace CWD",
+                                            tint = ChatGptEmerald,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = currentCwd,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (activeTasksCount > 0) {
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = ChatGptEmerald.copy(alpha = 0.15f)
+                                        ) {
+                                            Text(
+                                                text = "$activeTasksCount tasks",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                                color = ChatGptEmerald,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            text = "AGY Connected",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                                            color = ChatGptEmerald.copy(alpha = 0.9f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         // Expandable In-Chat Search Bar (Ctrl+F for mobile)
                         AnimatedVisibility(
                             visible = isInChatSearchOpen,
@@ -1280,6 +1370,10 @@ fun ChatScreen(
                             selectedModelName = selectedModel.name,
                             memoriesCount = enabledMemoriesCount,
                             hasCustomInstructions = customInstructions.isEnabled && (customInstructions.aboutUser.isNotBlank() || customInstructions.responsePreferences.isNotBlank()),
+                            userName = personalization.name,
+                            userOccupation = personalization.occupation,
+                            preferredCodeLang = personalization.codeLanguage,
+                            showMemoryBadge = showMemoryActivityBadges,
                             onOpenMemorySheet = { showMemorySheet = true },
                             onOpenCustomInstructions = { showCustomInstructionsSheet = true }
                         )
@@ -1290,7 +1384,7 @@ fun ChatScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(if (compactMessageDensity) 8.dp else 16.dp),
                         contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp)
                     ) {
                         items(displayedMessages, key = { it.id }) { msg ->
@@ -1305,6 +1399,9 @@ fun ChatScreen(
                                 isSpeaking = isSpeaking,
                                 isLastAssistant = isLastAssistant,
                                 isSearchMatch = isSearchMatch,
+                                showFollowupSuggestions = showFollowupSuggestions,
+                                showStreamingCursor = showStreamingCursor,
+                                showMemoryActivityBadges = showMemoryActivityBadges,
                                 onOpenMemory = { showMemorySheet = true },
                                 onTogglePin = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1323,8 +1420,8 @@ fun ChatScreen(
                                     viewModel.regenerateLastResponse()
                                 },
                                 onEditMessage = { text ->
-                                    inputText = text
-                                    Toast.makeText(context, "Editing prompt...", Toast.LENGTH_SHORT).show()
+                                    editingMessage = msg
+                                    editingMessageText = text
                                 },
                                 onDeleteMessage = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1346,6 +1443,12 @@ fun ChatScreen(
                                 },
                                 onSendSuggestion = { prompt ->
                                     viewModel.sendMessage(prompt)
+                                },
+                                onSwitchBranch = { branchGroupId, branchIndex ->
+                                    viewModel.switchMessageBranch(branchGroupId, branchIndex)
+                                },
+                                onContinueGenerating = {
+                                    viewModel.continueGenerating()
                                 }
                             )
                         }
@@ -1362,7 +1465,7 @@ fun ChatScreen(
                         }
                     }
 
-                    // Floating "Scroll to Bottom" button
+                    // Floating "Scroll to Bottom" button with unread count pill badge
                     AnimatedVisibility(
                         visible = showScrollToBottom,
                         enter = fadeIn() + scaleIn(),
@@ -1371,9 +1474,10 @@ fun ChatScreen(
                             .align(Alignment.BottomEnd)
                             .padding(end = 16.dp, bottom = 12.dp)
                     ) {
-                        FilledIconButton(
+                        Surface(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                unreadNewMessagesCount = 0
                                 scope.launch {
                                     val count = listState.layoutInfo.totalItemsCount
                                     if (count > 0) {
@@ -1381,19 +1485,33 @@ fun ChatScreen(
                                     }
                                 }
                             },
-                            modifier = Modifier
-                                .size(40.dp)
-                                .shadow(4.dp, CircleShape),
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = ClaudeTerracotta
-                            )
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surface,
+                            shadowElevation = 6.dp,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                         ) {
-                            Icon(
-                                Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Scroll to bottom",
-                                modifier = Modifier.size(22.dp)
-                            )
+                            Row(
+                                modifier = Modifier.padding(
+                                    horizontal = if (unreadNewMessagesCount > 0) 14.dp else 10.dp,
+                                    vertical = 9.dp
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Scroll to bottom",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = ClaudeTerracotta
+                                )
+                                if (unreadNewMessagesCount > 0) {
+                                    Text(
+                                        text = "$unreadNewMessagesCount new message${if (unreadNewMessagesCount > 1) "s" else ""}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 12.sp),
+                                        color = ClaudeTerracotta
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -1430,6 +1548,13 @@ fun ChatScreen(
                             onDelete = { id ->
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.deleteConversation(id)
+                            },
+                            onPin = { id ->
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.toggleConversationPinned(id)
+                            },
+                            onRename = { id, newTitle ->
+                                viewModel.renameConversation(id, newTitle)
                             },
                             onOpenSettings = onNavigateToSettings,
                             onOpenMemory = { showMemorySheet = true },
@@ -1472,6 +1597,13 @@ fun ChatScreen(
                     onDelete = { id ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         viewModel.deleteConversation(id)
+                    },
+                    onPin = { id ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.toggleConversationPinned(id)
+                    },
+                    onRename = { id, newTitle ->
+                        viewModel.renameConversation(id, newTitle)
                     },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
@@ -1717,6 +1849,69 @@ fun ChatScreen(
         )
     }
 
+    if (editingMessage != null) {
+        AlertDialog(
+            onDismissRequest = { editingMessage = null },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = null,
+                        tint = ClaudeTerracotta,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Edit Message",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Editing this turn will branch the conversation and regenerate the AI response from this point onward.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = editingMessageText,
+                        onValueChange = { editingMessageText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 120.dp, max = 220.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        placeholder = { Text("Edit prompt...") }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val target = editingMessage
+                        val text = editingMessageText.trim()
+                        editingMessage = null
+                        if (target != null && text.isNotBlank()) {
+                            viewModel.editAndResendMessage(target.id, text)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Save & Submit")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { editingMessage = null }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     val activeFileViewer by viewModel.activeFileViewer.collectAsState()
     if (activeFileViewer != null) {
         val fileData = activeFileViewer!!
@@ -1858,6 +2053,9 @@ fun MessageItem(
     isSpeaking: Boolean = false,
     isLastAssistant: Boolean = false,
     isSearchMatch: Boolean = false,
+    showFollowupSuggestions: Boolean = true,
+    showStreamingCursor: Boolean = true,
+    showMemoryActivityBadges: Boolean = true,
     onToggleThinking: () -> Unit,
     onToggleTools: () -> Unit = {},
     onRetry: () -> Unit = {},
@@ -1869,7 +2067,9 @@ fun MessageItem(
     onOpenMemory: () -> Unit = {},
     onOpenFile: (String) -> Unit = {},
     onReply: () -> Unit = {},
-    onSendSuggestion: (String) -> Unit = {}
+    onSendSuggestion: (String) -> Unit = {},
+    onSwitchBranch: (String, Int) -> Unit = { _, _ -> },
+    onContinueGenerating: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -2061,6 +2261,64 @@ fun MessageItem(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    // Branch Navigation: < 1 / 2 >
+                    if (message.totalBranches > 1) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                            border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.padding(end = 4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(1.dp),
+                                modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                            ) {
+                                IconButton(
+                                    onClick = {
+                                        if (message.branchIndex > 0) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSwitchBranch(message.parentMessageId ?: message.id, message.branchIndex - 1)
+                                        }
+                                    },
+                                    enabled = message.branchIndex > 0,
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.ChevronLeft,
+                                        contentDescription = "Previous edit",
+                                        modifier = Modifier.size(14.dp),
+                                        tint = if (message.branchIndex > 0) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                    )
+                                }
+
+                                Text(
+                                    text = "${message.branchIndex + 1}/${message.totalBranches}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                IconButton(
+                                    onClick = {
+                                        if (message.branchIndex < message.totalBranches - 1) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onSwitchBranch(message.parentMessageId ?: message.id, message.branchIndex + 1)
+                                        }
+                                    },
+                                    enabled = message.branchIndex < message.totalBranches - 1,
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.ChevronRight,
+                                        contentDescription = "Next edit",
+                                        modifier = Modifier.size(14.dp),
+                                        tint = if (message.branchIndex < message.totalBranches - 1) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Text(
                         text = formatMessageTime(message.timestamp),
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
@@ -2296,7 +2554,7 @@ fun MessageItem(
                     }
 
                     // Autonomous Memory Update Banner (ChatGPT Style)
-                    if (message.memoryUpdates.isNotEmpty()) {
+                    if (showMemoryActivityBadges && message.memoryUpdates.isNotEmpty()) {
                         Column(
                             modifier = Modifier.padding(bottom = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -2333,11 +2591,12 @@ fun MessageItem(
                         }
                     }
 
-                    // 3. Main Message Markdown Content with streaming cursor (Borderless Canvas Flow)
+                    // 3. Main Message Markdown Content with inline streaming cursor (Borderless Canvas Flow)
                     if (message.content.isNotBlank()) {
                         SelectionContainer {
                             MarkdownContent(
                                 text = message.content,
+                                isStreaming = showStreamingCursor && message.isStreaming,
                                 onLinkClick = onOpenFile
                             )
                         }
@@ -2349,18 +2608,21 @@ fun MessageItem(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(vertical = 6.dp)
                         ) {
-                            StreamingCursorBlink()
+                            if (showStreamingCursor) {
+                                StreamingCursorBlink()
+                            } else {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 1.5.dp,
+                                    color = ClaudeTerracotta
+                                )
+                            }
                             Spacer(Modifier.width(8.dp))
                             Text(
                                 text = "Thinking…",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                             )
-                        }
-                    } else if (message.isStreaming && message.content.isNotBlank()) {
-                        // Trailing cursor during active streaming
-                        Box(modifier = Modifier.padding(top = 4.dp)) {
-                            StreamingCursorBlink()
                         }
                     }
 
@@ -2502,6 +2764,97 @@ fun MessageItem(
                             }
                             Spacer(Modifier.width(2.dp))
 
+                            // Assistant Branch Navigator: < 1 / 2 >
+                            if (message.totalBranches > 1) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(1.dp),
+                                        modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                                    ) {
+                                        IconButton(
+                                            onClick = {
+                                                if (message.branchIndex > 0) {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    onSwitchBranch(message.parentMessageId ?: message.id, message.branchIndex - 1)
+                                                }
+                                            },
+                                            enabled = message.branchIndex > 0,
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.ChevronLeft,
+                                                contentDescription = "Previous response",
+                                                modifier = Modifier.size(14.dp),
+                                                tint = if (message.branchIndex > 0) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                            )
+                                        }
+
+                                        Text(
+                                            text = "${message.branchIndex + 1}/${message.totalBranches}",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        IconButton(
+                                            onClick = {
+                                                if (message.branchIndex < message.totalBranches - 1) {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    onSwitchBranch(message.parentMessageId ?: message.id, message.branchIndex + 1)
+                                                }
+                                            },
+                                            enabled = message.branchIndex < message.totalBranches - 1,
+                                            modifier = Modifier.size(20.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.ChevronRight,
+                                                contentDescription = "Next response",
+                                                modifier = Modifier.size(14.dp),
+                                                tint = if (message.branchIndex < message.totalBranches - 1) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                            )
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.width(2.dp))
+                            }
+
+                            // Continue generating button
+                            if (isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
+                                Surface(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onContinueGenerating()
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                                    border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "Continue generating",
+                                            modifier = Modifier.size(13.dp),
+                                            tint = ClaudeTerracotta
+                                        )
+                                        Text(
+                                            text = "Continue",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.width(4.dp))
+                            }
+
                             // Regenerate / Retry (if last assistant response)
                             if (isLastAssistant) {
                                 IconButton(
@@ -2550,17 +2903,36 @@ fun MessageItem(
                         }
 
                         // 5. Contextual Quick Follow-Up Suggestion Chips
-                        if (isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
+                        if (showFollowupSuggestions && isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
                             val suggestions = remember(message.content) {
                                 val list = mutableListOf<Pair<String, String>>()
                                 val cLower = message.content.lowercase()
-                                if (cLower.contains("formula") || cLower.contains("```") || cLower.contains("1.") || cLower.contains("step") || message.content.length > 200) {
-                                    list.add("📄 Make a file of this" to "Please create a formatted file of this complete content using the write_to_file tool.")
+                                val hasCode = cLower.contains("```")
+                                val hasError = cLower.contains("error") || cLower.contains("exception") || cLower.contains("failed") || cLower.contains("fatal")
+                                val isExplanation = cLower.contains("because") || cLower.contains("means") || cLower.contains("concept") || cLower.contains("overview")
+                                val hasSteps = cLower.contains("1.") || cLower.contains("step 1") || cLower.contains("first,")
+
+                                if (hasCode) {
+                                    list.add("🐞 Check for bugs" to "Review the code above for potential edge cases, security issues, or bugs.")
+                                    list.add("⚡ Optimize" to "How can this code be optimized for maximum speed and memory efficiency?")
+                                    list.add("🧪 Add tests" to "Write comprehensive unit tests with edge cases for this implementation.")
+                                    list.add("📄 Save to file" to "Please save this code to an appropriate file using the write_to_file tool.")
+                                } else if (hasError) {
+                                    list.add("🔧 How to fix" to "What are the exact step-by-step instructions to fix this error?")
+                                    list.add("🔍 Root cause" to "Can you explain the deep root cause of why this error happens?")
+                                    list.add("🛡️ Prevent this" to "How can we prevent this issue from happening again in the future?")
+                                } else if (hasSteps || isExplanation) {
+                                    list.add("🔍 Deep dive" to "Can you explain the technical internals in deeper detail?")
+                                    list.add("⚡ Key takeaways" to "Summarize the key takeaways and actionable points in bullet format.")
+                                    list.add("🧪 Concrete examples" to "Can you provide concrete practical examples illustrating this?")
+                                    list.add("📄 Document this" to "Please generate a formatted markdown documentation artifact summarizing this.")
+                                } else {
+                                    list.add("🔍 Explain in detail" to "Please explain this step-by-step in detail.")
+                                    list.add("⚡ Key takeaways" to "What are the key takeaways from this?")
+                                    list.add("🧪 Give examples" to "Can you provide concrete practical examples for this?")
+                                    list.add("📄 Save artifact" to "Please create a formatted artifact of this summary.")
                                 }
-                                list.add("🔍 Explain in detail" to "Please explain this step-by-step in detail.")
-                                list.add("⚡ Key takeaways" to "What are the key takeaways from this?")
-                                list.add("🧪 Give examples" to "Can you provide concrete practical examples for this?")
-                                list.take(3)
+                                list.take(4)
                             }
 
                             LazyRow(
@@ -3746,9 +4118,66 @@ fun EmptyChatGreeting(
     selectedModelName: String = "Next AI",
     memoriesCount: Int = 0,
     hasCustomInstructions: Boolean = false,
+    userName: String = "",
+    userOccupation: String = "",
+    preferredCodeLang: String = "",
+    showMemoryBadge: Boolean = true,
     onOpenMemorySheet: () -> Unit = {},
     onOpenCustomInstructions: () -> Unit = {}
 ) {
+    val greetingTitle = remember(userName) {
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val timeGreeting = when (hour) {
+            in 5..11 -> "Good morning"
+            in 12..16 -> "Good afternoon"
+            in 17..21 -> "Good evening"
+            else -> "Good night"
+        }
+        if (userName.isNotBlank()) "$timeGreeting, $userName 👋" else "What can I help with?"
+    }
+
+    val greetingSubtitle = remember(userOccupation) {
+        if (userOccupation.isNotBlank()) "Ready to assist with your $userOccupation workflow"
+        else "Choose a prompt below or ask any question to get started"
+    }
+
+    val starterPrompts = remember(userOccupation, preferredCodeLang) {
+        val occLower = userOccupation.lowercase()
+        val langLower = preferredCodeLang.lowercase()
+        when {
+            occLower.contains("android") || occLower.contains("mobile") || langLower == "kotlin" -> listOf(
+                Triple("📱 Jetpack Compose Architecture", "Review state hoisting, recomposition & UI performance", "Analyze our Jetpack Compose UI architecture, state hoisting patterns, and recomposition performance"),
+                Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
+                Triple("🌐 Android & Kotlin Docs", "Search latest AndroidX releases and official guidance", "/browser search latest Android Jetpack libraries and Kotlin releases"),
+                Triple("🎯 Autonomous Test Suite", "Run agentic loop until unit & UI tests are created", "/goal write comprehensive unit tests with edge cases")
+            )
+            occLower.contains("data") || occLower.contains("ml") || occLower.contains("ai") || langLower == "python" -> listOf(
+                Triple("🐍 Python Pipeline Optimization", "Vectorize operations and profile memory usage", "Review Python data processing pipeline and suggest vectorized numpy/polars optimizations"),
+                Triple("📊 Model Evaluation & Benchmarks", "Design metrics framework with precision & recall", "Design an automated evaluation benchmark framework with comprehensive evaluation metrics"),
+                Triple("🌐 AI Research Papers", "Search latest open-weights LLMs and arxiv papers", "/browser search latest open-weights LLMs and benchmark comparisons"),
+                Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features")
+            )
+            occLower.contains("web") || occLower.contains("frontend") || occLower.contains("fullstack") || langLower == "typescript" || langLower == "javascript" -> listOf(
+                Triple("⚡ Web Performance Audit", "Audit SSR hydration, caching & bundle size", "Review frontend architecture, SSR hydration bottlenecks, and bundle size reduction"),
+                Triple("💻 Full-Stack API Design", "Design type-safe endpoints and resilient error handling", "/boost inspect API endpoints and design robust type-safe error handling"),
+                Triple("🌐 Modern Framework Docs", "Search latest React, Next.js or Vite features", "/browser search latest Next.js and React server component best practices"),
+                Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
+            )
+            occLower.contains("student") || occLower.contains("learner") -> listOf(
+                Triple("🎓 Socratic Concept Tutor", "Break down complex topics using intuitive analogies", "Explain distributed consensus and Raft algorithm using intuitive everyday analogies"),
+                Triple("💻 Step-by-Step Code Walkthrough", "Analyze algorithms with time and space complexity", "Walk through this algorithm step-by-step with Big-O time and space complexity"),
+                Triple("🌐 Learning Resources & Guides", "Find top-rated tutorials and documentation", "/browser search best practical guides and documentation for beginners"),
+                Triple("📋 Structured Study Roadmap", "Build a 4-week structured curriculum", "/plan create 4-week structured study roadmap")
+            )
+            else -> listOf(
+                Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
+                Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
+                Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
+                Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
+            )
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -3766,7 +4195,7 @@ fun EmptyChatGreeting(
         Spacer(Modifier.height(16.dp))
 
         Text(
-            text = "What can I help with?",
+            text = greetingTitle,
             style = MaterialTheme.typography.headlineMedium.copy(
                 fontWeight = FontWeight.SemiBold,
                 letterSpacing = (-0.5).sp,
@@ -3775,7 +4204,15 @@ fun EmptyChatGreeting(
             color = MaterialTheme.colorScheme.onBackground
         )
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
+
+        Text(
+            text = greetingSubtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+        )
+
+        Spacer(Modifier.height(12.dp))
 
         // Context Status Badges (Model, Memories, Custom Instructions)
         Row(
@@ -3806,7 +4243,7 @@ fun EmptyChatGreeting(
                 }
             }
 
-            if (memoriesCount > 0) {
+            if (showMemoryBadge && memoriesCount > 0) {
                 Surface(
                     onClick = onOpenMemorySheet,
                     shape = RoundedCornerShape(12.dp),
@@ -3850,13 +4287,6 @@ fun EmptyChatGreeting(
         Spacer(Modifier.height(28.dp))
 
         val isTablet = LocalConfiguration.current.screenWidthDp >= 600
-
-        val starterPrompts = listOf(
-            Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
-            Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
-            Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
-            Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
-        )
 
         if (isTablet) {
             // Modern 2x2 Action Starter Grid for Tablets
@@ -3960,6 +4390,7 @@ fun EmptyChatGreeting(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HistoryDrawerContent(
     conversations: List<ConversationEntity>,
@@ -3967,6 +4398,8 @@ fun HistoryDrawerContent(
     onSelectConversation: (String) -> Unit,
     onNewChat: () -> Unit,
     onDelete: (String) -> Unit,
+    onPin: (String) -> Unit = {},
+    onRename: (String, String) -> Unit = { _, _ -> },
     onOpenSettings: () -> Unit,
     onOpenMemory: () -> Unit = {},
     onOpenCustomInstructions: () -> Unit = {}
@@ -3978,7 +4411,7 @@ fun HistoryDrawerContent(
     }
 
     ModalDrawerSheet(
-        modifier = Modifier.width(310.dp),
+        modifier = Modifier.width(320.dp),
         drawerContainerColor = MaterialTheme.colorScheme.surface
     ) {
         Column(
@@ -3997,6 +4430,17 @@ fun HistoryDrawerContent(
                     fontWeight = FontWeight.Bold,
                     letterSpacing = (-0.3).sp
                 )
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                ) {
+                    Text(
+                        text = "${conversations.size}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -4061,14 +4505,25 @@ fun HistoryDrawerContent(
 
             Spacer(Modifier.height(12.dp))
 
-            // Group conversations by date (ChatGPT 5-tier grouping)
+            // Date grouping (Pinned, Today, Yesterday, Previous 7 Days, Previous 30 Days, Older)
             val now = System.currentTimeMillis()
-            val todayStart = now - (now % 86_400_000)
-            val yesterdayStart = todayStart - 86_400_000
-            val sevenDaysAgo = todayStart - (7 * 86_400_000)
-            val thirtyDaysAgo = todayStart - (30 * 86_400_000)
+            val cal = remember(now) {
+                Calendar.getInstance().apply {
+                    set(Calendar.HOUR_OF_DAY, 0)
+                    set(Calendar.MINUTE, 0)
+                    set(Calendar.SECOND, 0)
+                    set(Calendar.MILLISECOND, 0)
+                }
+            }
+            val todayStart = cal.timeInMillis
+            val yesterdayStart = todayStart - 86_400_000L
+            val sevenDaysAgo = todayStart - (7 * 86_400_000L)
+            val thirtyDaysAgo = todayStart - (30 * 86_400_000L)
 
-            val grouped = filteredConversations.groupBy { conv ->
+            val pinnedList = filteredConversations.filter { it.isPinned }
+            val unpinnedList = filteredConversations.filter { !it.isPinned }
+
+            val grouped = unpinnedList.groupBy { conv ->
                 when {
                     conv.updatedAt >= todayStart -> "Today"
                     conv.updatedAt >= yesterdayStart -> "Yesterday"
@@ -4077,80 +4532,256 @@ fun HistoryDrawerContent(
                     else -> "Older"
                 }
             }
-            val groupOrder = listOf("Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older")
 
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                groupOrder.forEach { groupName ->
-                    val groupConvs = grouped[groupName] ?: return@forEach
-                    item(key = "header_$groupName") {
-                        Text(
-                            text = groupName,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.8.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp)
-                        )
-                    }
-                    items(groupConvs, key = { it.id }) { conv ->
-                        val isActive = conv.id == activeId
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(
-                                    if (isActive) ClaudeTerracotta.copy(alpha = 0.12f)
-                                    else Color.Transparent
-                                )
-                                .clickable { onSelectConversation(conv.id) }
-                                .padding(horizontal = 10.dp, vertical = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                if (pinnedList.isNotEmpty()) {
+                    stickyHeader(key = "header_pinned") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(if (isActive) 8.dp else 6.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (isActive) ClaudeTerracotta
-                                        else MaterialTheme.colorScheme.outlineVariant
-                                    )
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = conv.title.ifBlank { "Untitled Chat" },
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = formatRelativeTime(conv.updatedAt),
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                            IconButton(
-                                onClick = { onDelete(conv.id) },
-                                modifier = Modifier.size(24.dp)
+                            Row(
+                                modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Delete",
-                                    modifier = Modifier.size(12.dp),
-                                    tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "PINNED",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.8.sp
+                                    ),
+                                    color = Color(0xFFFFB300)
                                 )
                             }
                         }
                     }
+                    items(pinnedList, key = { it.id }) { conv ->
+                        ConversationDrawerItem(
+                            conv = conv,
+                            isActive = conv.id == activeId,
+                            onClick = { onSelectConversation(conv.id) },
+                            onPin = { onPin(conv.id) },
+                            onRename = { newTitle -> onRename(conv.id, newTitle) },
+                            onDelete = { onDelete(conv.id) }
+                        )
+                    }
+                }
+
+                val groupOrder = listOf("Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older")
+                groupOrder.forEach { groupName ->
+                    val groupConvs = grouped[groupName] ?: return@forEach
+                    stickyHeader(key = "header_$groupName") {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surface
+                        ) {
+                            Text(
+                                text = groupName.uppercase(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.8.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
+                    items(groupConvs, key = { it.id }) { conv ->
+                        ConversationDrawerItem(
+                            conv = conv,
+                            isActive = conv.id == activeId,
+                            onClick = { onSelectConversation(conv.id) },
+                            onPin = { onPin(conv.id) },
+                            onRename = { newTitle -> onRename(conv.id, newTitle) },
+                            onDelete = { onDelete(conv.id) }
+                        )
+                    }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun ConversationDrawerItem(
+    conv: ConversationEntity,
+    isActive: Boolean,
+    onClick: () -> Unit,
+    onPin: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember(conv.title) { mutableStateOf(conv.title) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { showMenu = true }
+            ),
+        color = if (isActive) ClaudeTerracotta.copy(alpha = 0.12f) else Color.Transparent
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (conv.isPinned) {
+                Icon(
+                    Icons.Default.PushPin,
+                    contentDescription = "Pinned",
+                    tint = Color(0xFFFFB300),
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(if (isActive) 8.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isActive) ClaudeTerracotta
+                            else MaterialTheme.colorScheme.outlineVariant
+                        )
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = conv.title.ifBlank { "Untitled Chat" },
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = if (isActive) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                )
+                val subtitle = if (conv.messageCount > 0) {
+                    "${conv.messageCount} msgs • ${formatRelativeTime(conv.updatedAt)}"
+                } else {
+                    formatRelativeTime(conv.updatedAt)
+                }
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Box {
+                IconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Options",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(if (conv.isPinned) "Unpin" else "Pin to top") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = null,
+                                tint = if (conv.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onPin()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = {
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        onClick = {
+                            showMenu = false
+                            showRenameDialog = true
+                        }
+                    )
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.DeleteOutline,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Rename Chat") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    label = { Text("Title") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimmed = renameText.trim()
+                        if (trimmed.isNotBlank()) {
+                            onRename(trimmed)
+                        }
+                        showRenameDialog = false
+                    }
+                ) {
+                    Text("Save", color = ClaudeTerracotta)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
 
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = 10.dp),
@@ -4767,13 +5398,33 @@ fun FileViewerBottomSheet(
                             val kb = fileData.content.toByteArray(Charsets.UTF_8).size / 1024.0
                             String.format(java.util.Locale.US, "%.1f KB", kb)
                         } else ""
-                        Text(
-                            text = listOfNotNull(sizeStr.takeIf { it.isNotBlank() }, fileData.path.takeIf { it.isNotBlank() }).joinToString(" • "),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (fileData.isOfflineCached) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color(0xFF10A37F).copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        text = "💾 OFFLINE READY",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 9.sp
+                                        ),
+                                        color = Color(0xFF10A37F),
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = listOfNotNull(sizeStr.takeIf { it.isNotBlank() }, fileData.path.takeIf { it.isNotBlank() }).joinToString(" • "),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
 

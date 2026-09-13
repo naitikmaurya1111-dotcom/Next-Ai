@@ -309,6 +309,8 @@ async def websocket_endpoint(websocket: WebSocket):
             memories = []
             try:
                 payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    payload = {"message": raw}
                 # Handle stream cancellation request (Stop Generating)
                 if payload.get("type") == "cancel":
                     cancel_id = payload.get("conversation_id", "") or current_conv_id or ""
@@ -415,6 +417,14 @@ async def websocket_endpoint(websocket: WebSocket):
                             "status": "error",
                             "message": f"File not found on server: {req_path}"
                         }), websocket)
+                    continue
+
+                # Handle message feedback telemetry
+                if payload.get("action") == "message_feedback" or payload.get("type") == "message_feedback":
+                    msg_id = payload.get("message_id", "")
+                    fb_type = payload.get("feedback", "neutral")
+                    conv_id = payload.get("conversation_id", "")
+                    logger.info(f"Message feedback received: message_id={msg_id}, conv_id={conv_id}, feedback={fb_type}")
                     continue
 
                 user_message = payload.get("message", raw)

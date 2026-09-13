@@ -49,7 +49,7 @@ class GoogleDriveManager @Inject constructor(
      * ensuring user data is never lost during an APK upgrade.
      */
     private fun checkAndCreatePreUpdateBackup() {
-        val currentVersionCode = 3
+        val currentVersionCode = 9
         val savedVersionCode = prefs.getInt("app_version_code", -1)
 
         if (savedVersionCode != -1 && savedVersionCode < currentVersionCode) {
@@ -84,6 +84,12 @@ class GoogleDriveManager @Inject constructor(
                 put("title", conv.title)
                 put("createdAt", conv.createdAt)
                 put("updatedAt", conv.updatedAt)
+                put("modelId", conv.modelId ?: JSONObject.NULL)
+                put("isPinned", conv.isPinned)
+                put("messageCount", conv.messageCount)
+                put("customTitle", conv.customTitle)
+                put("lastKnownCwd", conv.lastKnownCwd)
+                put("agySessionId", conv.agySessionId ?: JSONObject.NULL)
             }
             convArray.put(convObj)
         }
@@ -105,6 +111,14 @@ class GoogleDriveManager @Inject constructor(
                 put("attachmentsJson", msg.attachmentsJson ?: JSONObject.NULL)
                 put("feedback", msg.feedback ?: JSONObject.NULL)
                 put("isPinned", msg.isPinned)
+                put("thinking", msg.thinking ?: JSONObject.NULL)
+                put("toolExecutionsJson", msg.toolExecutionsJson ?: JSONObject.NULL)
+                put("modelName", msg.modelName ?: JSONObject.NULL)
+                put("replyToContent", msg.replyToContent ?: JSONObject.NULL)
+                put("replyToRole", msg.replyToRole ?: JSONObject.NULL)
+                put("memoryUpdatesJson", msg.memoryUpdatesJson ?: JSONObject.NULL)
+                put("parentMessageId", msg.parentMessageId ?: JSONObject.NULL)
+                put("branchIndex", msg.branchIndex)
             }
             msgArray.put(msgObj)
         }
@@ -196,7 +210,13 @@ class GoogleDriveManager @Inject constructor(
                             id = obj.getString("id"),
                             title = obj.getString("title"),
                             createdAt = obj.optLong("createdAt", System.currentTimeMillis()),
-                            updatedAt = obj.optLong("updatedAt", System.currentTimeMillis())
+                            updatedAt = obj.optLong("updatedAt", System.currentTimeMillis()),
+                            modelId = if (obj.isNull("modelId") || !obj.has("modelId")) null else obj.optString("modelId").takeIf { it.isNotBlank() && it != "null" },
+                            isPinned = obj.optBoolean("isPinned", false) || obj.optInt("isPinned", 0) == 1,
+                            messageCount = obj.optInt("messageCount", 0),
+                            customTitle = obj.optBoolean("customTitle", false) || obj.optInt("customTitle", 0) == 1,
+                            lastKnownCwd = if (obj.has("lastKnownCwd") && !obj.isNull("lastKnownCwd")) obj.optString("lastKnownCwd", "/content").ifBlank { "/content" } else "/content",
+                            agySessionId = if (obj.isNull("agySessionId") || !obj.has("agySessionId")) null else obj.optString("agySessionId").takeIf { it.isNotBlank() && it != "null" }
                         )
                     )
                 }
@@ -220,12 +240,20 @@ class GoogleDriveManager @Inject constructor(
                             role = obj.getString("role"),
                             content = obj.getString("content"),
                             timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
-                            attachmentUri = if (obj.isNull("attachmentUri")) null else obj.optString("attachmentUri"),
-                            attachmentName = if (obj.isNull("attachmentName")) null else obj.optString("attachmentName"),
+                            attachmentUri = if (obj.isNull("attachmentUri") || !obj.has("attachmentUri")) null else obj.optString("attachmentUri").takeIf { it.isNotBlank() && it != "null" },
+                            attachmentName = if (obj.isNull("attachmentName") || !obj.has("attachmentName")) null else obj.optString("attachmentName").takeIf { it.isNotBlank() && it != "null" },
                             attachmentIsImage = obj.optBoolean("attachmentIsImage", false),
-                            attachmentsJson = if (obj.isNull("attachmentsJson")) null else obj.optString("attachmentsJson"),
-                            feedback = if (obj.isNull("feedback")) null else obj.optString("feedback"),
-                            isPinned = obj.optBoolean("isPinned", false)
+                            attachmentsJson = if (obj.isNull("attachmentsJson") || !obj.has("attachmentsJson")) null else obj.optString("attachmentsJson").takeIf { it.isNotBlank() && it != "null" },
+                            feedback = if (obj.isNull("feedback") || !obj.has("feedback")) null else obj.optString("feedback").takeIf { it.isNotBlank() && it != "null" },
+                            isPinned = obj.optBoolean("isPinned", false) || obj.optInt("isPinned", 0) == 1,
+                            thinking = if (obj.isNull("thinking") || !obj.has("thinking")) null else obj.optString("thinking").takeIf { it.isNotBlank() && it != "null" },
+                            toolExecutionsJson = if (obj.isNull("toolExecutionsJson") || !obj.has("toolExecutionsJson")) null else obj.optString("toolExecutionsJson").takeIf { it.isNotBlank() && it != "null" },
+                            modelName = if (obj.isNull("modelName") || !obj.has("modelName")) null else obj.optString("modelName").takeIf { it.isNotBlank() && it != "null" },
+                            replyToContent = if (obj.isNull("replyToContent") || !obj.has("replyToContent")) null else obj.optString("replyToContent").takeIf { it.isNotBlank() && it != "null" },
+                            replyToRole = if (obj.isNull("replyToRole") || !obj.has("replyToRole")) null else obj.optString("replyToRole").takeIf { it.isNotBlank() && it != "null" },
+                            memoryUpdatesJson = if (obj.isNull("memoryUpdatesJson") || !obj.has("memoryUpdatesJson")) null else obj.optString("memoryUpdatesJson").takeIf { it.isNotBlank() && it != "null" },
+                            parentMessageId = if (obj.isNull("parentMessageId") || !obj.has("parentMessageId")) null else obj.optString("parentMessageId").takeIf { it.isNotBlank() && it != "null" },
+                            branchIndex = obj.optInt("branchIndex", 0)
                         )
                     )
                 }

@@ -8,7 +8,13 @@ data class ConversationEntity(
     @PrimaryKey val id: String,
     val title: String,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val modelId: String? = null,
+    val isPinned: Boolean = false,
+    val messageCount: Int = 0,
+    val customTitle: Boolean = false,
+    val lastKnownCwd: String = "/content",
+    val agySessionId: String? = null
 )
 
 @Entity(tableName = "messages")
@@ -23,7 +29,15 @@ data class MessageEntity(
     val attachmentIsImage: Boolean = false,
     val attachmentsJson: String? = null,
     val feedback: String? = null,
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    val thinking: String? = null,
+    val toolExecutionsJson: String? = null,
+    val modelName: String? = null,
+    val replyToContent: String? = null,
+    val replyToRole: String? = null,
+    val memoryUpdatesJson: String? = null,
+    val parentMessageId: String? = null,
+    val branchIndex: Int = 0
 )
 
 @Entity(tableName = "memories")

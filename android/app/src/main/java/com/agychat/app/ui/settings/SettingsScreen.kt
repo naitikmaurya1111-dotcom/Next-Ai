@@ -41,7 +41,10 @@ import com.agychat.app.domain.model.ThinkingLevel
 import com.agychat.app.ui.chat.ChatViewModel
 import com.agychat.app.ui.chat.ManageMemorySheet
 import com.agychat.app.ui.theme.ClaudeTerracotta
+import com.agychat.app.ui.theme.ThemeState
 import com.agychat.app.data.network.UrlSanitizer
+import android.os.Build
+import androidx.compose.foundation.BorderStroke
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +65,10 @@ fun SettingsScreen(
     val allMemories by chatViewModel.memories.collectAsState(initial = emptyList())
     val cloudSyncStatus by chatViewModel.cloudSyncStatus.collectAsState()
     val isSyncing by chatViewModel.isSyncing.collectAsState()
+    val showFollowupSuggestions by chatViewModel.showFollowupSuggestions.collectAsState()
+    val showStreamingCursor by chatViewModel.showStreamingCursor.collectAsState()
+    val compactMessageDensity by chatViewModel.compactMessageDensity.collectAsState()
+    val showMemoryActivityBadges by chatViewModel.showMemoryActivityBadges.collectAsState()
     var showRestoreConfirmDialog by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
@@ -452,7 +459,231 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 3: Personalization & Memory (ChatGPT Style) ───────
+            // ── Section 3: Appearance & Theme ─────────────────────────────
+            SettingsCard(
+                title = "Appearance & Theme",
+                icon = Icons.Default.Palette
+            ) {
+                Text(
+                    text = "Choose how Next AI looks on your device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                // Theme Mode Selector: System / Light / Dark
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val currentMode = ThemeState.themeMode
+                    val modes = listOf(
+                        Triple("system", "System", Icons.Default.BrightnessAuto),
+                        Triple("light", "Light", Icons.Default.LightMode),
+                        Triple("dark", "Dark", Icons.Default.DarkMode)
+                    )
+
+                    modes.forEach { (modeKey, label, icon) ->
+                        val isSelected = currentMode == modeKey
+                        Surface(
+                            onClick = {
+                                ThemeState.setTheme(context, modeKey)
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            border = BorderStroke(
+                                width = if (isSelected) 1.5.dp else 0.6.dp,
+                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(vertical = 12.dp),
+                                horizontalAlignment = Alignment.CenterVertically,
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = label,
+                                    tint = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    ),
+                                    color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    Spacer(Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Material You Dynamic Colors",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Harmonize app colors with your device wallpaper",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = ThemeState.dynamicColor,
+                            onCheckedChange = { ThemeState.setDynamicColor(context, it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = ClaudeTerracotta
+                            )
+                        )
+                    }
+                }
+            }
+
+            // ── Section 4: Chat Experience & Interaction ──────────────────
+            SettingsCard(
+                title = "Chat Experience & Interaction",
+                icon = Icons.Default.Tune,
+                badge = if (compactMessageDensity) "COMPACT" to ClaudeTerracotta else "COMFORTABLE" to MaterialTheme.colorScheme.outline
+            ) {
+                Text(
+                    text = "Customize message rendering, streaming animation, smart follow-up suggestions, and layout density.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(Modifier.height(14.dp))
+
+                // Follow-up suggestions toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Domain Follow-Up Suggestions",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "Context-aware quick action chips (bugs, tests, explanations) after assistant responses",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = showFollowupSuggestions,
+                        onCheckedChange = { chatViewModel.setShowFollowupSuggestions(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Streaming cursor toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Pulsating Streaming Cursor",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "ChatGPT-style inline blinking cursor ( ▍) while text is actively streaming",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = showStreamingCursor,
+                        onCheckedChange = { chatViewModel.setShowStreamingCursor(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Memory activity badges toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Memory Activity Badges",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "Display visual indicators when memories are updated or referenced in responses",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = showMemoryActivityBadges,
+                        onCheckedChange = { chatViewModel.setShowMemoryActivityBadges(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Message Density: Comfortable vs Compact
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Compact Message Density",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (compactMessageDensity) "Compact spacing (8.dp) to see more conversation content" else "Comfortable spacing (16.dp) with relaxed layout",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = compactMessageDensity,
+                        onCheckedChange = { chatViewModel.setCompactMessageDensity(it) },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+            }
+
+            // ── Section 5: Personalization & Memory (ChatGPT Style) ───────
             SettingsCard(
                 title = "Personalization & Memory",
                 icon = Icons.Default.Psychology,
@@ -602,7 +833,7 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 4: Google Drive & Cloud Backup ─────────────────────
+            // ── Section 6: Google Drive & Cloud Backup ─────────────────────
             SettingsCard(
                 title = "Google Drive Sync & Cloud Backup",
                 icon = Icons.Default.CloudSync,
@@ -768,7 +999,7 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Section 5: About & System ─────────────────────────────────
+            // ── Section 7: About & System ─────────────────────────────────
             SettingsCard(
                 title = "About Next AI",
                 icon = Icons.Default.Info

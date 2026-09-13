@@ -9,6 +9,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -347,6 +348,7 @@ fun MarkdownContent(
     text: String,
     modifier: Modifier = Modifier,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
+    isStreaming: Boolean = false,
     onLinkClick: ((String) -> Unit)? = null
 ) {
     val cleanText = remember(text) { sanitizeMarkdownInput(text) }
@@ -356,16 +358,34 @@ fun MarkdownContent(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        for (section in sections) {
+        sections.forEachIndexed { index, section ->
+            val isLast = index == sections.lastIndex
+            val isTrailingStreaming = isStreaming && isLast
+
             when (section) {
                 is MarkdownBlock.MathEquation -> {
                     MathEquationBlockView(formula = section.formula, textColor = textColor)
+                    if (isTrailingStreaming) {
+                        Box(modifier = Modifier.padding(top = 2.dp)) {
+                            StreamingCursorBlink()
+                        }
+                    }
                 }
                 is MarkdownBlock.Code -> {
                     CodeBlockView(language = section.language, code = section.code)
+                    if (isTrailingStreaming) {
+                        Box(modifier = Modifier.padding(top = 2.dp)) {
+                            StreamingCursorBlink()
+                        }
+                    }
                 }
                 is MarkdownBlock.Table -> {
                     TableBlockView(headers = section.headers, rows = section.rows, onLinkClick = onLinkClick)
+                    if (isTrailingStreaming) {
+                        Box(modifier = Modifier.padding(top = 2.dp)) {
+                            StreamingCursorBlink()
+                        }
+                    }
                 }
                 is MarkdownBlock.Heading -> {
                     val style = when (section.level) {
@@ -393,6 +413,7 @@ fun MarkdownContent(
                         style = style,
                         color = textColor,
                         modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+                        showTrailingCursor = isTrailingStreaming,
                         onLinkClick = onLinkClick
                     )
                 }
@@ -433,6 +454,7 @@ fun MarkdownContent(
                                         text = calloutBody,
                                         style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
                                         color = textColor,
+                                        showTrailingCursor = isTrailingStreaming,
                                         onLinkClick = onLinkClick
                                     )
                                 }
@@ -461,6 +483,7 @@ fun MarkdownContent(
                                     lineHeight = 22.sp
                                 ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                showTrailingCursor = isTrailingStreaming,
                                 onLinkClick = onLinkClick
                             )
                         }
@@ -494,6 +517,7 @@ fun MarkdownContent(
                             style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 23.sp),
                             color = textColor,
                             modifier = Modifier.weight(1f),
+                            showTrailingCursor = isTrailingStreaming,
                             onLinkClick = onLinkClick
                         )
                     }
@@ -512,6 +536,7 @@ fun MarkdownContent(
                         text = section.text,
                         style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 24.sp),
                         color = textColor,
+                        showTrailingCursor = isTrailingStreaming,
                         onLinkClick = onLinkClick
                     )
                 }
@@ -1265,9 +1290,32 @@ fun FormattedMarkdownText(
     style: androidx.compose.ui.text.TextStyle,
     color: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier,
+    showTrailingCursor: Boolean = false,
     onLinkClick: ((String) -> Unit)? = null
 ) {
-    val annotatedString = buildFormattedInlineText(text, color)
+    val infiniteTransition = rememberInfiniteTransition(label = "inlineCursor")
+    val cursorAlpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 550, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "inlineCursorAlpha"
+    )
+
+    val baseAnnotatedString = buildFormattedInlineText(text, color)
+    val annotatedString = if (showTrailingCursor) {
+        buildAnnotatedString {
+            append(baseAnnotatedString)
+            withStyle(SpanStyle(color = ClaudeTerracotta.copy(alpha = cursorAlpha), fontWeight = FontWeight.Bold)) {
+                append(" ▍")
+            }
+        }
+    } else {
+        baseAnnotatedString
+    }
+
     val hasUrl = remember(annotatedString) {
         annotatedString.getStringAnnotations(tag = "URL", start = 0, end = annotatedString.length).isNotEmpty()
     }

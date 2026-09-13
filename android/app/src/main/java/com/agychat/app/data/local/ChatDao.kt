@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM conversations ORDER BY isPinned DESC, updatedAt DESC")
     fun getAllConversations(): Flow<List<ConversationEntity>>
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
@@ -35,13 +35,28 @@ interface ChatDao {
     @Query("UPDATE conversations SET title = :title, updatedAt = :updatedAt WHERE id = :conversationId")
     suspend fun updateConversationTitle(conversationId: String, title: String, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE conversations SET title = :title, updatedAt = :updatedAt WHERE id = :conversationId AND customTitle = 0")
+    suspend fun autoUpdateConversationTitle(conversationId: String, title: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE conversations SET title = :title, updatedAt = :updatedAt, customTitle = 1 WHERE id = :conversationId")
+    suspend fun manualRenameConversation(conversationId: String, title: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE conversations SET isPinned = :pinned WHERE id = :conversationId")
+    suspend fun updateConversationPinned(conversationId: String, pinned: Boolean)
+
+    @Query("UPDATE conversations SET messageCount = (SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId AND role != 'system') WHERE id = :conversationId")
+    suspend fun refreshMessageCount(conversationId: String)
+
+    @Query("UPDATE conversations SET lastKnownCwd = :cwd WHERE id = :conversationId")
+    suspend fun updateConversationCwd(conversationId: String, cwd: String)
+
     @Query("DELETE FROM conversations")
     suspend fun clearAllConversations()
 
     @Query("DELETE FROM messages")
     suspend fun clearAllMessages()
 
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM conversations ORDER BY isPinned DESC, updatedAt DESC")
     suspend fun getAllConversationsList(): List<ConversationEntity>
 
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
@@ -58,4 +73,19 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND isPinned = 1 ORDER BY timestamp ASC")
     fun getPinnedMessagesForConversation(conversationId: String): Flow<List<MessageEntity>>
+
+    @Query("UPDATE conversations SET modelId = :modelId WHERE id = :conversationId")
+    suspend fun updateConversationModel(conversationId: String, modelId: String)
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND timestamp > :timestamp")
+    suspend fun deleteMessagesAfter(conversationId: String, timestamp: Long)
+
+    @Query("SELECT * FROM conversations WHERE id = :conversationId LIMIT 1")
+    suspend fun getConversationById(conversationId: String): ConversationEntity?
+
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND parentMessageId = :parentId AND branchIndex = :branchIndex LIMIT 1")
+    suspend fun getMessageAtBranch(conversationId: String, parentId: String, branchIndex: Int): MessageEntity?
+
+    @Query("SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId AND parentMessageId = :parentId")
+    suspend fun getBranchCountForMessage(conversationId: String, parentId: String): Int
 }

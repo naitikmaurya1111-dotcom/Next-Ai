@@ -10,23 +10,32 @@ from typing import Dict
 
 logger = logging.getLogger(__name__)
 
-CONV_MAP_FILE = "/tmp/agy_conversation_map.json"
+PRIMARY_MAP_PATHS = [
+    "/content/drive/MyDrive/NextAI_Backup/conversation_map.json",
+    "/root/.gemini/antigravity-cli/conversation_map.json",
+    "/tmp/agy_conversation_map.json"
+]
 
 def _load_conversation_map() -> Dict[str, str]:
-    if os.path.exists(CONV_MAP_FILE):
-        try:
-            with open(CONV_MAP_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+    for p in PRIMARY_MAP_PATHS:
+        if os.path.exists(p):
+            try:
+                with open(p, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and data:
+                        return data
+            except Exception:
+                pass
     return {}
 
 def _save_conversation_map(m: Dict[str, str]):
-    try:
-        with open(CONV_MAP_FILE, "w") as f:
-            json.dump(m, f)
-    except Exception:
-        pass
+    for p in PRIMARY_MAP_PATHS:
+        try:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                json.dump(m, f, indent=2)
+        except Exception:
+            pass
 
 # Map Android client conversation IDs to agy conversation IDs
 conversation_map: Dict[str, str] = _load_conversation_map()
@@ -359,7 +368,11 @@ def format_prompt_with_personalization(
 
         persona_text = "<personalization>\n"
         if identity_block:
-            persona_text += "USER PROFILE:\n" + identity_block + "\n\n"
+            persona_text += (
+                "USER PROFILE (Silent Background Context):\n"
+                + identity_block + "\n"
+                "Note: Treat user profile details as background context. Never artificially recite them or force them into answers unless directly relevant.\n\n"
+            )
         persona_text += (
             "BEHAVIORAL DIRECTIVES — apply these to EVERY response without exception:\n"
             + "\n".join(f"  {i+1}. {d}" for i, d in enumerate(directives))
@@ -381,7 +394,7 @@ def format_prompt_with_personalization(
             pass
         instr_parts = []
         if about_user:
-            instr_parts.append(f"• User Profile & Background:\n  {about_user}")
+            instr_parts.append(f"• User Profile & Background (Implicit Context):\n  {about_user}")
         if response_prefs:
             instr_parts.append(f"• Response Preferences:\n  {response_prefs}")
         if tone_preset and tone_preset != "Default":
@@ -394,7 +407,7 @@ def format_prompt_with_personalization(
                 "</custom_instructions>"
             )
 
-    # ── 3. Categorized Persistent Memories (importance-sorted) ───────────────
+    # ── 3. Relevant Contextual Memories (ChatGPT Silent Context Standard) ─────
     if memories:
         try:
             backup_dir = "/content/drive/MyDrive/NextAI_Backup"
@@ -440,41 +453,38 @@ def format_prompt_with_personalization(
                 mem_lines.extend(f"  • {c}" for _, c in entries)
 
             sections.append(
-                "<user_memories>\n"
-                "What you know and remember about this user (persisted across all conversations):\n"
+                "<contextual_memory>\n"
+                "Retrieved relevant memories from previous interactions:\n"
                 + "\n".join(mem_lines) + "\n\n"
-                "CRITICAL: Always apply these memories when forming your response. If a memory "
-                "conflicts with something the user says NOW, prioritize their current statement "
-                "and treat it as an update to the old memory.\n"
-                "</user_memories>"
+                "SILENT CONTEXT INSTRUCTIONS (ChatGPT Standard):\n"
+                "1. Treat these memories as seamless, implicit background knowledge.\n"
+                "2. NEVER say 'Based on my memory', 'As I remember', 'According to past chats', or similar phrases.\n"
+                "3. If the user's prompt is a general question (e.g. math, syntax, concepts, general coding), do NOT inject or mention personal details.\n"
+                "4. If current conversation conflicts with past memories, trust the user's current statements over past memories.\n"
+                "</contextual_memory>"
             )
 
-    # ── 4. Autonomous Memory Directive ───────────────────────────────────────
+    # ── 4. Autonomous Memory Directive (Durable facts only) ───────────────────
     if is_auto_memory:
         cat_options = "facts|personal|prefs|project|goals|skills|feedback|general"
         sections.append(
             "<autonomous_memory>\n"
-            "You have ChatGPT-style persistent memory across all conversations.\n\n"
-            "RULES:\n"
-            "A) DIRECT QUERIES: If the user asks 'what do you remember about me?', "
-            "'what do you know?', or similar — summarize <user_memories> by category, "
-            "concisely and specifically. Do not be vague.\n\n"
-            "B) AUTO-EXTRACT when the user reveals:\n"
-            "   • Personal facts (name, age, role, location)\n"
-            "   • Technical preferences (language, framework, tools, conventions)\n"
-            "   • Project details (architecture, component names, patterns used)\n"
-            "   • Goals or milestones they are working toward\n"
-            "   • How they want the AI to behave\n"
-            "   • Anything they explicitly say to remember\n"
-            "   → Append ONE tag at the VERY END of your response (never mid-response):\n"
-            f'   <memory_update action="add" category="{cat_options}" fact="one concise atomic fact" />\n\n'
-            "C) CONFLICT RESOLUTION: If a new fact contradicts an existing memory "
-            "(e.g. switched from React to Vue, changed preferred language), emit the "
-            "update with the new fact so the old one is replaced.\n\n"
-            "D) FORGET: If the user says 'forget that', 'remove that memory', etc.:\n"
-            '   <memory_update action="delete" query="keywords of the memory to remove" />\n\n'
-            "E) PRIVACY: The <memory_update> tag is NEVER visible to the user. "
-            "It is stripped by the system before display. Never reference or show it.\n"
+            "You have ChatGPT-style persistent memory across conversations.\n\n"
+            "RULES FOR MEMORY CREATION:\n"
+            "A) DIRECT MEMORY INQUIRIES: If the user asks 'what do you remember about me?' or 'what do you know?', "
+            "summarize known memories concisely by topic without robotic tags.\n\n"
+            "B) DURABLE FACT EXTRACTION:\n"
+            "   • DO NOT record transient tasks, homework, one-off debug problems, temporary script writing, or math queries.\n"
+            "   • ONLY extract durable, long-term facts when the user explicitly reveals:\n"
+            "     - Permanent identity / role / location ('I am a mobile developer at ABC', 'My name is Alex')\n"
+            "     - Enduring technical stack / conventions ('I always use Jetpack Compose and Kotlin coroutines')\n"
+            "     - Explicit instruction ('Remember that I live in Toronto', 'Never suggest Java')\n"
+            "   • If a durable fact is learned, emit AT MOST ONE tag at the VERY END of your response:\n"
+            f'     <memory_update action="add" category="{cat_options}" fact="concise atomic enduring fact" />\n\n'
+            "C) FORGETTING:\n"
+            "   • If the user says 'forget that', 'clear my memory about X':\n"
+            '     <memory_update action="delete" query="keywords of memory to remove" />\n\n'
+            "D) PRIVACY: The <memory_update> tag is hidden from user display. Never discuss the tag itself.\n"
             "</autonomous_memory>"
         )
 
@@ -654,6 +664,7 @@ async def run_agy_command(
     logger.info(f"Executing: {' '.join(cmd_args[:6])} ... -p '{message_trimmed[:40]}'")
     yield _make_event("info", f"Starting {model_display}…")
 
+    process = None
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd_args,

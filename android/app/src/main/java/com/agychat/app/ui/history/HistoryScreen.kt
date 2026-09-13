@@ -213,27 +213,113 @@ fun HistoryScreen(
                     }
                 }
             } else {
+                val now = System.currentTimeMillis()
+                val cal = remember(now) {
+                    Calendar.getInstance().apply {
+                        set(Calendar.HOUR_OF_DAY, 0)
+                        set(Calendar.MINUTE, 0)
+                        set(Calendar.SECOND, 0)
+                        set(Calendar.MILLISECOND, 0)
+                    }
+                }
+                val todayStart = cal.timeInMillis
+                val yesterdayStart = todayStart - 86_400_000L
+                val sevenDaysAgo = todayStart - (7 * 86_400_000L)
+                val thirtyDaysAgo = todayStart - (30 * 86_400_000L)
+
+                val pinnedList = filteredConversations.filter { it.isPinned }
+                val unpinnedList = filteredConversations.filter { !it.isPinned }
+
+                val grouped = unpinnedList.groupBy { conv ->
+                    when {
+                        conv.updatedAt >= todayStart -> "Today"
+                        conv.updatedAt >= yesterdayStart -> "Yesterday"
+                        conv.updatedAt >= sevenDaysAgo -> "Previous 7 Days"
+                        conv.updatedAt >= thirtyDaysAgo -> "Previous 30 Days"
+                        else -> "Older"
+                    }
+                }
+                val groupOrder = listOf("Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older")
+
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(filteredConversations, key = { it.id }) { conv ->
-                        ConversationCard(
-                            conversation = conv,
-                            onClick = {
-                                chatViewModel.loadConversation(conv.id)
-                                onRestoreConversation(conv.id)
-                                onBack()
-                            },
-                            onRename = {
-                                renameText = conv.title
-                                conversationToRename = conv
-                            },
-                            onDelete = {
-                                conversationToDelete = conv
+                    if (pinnedList.isNotEmpty()) {
+                        item(key = "h_pinned") {
+                            Row(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "PINNED",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.8.sp
+                                    ),
+                                    color = Color(0xFFFFB300)
+                                )
                             }
-                        )
+                        }
+                        items(pinnedList, key = { it.id }) { conv ->
+                            ConversationCard(
+                                conversation = conv,
+                                onClick = {
+                                    chatViewModel.loadConversation(conv.id)
+                                    onRestoreConversation(conv.id)
+                                    onBack()
+                                },
+                                onPin = { chatViewModel.toggleConversationPinned(conv.id) },
+                                onRename = {
+                                    renameText = conv.title
+                                    conversationToRename = conv
+                                },
+                                onDelete = {
+                                    conversationToDelete = conv
+                                }
+                            )
+                        }
+                    }
+
+                    groupOrder.forEach { groupName ->
+                        val groupConvs = grouped[groupName] ?: return@forEach
+                        item(key = "h_$groupName") {
+                            Text(
+                                text = groupName.uppercase(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.8.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                        items(groupConvs, key = { it.id }) { conv ->
+                            ConversationCard(
+                                conversation = conv,
+                                onClick = {
+                                    chatViewModel.loadConversation(conv.id)
+                                    onRestoreConversation(conv.id)
+                                    onBack()
+                                },
+                                onPin = { chatViewModel.toggleConversationPinned(conv.id) },
+                                onRename = {
+                                    renameText = conv.title
+                                    conversationToRename = conv
+                                },
+                                onDelete = {
+                                    conversationToDelete = conv
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -246,6 +332,7 @@ fun HistoryScreen(
 fun ConversationCard(
     conversation: ConversationEntity,
     onClick: () -> Unit,
+    onPin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -255,11 +342,18 @@ fun ConversationCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .border(
+                1.dp,
+                if (conversation.isPinned) Color(0xFFFFB300).copy(alpha = 0.4f)
+                else MaterialTheme.colorScheme.outlineVariant,
+                RoundedCornerShape(14.dp)
+            )
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = if (conversation.isPinned)
+                Color(0xFFFFB300).copy(alpha = 0.04f)
+            else MaterialTheme.colorScheme.surface
         )
     ) {
         Row(
@@ -267,9 +361,9 @@ fun ConversationCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                Icons.Default.ChatBubbleOutline,
+                if (conversation.isPinned) Icons.Default.PushPin else Icons.Default.ChatBubbleOutline,
                 contentDescription = null,
-                tint = ClaudeTerracotta,
+                tint = if (conversation.isPinned) Color(0xFFFFB300) else ClaudeTerracotta,
                 modifier = Modifier.size(20.dp)
             )
 
@@ -282,12 +376,31 @@ fun ConversationCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val subtitle = if (conversation.messageCount > 0) {
+                    "${conversation.messageCount} msgs • ${dateFormat.format(Date(conversation.updatedAt))}"
+                } else {
+                    dateFormat.format(Date(conversation.updatedAt))
+                }
                 Text(
-                    text = dateFormat.format(Date(conversation.updatedAt)),
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
             }
+
+            IconButton(
+                onClick = onPin,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Default.PushPin,
+                    contentDescription = if (conversation.isPinned) "Unpin" else "Pin",
+                    tint = if (conversation.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+
+            Spacer(Modifier.width(2.dp))
 
             IconButton(
                 onClick = onRename,
@@ -301,7 +414,7 @@ fun ConversationCard(
                 )
             }
 
-            Spacer(Modifier.width(4.dp))
+            Spacer(Modifier.width(2.dp))
 
             IconButton(
                 onClick = onDelete,

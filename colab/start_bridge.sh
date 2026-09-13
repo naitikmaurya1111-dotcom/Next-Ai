@@ -6,6 +6,16 @@ fuser -k 8000/tcp 2>/dev/null || true
 pkill -f "cloudflared tunnel --url http://127.0.0.1:8000" 2>/dev/null || true
 pkill -f "drive_sync_manager.py daemon" 2>/dev/null || true
 
+# Ensure cloudflared is installed
+if ! command -v cloudflared &> /dev/null; then
+    echo "Downloading cloudflared..."
+    curl -sL --output /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+    chmod +x /usr/local/bin/cloudflared
+fi
+
+# Ensure reliable DNS resolution
+grep -q "8.8.8.8" /etc/resolv.conf 2>/dev/null || (echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /tmp/r.tmp && cat /etc/resolv.conf >> /tmp/r.tmp && cat /tmp/r.tmp > /etc/resolv.conf && rm -f /tmp/r.tmp 2>/dev/null) || true
+
 cd /content/Next-Ai/colab
 
 echo "Starting Next AI Auto-Backup Daemon (Google Drive sync every 5 min)..."

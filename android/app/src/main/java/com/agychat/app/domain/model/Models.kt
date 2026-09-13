@@ -45,7 +45,10 @@ data class Message(
     val isPinned: Boolean = false,
     val replyToContent: String? = null,
     val replyToRole: String? = null,
-    val modelName: String? = null
+    val modelName: String? = null,
+    val parentMessageId: String? = null,
+    val branchIndex: Int = 0,
+    val totalBranches: Int = 1
 ) {
     val isUser: Boolean get() = role == "user"
     val isAssistant: Boolean get() = role == "assistant"
@@ -74,6 +77,17 @@ data class Conversation(
     val messages: List<Message> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
+)
+
+data class ConversationGroup(
+    val label: String,
+    val conversations: List<com.agychat.app.data.local.ConversationEntity>
+)
+
+data class WorkspaceState(
+    val cwd: String = "/content",
+    val activeTasksCount: Int = 0,
+    val isConnected: Boolean = false
 )
 
 @Serializable

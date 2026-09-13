@@ -49,7 +49,10 @@ object AppModule {
                 AppDatabase.MIGRATION_1_2,
                 AppDatabase.MIGRATION_2_3,
                 AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5
+                AppDatabase.MIGRATION_4_5,
+                AppDatabase.MIGRATION_5_6,
+                AppDatabase.MIGRATION_6_7,
+                AppDatabase.MIGRATION_7_8
             )
             .fallbackToDestructiveMigration()
             .fallbackToDestructiveMigrationOnDowngrade()
@@ -66,6 +69,21 @@ object AppModule {
     @Singleton
     fun provideMemoryDao(database: AppDatabase): com.agychat.app.data.local.MemoryDao {
         return database.memoryDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFileDao(database: AppDatabase): com.agychat.app.data.local.FileDao {
+        return database.fileDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideLocalFileManager(
+        @ApplicationContext context: Context,
+        fileDao: com.agychat.app.data.local.FileDao
+    ): com.agychat.app.data.local.LocalFileManager {
+        return com.agychat.app.data.local.LocalFileManager(context, fileDao)
     }
 
     @Provides

@@ -24,7 +24,9 @@ import com.agychat.app.data.local.MemoryEntity
 import com.agychat.app.domain.model.MemoryCategory
 import com.agychat.app.domain.model.ThinkingLevel
 import com.agychat.app.data.network.UrlSanitizer
+import java.util.Calendar
 import java.util.Locale
+import com.agychat.app.domain.model.ConversationGroup
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
@@ -37,6 +39,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.util.Log
@@ -50,7 +53,8 @@ data class FileViewerData(
     val size: Long = 0L,
     val content: String = "",
     val error: String? = null,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val isOfflineCached: Boolean = false
 )
 
 @HiltViewModel
@@ -59,6 +63,8 @@ class ChatViewModel @Inject constructor(
     private val webSocketClient: AgyWebSocketClient,
     private val chatDao: ChatDao,
     private val memoryDao: MemoryDao,
+    val localFileManager: com.agychat.app.data.local.LocalFileManager,
+    val fileDao: com.agychat.app.data.local.FileDao,
     val driveManager: com.agychat.app.data.drive.GoogleDriveManager
 ) : ViewModel() {
 
@@ -111,6 +117,43 @@ class ChatViewModel @Inject constructor(
 
     private val _showPinnedOnly = MutableStateFlow(false)
     val showPinnedOnly: StateFlow<Boolean> = _showPinnedOnly.asStateFlow()
+
+    // Chat Experience & Interaction Settings
+    private val _showFollowupSuggestions = MutableStateFlow(true)
+    val showFollowupSuggestions: StateFlow<Boolean> = _showFollowupSuggestions.asStateFlow()
+
+    private val _showStreamingCursor = MutableStateFlow(true)
+    val showStreamingCursor: StateFlow<Boolean> = _showStreamingCursor.asStateFlow()
+
+    private val _compactMessageDensity = MutableStateFlow(false)
+    val compactMessageDensity: StateFlow<Boolean> = _compactMessageDensity.asStateFlow()
+
+    private val _showMemoryActivityBadges = MutableStateFlow(true)
+    val showMemoryActivityBadges: StateFlow<Boolean> = _showMemoryActivityBadges.asStateFlow()
+
+    fun setShowFollowupSuggestions(enabled: Boolean) {
+        _showFollowupSuggestions.value = enabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("show_followup_suggestions", enabled).apply()
+    }
+
+    fun setShowStreamingCursor(enabled: Boolean) {
+        _showStreamingCursor.value = enabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("show_streaming_cursor", enabled).apply()
+    }
+
+    fun setCompactMessageDensity(enabled: Boolean) {
+        _compactMessageDensity.value = enabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("compact_message_density", enabled).apply()
+    }
+
+    fun setShowMemoryActivityBadges(enabled: Boolean) {
+        _showMemoryActivityBadges.value = enabled
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("show_memory_activity_badges", enabled).apply()
+    }
 
     fun toggleShowPinnedOnly() {
         _showPinnedOnly.value = !_showPinnedOnly.value
@@ -308,6 +351,91 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Autonomous Memory Intelligence: identifies redundant, duplicate, or subsumed memories,
+     * consolidates their access metrics, removes obsolete duplicates, and purges empty entries.
+     */
+    fun consolidateMemories() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val all = memoryDao.getAllMemoriesList()
+                if (all.isEmpty()) return@launch
+
+                var prunedCount = 0
+                var mergedCount = 0
+
+                // 1. Remove any empty or blank memories
+                all.filter { it.content.isBlank() }.forEach {
+                    memoryDao.deleteMemoryById(it.id)
+                    prunedCount++
+                }
+
+                val activeMemories = all.filter { it.content.isNotBlank() }
+                val visited = mutableSetOf<String>()
+
+                for (i in activeMemories.indices) {
+                    val m1 = activeMemories[i]
+                    if (visited.contains(m1.id)) continue
+
+                    val cluster = mutableListOf<MemoryEntity>()
+                    cluster.add(m1)
+
+                    val norm1 = m1.content.trim().lowercase().trimEnd('.', ',', '!', ';', ':')
+
+                    for (j in (i + 1) until activeMemories.size) {
+                        val m2 = activeMemories[j]
+                        if (visited.contains(m2.id)) continue
+
+                        val norm2 = m2.content.trim().lowercase().trimEnd('.', ',', '!', ';', ':')
+
+                        // Check exact normalized match OR subsumption within same category
+                        val isDuplicate = norm1 == norm2
+                        val isSubsumed = (m1.category.equals(m2.category, ignoreCase = true)) &&
+                                (norm1.contains(norm2) || norm2.contains(norm1)) &&
+                                kotlin.math.abs(norm1.length - norm2.length) < 40
+
+                        if (isDuplicate || isSubsumed) {
+                            cluster.add(m2)
+                            visited.add(m2.id)
+                        }
+                    }
+
+                    if (cluster.size > 1) {
+                        // Pick the best memory: longest content, highest importance, or highest accessCount
+                        val best = cluster.maxWithOrNull(
+                            compareBy<MemoryEntity> { it.content.length }
+                                .thenBy { it.importance }
+                                .thenBy { it.accessCount }
+                        ) ?: continue
+
+                        val totalAccesses = cluster.sumOf { it.accessCount }
+                        val maxImportance = cluster.maxOf { it.importance }
+
+                        // Delete the others
+                        cluster.filter { it.id != best.id }.forEach {
+                            memoryDao.deleteMemoryById(it.id)
+                            mergedCount++
+                        }
+
+                        // Update the best representative
+                        val consolidated = best.copy(
+                            accessCount = totalAccesses,
+                            importance = maxImportance,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        memoryDao.updateMemory(consolidated)
+                    }
+                }
+
+                if (prunedCount > 0 || mergedCount > 0) {
+                    Log.d("ChatViewModel", "Autonomous memory consolidation complete: $mergedCount merged, $prunedCount pruned.")
+                }
+            } catch (t: Throwable) {
+                Log.w("ChatViewModel", "Memory consolidation encountered an exception", t)
+            }
+        }
+    }
+
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
@@ -446,6 +574,11 @@ class ChatViewModel @Inject constructor(
         if (!model.supportsEffort) {
             _reasoningEffort.value = model.defaultEffort
         }
+        viewModelScope.launch {
+            try {
+                chatDao.updateConversationModel(currentConversationId, model.id)
+            } catch (_: Exception) {}
+        }
     }
 
     private val _reasoningEffort = MutableStateFlow("high")
@@ -461,11 +594,49 @@ class ChatViewModel @Inject constructor(
     var currentConversationId: String = UUID.randomUUID().toString()
         private set
 
+    // Workspace & Terminal State
+    private val _currentCwd = MutableStateFlow("/content")
+    val currentCwd: StateFlow<String> = _currentCwd.asStateFlow()
+
+    private val _activeTasksCount = MutableStateFlow(0)
+    val activeTasksCount: StateFlow<Int> = _activeTasksCount.asStateFlow()
+
+    fun updateCwd(newCwd: String) {
+        val trimmed = newCwd.trim()
+        if (trimmed.isNotBlank()) {
+            _currentCwd.value = trimmed
+            viewModelScope.launch {
+                try {
+                    chatDao.updateConversationCwd(currentConversationId, trimmed)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     // Stream tracking
     private var streamingMessageId: String? = null
+    private var streamingParentMessageId: String? = null
+    private var streamingBranchIndex: Int = 0
     private var isGenerationCancelled = false
     private val pendingMemoryUpdates = mutableListOf<String>()
     private var connectionJob: Job? = null
+    private var messagesCollectorJob: Job? = null
+
+    // Message Branch Tracking: maps branchGroupId -> activeBranchIndex
+    private val _activeBranchMap = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val activeBranchMap: StateFlow<Map<String, Int>> = _activeBranchMap.asStateFlow()
+
+    fun switchMessageBranch(branchGroupId: String, branchIndex: Int) {
+        _activeBranchMap.value = _activeBranchMap.value + (branchGroupId to branchIndex)
+    }
+
+    fun continueGenerating() {
+        if (_isLoading.value) return
+        val lastAssistant = _messages.value.lastOrNull { it.role == "assistant" } ?: return
+        if (lastAssistant.isStreaming || lastAssistant.content.isBlank()) return
+
+        sendMessage("Continue from where you left off. Do not repeat previous text, seamlessly continue the output.")
+    }
 
     private fun buildClientMetadata(): JSONObject {
         val dm = context.resources.displayMetrics
@@ -542,6 +713,12 @@ class ChatViewModel @Inject constructor(
                 autoMemoryEnabled = prefs.getBoolean("auto_memory_enabled", true)
             )
 
+            // Chat Experience Preferences
+            _showFollowupSuggestions.value = prefs.getBoolean("show_followup_suggestions", true)
+            _showStreamingCursor.value = prefs.getBoolean("show_streaming_cursor", true)
+            _compactMessageDensity.value = prefs.getBoolean("compact_message_density", false)
+            _showMemoryActivityBadges.value = prefs.getBoolean("show_memory_activity_badges", true)
+
             viewModelScope.launch {
                 try {
                     memories.collectLatest { currentMemoriesList = it }
@@ -550,11 +727,39 @@ class ChatViewModel @Inject constructor(
                 }
             }
 
+            // Autonomous Memory Intelligence & Consolidation on startup
+            viewModelScope.launch(Dispatchers.IO) {
+                consolidateMemories()
+            }
+
             val rawSavedUrl = prefs.getString("server_url", "wss://olympic-understood-heater-angel.trycloudflare.com/ws")
             val validUrl = UrlSanitizer.normalizeWebSocketUrl(rawSavedUrl)
                 ?: UrlSanitizer.normalizeWebSocketUrl("wss://olympic-understood-heater-angel.trycloudflare.com/ws")
             if (!validUrl.isNullOrBlank()) {
                 connectToServer(validUrl)
+            }
+
+            // Restore last active conversation on launch
+            val savedConvId = prefs.getString("last_active_conversation_id", null)
+            if (!savedConvId.isNullOrBlank()) {
+                currentConversationId = savedConvId
+                loadConversation(savedConvId)
+            } else {
+                viewModelScope.launch {
+                    try {
+                        val allConvs = chatDao.getAllConversationsList()
+                        val latest = allConvs.firstOrNull()
+                        if (latest != null) {
+                            currentConversationId = latest.id
+                            loadConversation(latest.id)
+                        } else {
+                            loadConversation(currentConversationId)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("ChatViewModel", "Failed to restore latest conversation", e)
+                        loadConversation(currentConversationId)
+                    }
+                }
             }
         } catch (t: Throwable) {
             Log.e("ChatViewModel", "Fatal error during ChatViewModel init, safely caught", t)
@@ -565,28 +770,58 @@ class ChatViewModel @Inject constructor(
         val cleanPath = cleanFilePathOrUrl(rawPathOrUrl)
         val filename = cleanPath.substringAfterLast("/").ifBlank { "file.txt" }
 
-        _activeFileViewer.value = FileViewerData(
-            filename = filename,
-            path = cleanPath,
-            size = 0L,
-            content = "",
-            isLoading = true
-        )
-
-        // 1. Send WebSocket request
-        try {
-            val json = JSONObject().apply {
-                put("action", "get_file")
-                put("path", cleanPath)
+        // 1. Immediately check local phone storage cache (0ms, 100% offline!)
+        viewModelScope.launch {
+            val cached = localFileManager.getCachedFile(cleanPath)
+            if (cached != null && cached.content.isNotBlank()) {
+                _activeFileViewer.value = FileViewerData(
+                    filename = cached.filename,
+                    path = cached.remotePath,
+                    size = cached.size,
+                    content = cached.content,
+                    isLoading = false,
+                    isOfflineCached = true
+                )
+                // If offline, we are done! No internet needed!
+                if (_connectionState.value != ConnectionState.CONNECTED) {
+                    return@launch
+                }
+            } else {
+                _activeFileViewer.value = FileViewerData(
+                    filename = filename,
+                    path = cleanPath,
+                    size = 0L,
+                    content = "",
+                    isLoading = true,
+                    isOfflineCached = false
+                )
             }
-            webSocketClient.sendMessage(json.toString())
-        } catch (t: Throwable) {
-            Log.e("ChatViewModel", "Failed to send WS get_file", t)
+
+            // If online, query bridge for newest version or remote fetch
+            if (_connectionState.value == ConnectionState.CONNECTED) {
+                try {
+                    val json = JSONObject().apply {
+                        put("action", "get_file")
+                        put("path", cleanPath)
+                    }
+                    webSocketClient.sendMessage(json.toString())
+                } catch (t: Throwable) {
+                    Log.e("ChatViewModel", "Failed to send WS get_file", t)
+                }
+            } else if (cached == null) {
+                _activeFileViewer.value = FileViewerData(
+                    filename = filename,
+                    path = cleanPath,
+                    error = "Offline: File is not yet cached in phone storage. Connect to Colab to fetch it.",
+                    isLoading = false
+                )
+            }
         }
 
-        // 2. OkHttp fallback in background for resilience
+        // 2. OkHttp fallback in background for resilience when connected
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                if (_connectionState.value != ConnectionState.CONNECTED) return@launch
                 val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
                 val base = _serverUrl.value.ifBlank {
                     prefs.getString("server_url", "") ?: ""
@@ -611,13 +846,17 @@ class ChatViewModel @Inject constructor(
                             val fPath = respJson.optString("path", cleanPath)
                             val fSize = respJson.optLong("size", 0L)
                             val fContent = respJson.optString("content", "")
-                            _activeFileViewer.value = FileViewerData(
-                                filename = fName,
-                                path = fPath,
-                                size = fSize,
-                                content = fContent,
-                                isLoading = false
-                            )
+                            localFileManager.cacheFile(currentConversationId, fPath, fName, fContent)
+                            withContext(Dispatchers.Main) {
+                                _activeFileViewer.value = FileViewerData(
+                                    filename = fName,
+                                    path = fPath,
+                                    size = fSize,
+                                    content = fContent,
+                                    isLoading = false,
+                                    isOfflineCached = true
+                                )
+                            }
                         }
                     }
                 }
@@ -640,43 +879,10 @@ class ChatViewModel @Inject constructor(
             onResult(false, "File content is empty")
             return
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val filename = file.filename
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    val resolver = context.contentResolver
-                    val contentValues = android.content.ContentValues().apply {
-                        put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                        put(android.provider.MediaStore.MediaColumns.MIME_TYPE, if (filename.endsWith(".md")) "text/markdown" else "text/plain")
-                        put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
-                    }
-                    val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                    if (uri != null) {
-                        resolver.openOutputStream(uri)?.use { out ->
-                            out.write(file.content.toByteArray(Charsets.UTF_8))
-                        }
-                        withContext(Dispatchers.Main) {
-                            onResult(true, "Saved $filename to Downloads")
-                        }
-                    } else {
-                        withContext(Dispatchers.Main) {
-                            onResult(false, "Failed to create file in Downloads")
-                        }
-                    }
-                } else {
-                    val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                    dir.mkdirs()
-                    val target = java.io.File(dir, filename)
-                    target.writeText(file.content, Charsets.UTF_8)
-                    withContext(Dispatchers.Main) {
-                        onResult(true, "Saved $filename to Downloads")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("ChatViewModel", "Error saving file to Downloads", e)
-                withContext(Dispatchers.Main) {
-                    onResult(false, "Save error: ${e.message}")
-                }
+        viewModelScope.launch {
+            val (success, msg) = localFileManager.exportToPublicDownloads(file.filename, file.content)
+            withContext(Dispatchers.Main) {
+                onResult(success, msg)
             }
         }
     }
@@ -853,12 +1059,16 @@ class ChatViewModel @Inject constructor(
                         val fp = json.optString("path", "")
                         val fsize = json.optLong("size", 0L)
                         val fcontent = json.optString("content", "")
+                        viewModelScope.launch {
+                            localFileManager.cacheFile(currentConversationId, fp, fn, fcontent)
+                        }
                         _activeFileViewer.value = FileViewerData(
                             filename = fn,
                             path = fp,
                             size = fsize,
                             content = fcontent,
-                            isLoading = false
+                            isLoading = false,
+                            isOfflineCached = true
                         )
                     } else {
                         val errMsg = json.optString("error", "File not found on Colab server")
@@ -1015,6 +1225,14 @@ class ChatViewModel @Inject constructor(
             if (!_sessionFiles.value.contains(targetFile)) {
                 _sessionFiles.value = _sessionFiles.value + targetFile
             }
+            val writtenContent = paramsObj?.optString("CodeContent")?.takeIf { it.isNotBlank() }
+                ?: paramsObj?.optString("content")?.takeIf { it.isNotBlank() }
+                ?: paramsObj?.optString("ReplacementContent")?.takeIf { it.isNotBlank() }
+            if (!writtenContent.isNullOrBlank()) {
+                viewModelScope.launch {
+                    localFileManager.cacheFile(currentConversationId, targetFile, null, writtenContent)
+                }
+            }
         }
 
         val list = _messages.value.toMutableList()
@@ -1078,7 +1296,9 @@ class ChatViewModel @Inject constructor(
                     toolExecution = statusText,
                     toolExecutions = listOf(newTool),
                     timestamp = System.currentTimeMillis(),
-                    isStreaming = true
+                    isStreaming = true,
+                    parentMessageId = streamingParentMessageId,
+                    branchIndex = streamingBranchIndex
                 )
             )
             _messages.value = list
@@ -1117,7 +1337,9 @@ class ChatViewModel @Inject constructor(
                     memoryUpdates = initialUpdates,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true,
-                    isThinking = false
+                    isThinking = false,
+                    parentMessageId = streamingParentMessageId,
+                    branchIndex = streamingBranchIndex
                 )
             )
         }
@@ -1158,7 +1380,9 @@ class ChatViewModel @Inject constructor(
                     memoryUpdates = initialUpdates,
                     timestamp = System.currentTimeMillis(),
                     isStreaming = true,
-                    isThinking = true
+                    isThinking = true,
+                    parentMessageId = streamingParentMessageId,
+                    branchIndex = streamingBranchIndex
                 )
             )
         }
@@ -1211,6 +1435,8 @@ class ChatViewModel @Inject constructor(
             }
         }
         streamingMessageId = null
+        streamingParentMessageId = null
+        streamingBranchIndex = 0
     }
 
     fun toggleThinkingExpanded(messageId: String) {
@@ -1377,130 +1603,237 @@ class ChatViewModel @Inject constructor(
                 basePrompt
             }
 
-            // Dynamic Hybrid Relevance Retrieval (ChatGPT-grade)
-            val memoryList = if (_isMemoryEnabled.value && !_isTemporaryChat.value) {
-                try {
-                    val allEnabled = memoryDao.getAllEnabledMemories()
-                    if (allEnabled.isEmpty()) {
-                        emptyList()
-                    } else {
-                        val stopWords = setOf(
-                            "the", "and", "that", "this", "with", "from", "for", "are", "was", "were",
-                            "what", "how", "when", "where", "which", "who", "why", "can", "could", "would",
-                            "should", "please", "make", "help", "want", "like", "need", "about", "your"
-                        )
-                        val queryTokens = promptText.lowercase()
-                            .split(Regex("[^a-zA-Z0-9_]+"))
-                            .filter { it.length >= 3 && it !in stopWords }
-                            .toSet()
+            sendTurnPayload(promptText, userMessage.id, filesArray)
+        }
+    }
 
-                        val selected = allEnabled.sortedByDescending { mem ->
-                            val memLower = mem.content.lowercase()
-                            val keywordMatches = queryTokens.count { token -> memLower.contains(token) }
-                            val categoryWeight = when (mem.category.lowercase()) {
-                                "facts", "personal" -> 16 // Always maintain core user background in context
-                                "goals", "project" -> 10
-                                "prefs", "preferences" -> 8
-                                "skills" -> 8
-                                else -> 2
-                            }
-                            (keywordMatches * 25) + categoryWeight + (mem.importance * 3) + (mem.accessCount.coerceAtMost(8))
-                        }.take(40)
+    private fun shouldRetrieveMemories(prompt: String): Boolean {
+        val lower = prompt.lowercase().trim()
 
-                        viewModelScope.launch {
-                            selected.forEach { memoryDao.incrementAccessCount(it.id) }
-                        }
+        // Explicit personal memory queries
+        val personalPhrases = listOf(
+            "about me", "who am i", "my name", "my role", "my job", "my work",
+            "my project", "my app", "my preferences", "remember", "recall", "memory",
+            "what do you know", "what do you remember", "for me", "recommend me",
+            "my stack", "my tech", "my country", "my age", "my background"
+        )
+        if (personalPhrases.any { lower.contains(it) }) return true
 
-                        selected.map {
-                            JSONObject().apply {
-                                put("content", it.content)
-                                put("category", it.category)
-                                put("importance", it.importance)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    emptyList()
+        // Direct first-person intent indicators
+        val firstPersonTokens = setOf("i", "me", "my", "mine", "myself")
+        val promptWords = lower.split(Regex("[^a-zA-Z0-9_]+")).filter { it.isNotBlank() }.toSet()
+        val hasFirstPerson = firstPersonTokens.any { it in promptWords }
+
+        // General queries without personal pronouns -> DO NOT retrieve memories
+        val isGenericQuery = lower.matches(Regex("^(what is|how to|how do i|calculate|solve|explain|write a function|define|debug|error|why does|fix)\\s+.*"))
+        if (isGenericQuery && !hasFirstPerson) {
+            return false
+        }
+
+        return hasFirstPerson
+    }
+
+    private suspend fun retrieveRelevantMemories(promptText: String): List<JSONObject> {
+        if (!_isMemoryEnabled.value || _isTemporaryChat.value) return emptyList()
+        return try {
+            val allEnabled = memoryDao.getAllEnabledMemories()
+            if (allEnabled.isEmpty()) return emptyList()
+
+            val stopWords = setOf(
+                "the", "and", "that", "this", "with", "from", "for", "are", "was", "were",
+                "what", "how", "when", "where", "which", "who", "why", "can", "could", "would",
+                "should", "please", "make", "help", "want", "like", "need", "about", "your",
+                "tell", "give", "show", "some", "more", "code", "file", "into", "onto"
+            )
+            val queryTokens = promptText.lowercase()
+                .split(Regex("[^a-zA-Z0-9_]+"))
+                .filter { it.length >= 3 && it !in stopWords }
+                .toSet()
+
+            val isPersonalIntent = shouldRetrieveMemories(promptText)
+
+            val matchingMemories = allEnabled.mapNotNull { mem ->
+                val memLower = mem.content.lowercase()
+                val keywordMatches = queryTokens.count { token -> memLower.contains(token) }
+                if (keywordMatches > 0) {
+                    val score = (keywordMatches * 30) + (mem.importance * 3) + mem.accessCount.coerceAtMost(5)
+                    mem to score
+                } else if (isPersonalIntent && (mem.category.equals("facts", ignoreCase = true) || mem.category.equals("personal", ignoreCase = true))) {
+                    val score = (mem.importance * 2)
+                    mem to score
+                } else {
+                    null
                 }
-            } else {
+            }
+
+            if (matchingMemories.isEmpty()) {
                 emptyList()
+            } else {
+                val selected = matchingMemories
+                    .sortedByDescending { it.second }
+                    .take(5) // ChatGPT standard: strictly 1-5 top relevant memories, never 40!
+                    .map { it.first }
+
+                viewModelScope.launch {
+                    selected.forEach { memoryDao.incrementAccessCount(it.id) }
+                }
+
+                selected.map {
+                    JSONObject().apply {
+                        put("content", it.content)
+                        put("category", it.category)
+                        put("importance", it.importance)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private suspend fun sendTurnPayload(
+        promptText: String,
+        excludeMessageId: String,
+        filesArray: org.json.JSONArray = org.json.JSONArray()
+    ) {
+        val effort = _reasoningEffort.value
+        val memoryList = retrieveRelevantMemories(promptText)
+
+        // Verbatim multi-turn conversation history with dynamic 60,000-char context window budget
+        val historyArray = org.json.JSONArray()
+        val eligibleTurns = _messages.value
+            .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != excludeMessageId }
+            .takeLast(30)
+            .reversed()
+
+        var totalBudgetChars = 0
+        val budgetedTurns = mutableListOf<Message>()
+        for (m in eligibleTurns) {
+            val contentSnippet = m.content.take(4000)
+            if (totalBudgetChars + contentSnippet.length > 60_000) break
+            budgetedTurns.add(m)
+            totalBudgetChars += contentSnippet.length
+        }
+        budgetedTurns.reversed().forEach { m ->
+            historyArray.put(JSONObject().apply {
+                put("role", m.role)
+                put("content", m.content.take(4000))
+            })
+        }
+
+        val p = _personalization.value
+        val payload = JSONObject().apply {
+            put("message", promptText)
+            put("conversation_id", currentConversationId)
+            put("workspace_id", currentConversationId)
+            put("cwd", _currentCwd.value)
+            put("effort", effort)
+            put("model", _selectedModel.value.id)
+            if (historyArray.length() > 0) {
+                put("history", historyArray)
+            }
+            if (memoryList.isNotEmpty()) {
+                val memArray = org.json.JSONArray()
+                memoryList.forEach { memArray.put(it) }
+                put("memories", memArray)
+            }
+            // Send full personalization profile to bridge
+            if (!_isTemporaryChat.value && p.isEnabled) {
+                put("personalization", JSONObject().apply {
+                    if (p.name.isNotBlank()) put("name", p.name)
+                    if (p.occupation.isNotBlank()) put("occupation", p.occupation)
+                    if (p.expertise.isNotBlank()) put("expertise", p.expertise)
+                    if (p.country.isNotBlank()) put("country", p.country)
+                    if (p.age.isNotBlank()) put("age", p.age)
+                    put("response_length", p.responseLength)
+                    put("response_format", p.responseFormat)
+                    put("tone_style", p.toneStyle)
+                    put("depth_level", p.depthLevel)
+                    put("code_language", p.codeLanguage)
+                    put("enable_examples", p.enableExamples)
+                    put("enable_proactive", p.enableProactiveInsights)
+                    put("enable_critical", p.enableCriticalFeedback)
+                    put("enable_emoji", p.enableEmoji)
+                    if (p.avoidTopics.isNotBlank()) put("avoid_topics", p.avoidTopics)
+                    if (p.customContext.isNotBlank()) put("custom_context", p.customContext)
+                    if (p.extraInstructions.isNotBlank()) put("extra_instructions", p.extraInstructions)
+                })
+            }
+            // Legacy custom_instructions for backward compatibility
+            if (!_isTemporaryChat.value && _customInstructions.value.isEnabled) {
+                put("custom_instructions", JSONObject().apply {
+                    put("about_user", _customInstructions.value.aboutUser)
+                    put("response_preferences", _customInstructions.value.responsePreferences)
+                    put("tone_preset", _customInstructions.value.tonePreset)
+                    put("is_enabled", _customInstructions.value.isEnabled)
+                })
+            }
+            put("auto_memory", _isAutoMemoryEnabled.value && !_isTemporaryChat.value)
+            put("is_temporary", _isTemporaryChat.value)
+            put("client_metadata", buildClientMetadata())
+
+            // Multi-files payload
+            if (filesArray.length() > 0) {
+                put("files", filesArray)
+                val firstObj = filesArray.getJSONObject(0)
+                put("file_name", firstObj.getString("name"))
+                put("file_is_image", firstObj.getBoolean("is_image"))
+                put("file_data", firstObj.getString("data"))
+            }
+        }.toString()
+
+        webSocketClient.sendMessage(payload)
+        _isLoading.value = true
+        _currentStatus.value = "Next AI thinking..."
+    }
+
+    fun editAndResendMessage(messageId: String, newContent: String) {
+        val trimmed = newContent.trim()
+        if (trimmed.isEmpty()) return
+
+        val currentList = _messages.value
+        val targetIndex = currentList.indexOfFirst { it.id == messageId }
+        if (targetIndex < 0) return
+        val targetMsg = currentList[targetIndex]
+        if (targetMsg.role != "user") return
+
+        if (_isLoading.value) {
+            stopGenerating()
+        }
+
+        val branchGroupId = targetMsg.parentMessageId?.takeIf { it.isNotBlank() && it != "null" } ?: targetMsg.id
+
+        viewModelScope.launch {
+            val currentBranchCount = chatDao.getBranchCountForMessage(currentConversationId, branchGroupId)
+            val newBranchIndex = if (currentBranchCount == 0) 1 else currentBranchCount
+
+            // If original wasn't tagged with branchGroupId, update it in DB
+            if (targetMsg.parentMessageId.isNullOrBlank() || targetMsg.parentMessageId == "null") {
+                val updatedOriginal = targetMsg.copy(parentMessageId = branchGroupId, branchIndex = 0)
+                saveMessageToDb(updatedOriginal)
             }
 
-            // Multi-turn conversation turns for complete contextual memory across turns
-            val historyArray = org.json.JSONArray()
-            val priorTurns = _messages.value
-                .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != userMessage.id }
-                .takeLast(20)
-            for (m in priorTurns) {
-                val item = JSONObject().apply {
-                    put("role", m.role)
-                    put("content", m.content.take(3000))
-                }
-                historyArray.put(item)
-            }
+            // Create new branched user message
+            val newMsg = targetMsg.copy(
+                id = UUID.randomUUID().toString(),
+                content = trimmed,
+                timestamp = System.currentTimeMillis(),
+                parentMessageId = branchGroupId,
+                branchIndex = newBranchIndex,
+                totalBranches = newBranchIndex + 1
+            )
+            saveMessageToDb(newMsg)
 
-            val p = _personalization.value
-            val payload = JSONObject().apply {
-                put("message", promptText)
-                put("conversation_id", currentConversationId)
-                put("effort", effort)
-                put("model", _selectedModel.value.id)
-                if (historyArray.length() > 0) {
-                    put("history", historyArray)
-                }
-                if (memoryList.isNotEmpty()) {
-                    val memArray = org.json.JSONArray()
-                    memoryList.forEach { memArray.put(it) }
-                    put("memories", memArray)
-                }
-                // Send full personalization profile to bridge
-                if (!_isTemporaryChat.value && p.isEnabled) {
-                    put("personalization", JSONObject().apply {
-                        if (p.name.isNotBlank()) put("name", p.name)
-                        if (p.occupation.isNotBlank()) put("occupation", p.occupation)
-                        if (p.expertise.isNotBlank()) put("expertise", p.expertise)
-                        if (p.country.isNotBlank()) put("country", p.country)
-                        if (p.age.isNotBlank()) put("age", p.age)
-                        put("response_length", p.responseLength)
-                        put("response_format", p.responseFormat)
-                        put("tone_style", p.toneStyle)
-                        put("depth_level", p.depthLevel)
-                        put("code_language", p.codeLanguage)
-                        put("enable_examples", p.enableExamples)
-                        put("enable_proactive", p.enableProactiveInsights)
-                        put("enable_critical", p.enableCriticalFeedback)
-                        put("enable_emoji", p.enableEmoji)
-                        if (p.avoidTopics.isNotBlank()) put("avoid_topics", p.avoidTopics)
-                        if (p.customContext.isNotBlank()) put("custom_context", p.customContext)
-                        if (p.extraInstructions.isNotBlank()) put("extra_instructions", p.extraInstructions)
-                    })
-                }
-                // Legacy custom_instructions for backward compatibility
-                if (!_isTemporaryChat.value && _customInstructions.value.isEnabled) {
-                    put("custom_instructions", JSONObject().apply {
-                        put("about_user", _customInstructions.value.aboutUser)
-                        put("response_preferences", _customInstructions.value.responsePreferences)
-                        put("tone_preset", _customInstructions.value.tonePreset)
-                        put("is_enabled", _customInstructions.value.isEnabled)
-                    })
-                }
-                put("auto_memory", _isAutoMemoryEnabled.value && !_isTemporaryChat.value)
-                put("is_temporary", _isTemporaryChat.value)
-                put("client_metadata", buildClientMetadata())
+            // Select this new branch
+            _activeBranchMap.value = _activeBranchMap.value + (branchGroupId to newBranchIndex)
 
-                // Multi-files payload
-                if (filesArray.length() > 0) {
-                    put("files", filesArray)
-                    val firstObj = filesArray.getJSONObject(0)
-                    put("file_name", firstObj.getString("name"))
-                    put("file_is_image", firstObj.getBoolean("is_image"))
-                    put("file_data", firstObj.getString("data"))
-                }
-            }.toString()
+            // In-memory messages truncation: keep only up to targetIndex and append new branch
+            val truncatedMessages = currentList.subList(0, targetIndex).toMutableList()
+            truncatedMessages.add(newMsg)
+            _messages.value = truncatedMessages
 
-            webSocketClient.sendMessage(payload)
-            _isLoading.value = true
-            _currentStatus.value = "Next AI thinking..."
+            // Re-send to bridge
+            sendTurnPayload(trimmed, newMsg.id)
         }
     }
 
@@ -1525,28 +1858,71 @@ class ChatViewModel @Inject constructor(
 
     private fun generateTitle(messages: List<Message>): String {
         val firstUserMsg = messages.firstOrNull { it.role == "user" }?.content ?: return "New Chat"
-        val cleaned = firstUserMsg
+        var cleaned = firstUserMsg
             .removePrefix("/boost").removePrefix("/goal").removePrefix("/plan")
             .removePrefix("/browser").removePrefix("/learn").removePrefix("/grill-me")
             .removePrefix("/schedule").removePrefix("/teamwork-preview").removePrefix("/remember")
             .trim()
         if (cleaned.isBlank()) return "New Chat"
-        // Use first sentence or first 50 chars
-        val firstSentence = cleaned.split(Regex("[.!?\\n]")).firstOrNull { it.trim().length > 3 }?.trim() ?: cleaned
-        return firstSentence.take(50).trimEnd().let { if (it.length < firstSentence.length) "$it…" else it }
+
+        // Strip common conversational preamble (ChatGPT-style clean topic extraction)
+        val preambles = listOf(
+            "can you please help me with", "can you help me with", "could you help me with",
+            "how do i", "how can i", "how to", "please write a", "please write", "write a", "write",
+            "can you tell me about", "tell me about", "what is the best way to", "what is", "explain how to",
+            "explain", "show me how to", "show me", "i want to know about", "i want to"
+        )
+        val lowerCleaned = cleaned.lowercase()
+        for (p in preambles) {
+            if (lowerCleaned.startsWith(p)) {
+                cleaned = cleaned.substring(p.length).trim()
+                break
+            }
+        }
+
+        val firstSentence = cleaned.split(Regex("[.!?\\n]")).firstOrNull { it.trim().length > 2 }?.trim() ?: cleaned
+        val words = firstSentence.split(Regex("\\s+")).filter { it.isNotBlank() }
+        val topic = words.take(6).joinToString(" ")
+        val finalTitle = topic.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        return finalTitle.take(36).trimEnd().let { if (it.length < finalTitle.length) "$it…" else it }
     }
 
     private fun saveMessageToDb(message: Message) {
         viewModelScope.launch {
-            val title = generateTitle(_messages.value)
+            val existingConv = chatDao.getConversationById(currentConversationId)
+            val createdAt = existingConv?.createdAt ?: System.currentTimeMillis()
+            val modelId = existingConv?.modelId ?: _selectedModel.value.id
+            val isPinned = existingConv?.isPinned ?: false
+            val customTitle = existingConv?.customTitle ?: false
+            val currentTitle = if (customTitle && !existingConv?.title.isNullOrBlank()) {
+                existingConv.title
+            } else {
+                generateTitle(_messages.value)
+            }
+
             chatDao.insertConversation(
                 ConversationEntity(
                     id = currentConversationId,
-                    title = title,
-                    createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis()
+                    title = currentTitle,
+                    createdAt = createdAt,
+                    updatedAt = System.currentTimeMillis(),
+                    modelId = modelId,
+                    isPinned = isPinned,
+                    messageCount = existingConv?.messageCount ?: 0,
+                    customTitle = customTitle,
+                    lastKnownCwd = _currentCwd.value,
+                    agySessionId = existingConv?.agySessionId
                 )
             )
+
+            if (!customTitle) {
+                chatDao.autoUpdateConversationTitle(currentConversationId, currentTitle)
+            }
+            chatDao.refreshMessageCount(currentConversationId)
+
+            // Save last active conversation ID to SharedPreferences for instant app restore
+            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putString("last_active_conversation_id", currentConversationId).apply()
 
             val attachmentsJson = if (message.allAttachments.isNotEmpty()) {
                 val arr = org.json.JSONArray()
@@ -1559,6 +1935,29 @@ class ChatViewModel @Inject constructor(
                         put("mimeType", att.mimeType)
                     })
                 }
+                arr.toString()
+            } else null
+
+            val toolExecutionsJson = if (message.toolExecutions.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                message.toolExecutions.forEach { t ->
+                    arr.put(JSONObject().apply {
+                        put("id", t.id)
+                        put("toolName", t.toolName)
+                        put("state", t.state)
+                        put("command", t.command ?: JSONObject.NULL)
+                        put("targetFile", t.targetFile ?: JSONObject.NULL)
+                        put("parametersSummary", t.parametersSummary ?: JSONObject.NULL)
+                        put("output", t.output ?: JSONObject.NULL)
+                        put("durationSeconds", t.durationSeconds)
+                    })
+                }
+                arr.toString()
+            } else null
+
+            val memoryUpdatesJson = if (message.memoryUpdates.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                message.memoryUpdates.forEach { arr.put(it) }
                 arr.toString()
             } else null
 
@@ -1576,9 +1975,18 @@ class ChatViewModel @Inject constructor(
                     attachmentIsImage = message.attachmentIsImage || (firstAtt?.isImage ?: false),
                     attachmentsJson = attachmentsJson,
                     feedback = message.feedback,
-                    isPinned = message.isPinned
+                    isPinned = message.isPinned,
+                    thinking = message.thinking,
+                    toolExecutionsJson = toolExecutionsJson,
+                    modelName = message.modelName ?: _selectedModel.value.name,
+                    replyToContent = message.replyToContent,
+                    replyToRole = message.replyToRole,
+                    memoryUpdatesJson = memoryUpdatesJson,
+                    parentMessageId = message.parentMessageId,
+                    branchIndex = message.branchIndex
                 )
             )
+            chatDao.refreshMessageCount(currentConversationId)
         }
     }
 
@@ -1611,66 +2019,160 @@ class ChatViewModel @Inject constructor(
             list[idx] = updated
             _messages.value = list
             saveMessageToDb(updated)
+
+            // Send feedback telemetry event to AGY bridge backend if connected
+            if (_connectionState.value == ConnectionState.CONNECTED) {
+                try {
+                    val feedbackPayload = JSONObject().apply {
+                        put("action", "message_feedback")
+                        put("message_id", messageId)
+                        put("conversation_id", currentConversationId)
+                        put("feedback", newFeedback ?: "neutral")
+                        put("timestamp", System.currentTimeMillis())
+                    }
+                    webSocketClient.sendMessage(feedbackPayload.toString())
+                } catch (t: Throwable) {
+                    Log.w("ChatViewModel", "Failed to dispatch feedback to bridge", t)
+                }
+            }
         }
     }
 
     fun regenerateLastResponse() {
         val msgs = _messages.value
         val lastUserMsg = msgs.lastOrNull { it.role == "user" } ?: return
-        
-        // Remove the last assistant response if exists
-        val lastMsg = msgs.lastOrNull()
-        if (lastMsg?.role == "assistant") {
-            val filtered = msgs.filterNot { it.id == lastMsg.id }
-            _messages.value = filtered
-            viewModelScope.launch {
-                chatDao.deleteMessage(lastMsg.id)
-            }
-        }
-        
-        // Resend the last user message text with previous conversation history
-        val effort = _reasoningEffort.value
+        val lastAssistant = msgs.lastOrNull { it.role == "assistant" }
 
-        val historyArray = org.json.JSONArray()
-        val priorTurns = msgs
-            .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != lastUserMsg.id && it.id != lastMsg?.id }
-            .takeLast(20)
-        for (m in priorTurns) {
-            val item = JSONObject().apply {
-                put("role", m.role)
-                put("content", m.content.take(3000))
-            }
-            historyArray.put(item)
+        if (_isLoading.value) {
+            stopGenerating()
         }
 
-        val payload = JSONObject().apply {
-            put("message", lastUserMsg.content)
-            put("conversation_id", currentConversationId)
-            put("effort", effort)
-            put("model", _selectedModel.value.id)
-            if (historyArray.length() > 0) {
-                put("history", historyArray)
-            }
-        }.toString()
+        viewModelScope.launch {
+            if (lastAssistant != null) {
+                val branchGroupId = lastAssistant.parentMessageId?.takeIf { it.isNotBlank() && it != "null" } ?: lastAssistant.id
+                val currentBranchCount = chatDao.getBranchCountForMessage(currentConversationId, branchGroupId)
+                val newBranchIndex = if (currentBranchCount == 0) 1 else currentBranchCount
 
-        webSocketClient.sendMessage(payload)
-        _isLoading.value = true
-        _currentStatus.value = "Regenerating response..."
+                // Preserve original assistant response as branch 0 in DB
+                if (lastAssistant.parentMessageId.isNullOrBlank() || lastAssistant.parentMessageId == "null") {
+                    val updatedOriginal = lastAssistant.copy(parentMessageId = branchGroupId, branchIndex = 0)
+                    saveMessageToDb(updatedOriginal)
+                }
+
+                streamingParentMessageId = branchGroupId
+                streamingBranchIndex = newBranchIndex
+                _activeBranchMap.value = _activeBranchMap.value + (branchGroupId to newBranchIndex)
+
+                // Temporarily remove from current list to prepare for new generation
+                val filtered = msgs.filterNot { it.id == lastAssistant.id }
+                _messages.value = filtered
+            }
+
+            // Resend the last user message text with previous conversation history
+            val effort = _reasoningEffort.value
+
+            val historyArray = org.json.JSONArray()
+            val priorTurns = msgs
+                .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != lastUserMsg.id && it.id != lastAssistant?.id }
+                .takeLast(20)
+            for (m in priorTurns) {
+                val item = JSONObject().apply {
+                    put("role", m.role)
+                    put("content", m.content.take(3000))
+                }
+                historyArray.put(item)
+            }
+
+            val payload = JSONObject().apply {
+                put("message", lastUserMsg.content)
+                put("conversation_id", currentConversationId)
+                put("effort", effort)
+                put("model", _selectedModel.value.id)
+                if (historyArray.length() > 0) {
+                    put("history", historyArray)
+                }
+            }.toString()
+
+            webSocketClient.sendMessage(payload)
+            _isLoading.value = true
+            _currentStatus.value = "Regenerating response..."
+        }
     }
 
     fun renameConversation(conversationId: String, newTitle: String) {
         val trimmed = newTitle.trim()
         if (trimmed.isBlank()) return
         viewModelScope.launch {
-            chatDao.updateConversationTitle(conversationId, trimmed)
+            try {
+                chatDao.manualRenameConversation(conversationId, trimmed)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to rename conversation $conversationId", e)
+            }
+        }
+    }
+
+    fun toggleConversationPinned(conversationId: String) {
+        viewModelScope.launch {
+            try {
+                val conv = chatDao.getConversationById(conversationId) ?: return@launch
+                chatDao.updateConversationPinned(conversationId, !conv.isPinned)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to toggle pin for $conversationId", e)
+            }
+        }
+    }
+
+    fun groupConversationsByDate(convs: List<ConversationEntity>): List<ConversationGroup> {
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val todayStart = cal.timeInMillis
+        val yesterdayStart = todayStart - 86_400_000L
+        val sevenDaysAgo = todayStart - (7 * 86_400_000L)
+        val thirtyDaysAgo = todayStart - (30 * 86_400_000L)
+
+        val pinned = convs.filter { it.isPinned }
+        val unpinned = convs.filter { !it.isPinned }
+
+        return buildList {
+            if (pinned.isNotEmpty()) {
+                add(ConversationGroup("📌 Pinned", pinned))
+            }
+            val today = unpinned.filter { it.updatedAt >= todayStart }
+            if (today.isNotEmpty()) add(ConversationGroup("Today", today))
+
+            val yesterday = unpinned.filter { it.updatedAt in yesterdayStart until todayStart }
+            if (yesterday.isNotEmpty()) add(ConversationGroup("Yesterday", yesterday))
+
+            val prev7 = unpinned.filter { it.updatedAt in sevenDaysAgo until yesterdayStart }
+            if (prev7.isNotEmpty()) add(ConversationGroup("Previous 7 Days", prev7))
+
+            val prev30 = unpinned.filter { it.updatedAt in thirtyDaysAgo until sevenDaysAgo }
+            if (prev30.isNotEmpty()) add(ConversationGroup("Previous 30 Days", prev30))
+
+            val older = unpinned.filter { it.updatedAt < thirtyDaysAgo }
+            if (older.isNotEmpty()) add(ConversationGroup("Older", older))
         }
     }
 
     fun clearAllConversations() {
         viewModelScope.launch {
-            chatDao.clearAllConversations()
-            chatDao.clearAllMessages()
-            startNewConversation()
+            try {
+                val convs = chatDao.getAllConversationsList()
+                convs.forEach { conv ->
+                    fileDao.deleteFilesForConversation(conv.id)
+                }
+                fileDao.deleteFilesForConversation(currentConversationId)
+                fileDao.clearAllFiles()
+                chatDao.clearAllConversations()
+                chatDao.clearAllMessages()
+                startNewConversation()
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to clear all conversations", e)
+            }
         }
     }
 
@@ -1679,15 +2181,17 @@ class ChatViewModel @Inject constructor(
     }
 
     fun startNewConversation() {
+        val newId = UUID.randomUUID().toString()
         _messages.value = emptyList()
         _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
         _replyToMessage.value = null
         _sessionFiles.value = emptyList()
+        _activeBranchMap.value = emptyMap()
         streamingMessageId = null
-        currentConversationId = UUID.randomUUID().toString()
         _currentStatus.value = null
         _isLoading.value = false
+        loadConversation(newId)
     }
 
     fun loadConversations() {
@@ -1702,72 +2206,168 @@ class ChatViewModel @Inject constructor(
         _replyToMessage.value = null
         _isLoading.value = false
         _currentStatus.value = null
+        _activeBranchMap.value = emptyMap()
+        _sessionFiles.value = emptyList()
+
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("last_active_conversation_id", conversationId).apply()
 
         viewModelScope.launch {
-            chatDao.getMessagesForConversation(conversationId).collectLatest { entities ->
-                val loadedMessages = entities.map { entity ->
-                    val parsedAttachments = if (!entity.attachmentsJson.isNullOrBlank()) {
-                        try {
-                            val arr = org.json.JSONArray(entity.attachmentsJson)
-                            val list = mutableListOf<AttachmentItem>()
-                            for (i in 0 until arr.length()) {
-                                val o = arr.getJSONObject(i)
-                                list.add(
-                                    AttachmentItem(
-                                        uri = o.getString("uri"),
-                                        name = o.getString("name"),
-                                        size = o.optLong("size", 0L),
-                                        isImage = o.optBoolean("isImage", false),
-                                        mimeType = if (o.isNull("mimeType")) null else o.optString("mimeType")
-                                    )
-                                )
-                            }
-                            list
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                    } else if (!entity.attachmentUri.isNullOrBlank()) {
-                        listOf(
-                            AttachmentItem(
-                                uri = entity.attachmentUri,
-                                name = entity.attachmentName ?: "Attachment",
-                                size = 0L,
-                                isImage = entity.attachmentIsImage
-                            )
-                        )
-                    } else {
-                        emptyList()
-                    }
-
-                    Message(
-                        id = entity.id,
-                        role = entity.role,
-                        content = entity.content,
-                        timestamp = entity.timestamp,
-                        attachmentUri = entity.attachmentUri,
-                        attachmentName = entity.attachmentName,
-                        attachmentIsImage = entity.attachmentIsImage,
-                        attachments = parsedAttachments,
-                        feedback = entity.feedback,
-                        isPinned = entity.isPinned
-                    )
+            try {
+                val conv = chatDao.getConversationById(conversationId)
+                if (conv?.modelId != null) {
+                    _selectedModel.value = ModelRegistry.findById(conv.modelId)
                 }
+                if (!conv?.lastKnownCwd.isNullOrBlank()) {
+                    _currentCwd.value = conv.lastKnownCwd
+                }
+            } catch (_: Exception) {}
+        }
+
+        messagesCollectorJob?.cancel()
+        messagesCollectorJob = viewModelScope.launch {
+            combine(
+                chatDao.getMessagesForConversation(conversationId),
+                _activeBranchMap
+            ) { entities, branchMap ->
+                val branchGroups = entities.groupBy { it.parentMessageId?.takeIf { p -> p.isNotBlank() && p != "null" } ?: it.id }
+                branchGroups.values.map { groupEntities ->
+                    val totalBranches = groupEntities.size
+                    val branchGroupId = groupEntities.first().parentMessageId?.takeIf { p -> p.isNotBlank() && p != "null" } ?: groupEntities.first().id
+                    val activeIndex = branchMap[branchGroupId] ?: (totalBranches - 1)
+                    val chosenEntity = groupEntities.find { it.branchIndex == activeIndex } ?: groupEntities.last()
+                    val minTimestamp = groupEntities.minOf { it.timestamp }
+                    entityToMessage(
+                        chosenEntity,
+                        totalBranches = totalBranches,
+                        activeBranchIndex = chosenEntity.branchIndex
+                    ) to minTimestamp
+                }.sortedBy { it.second }.map { it.first }
+            }.collectLatest { loadedMessages ->
                 _messages.value = loadedMessages
 
-                // Extract all file references generated in this conversation
-                val files = loadedMessages.flatMap { msg ->
+                // Extract all file references generated in this conversation from both tools and cached files
+                val toolFiles = loadedMessages.flatMap { msg ->
                     msg.toolExecutions.mapNotNull { it.targetFile }
-                }.filter { it.isNotBlank() }.distinct()
-                _sessionFiles.value = files
+                }.filter { it.isNotBlank() }
+
+                val cachedFiles = try {
+                    fileDao.getFilesForConversationList(conversationId).map { it.remotePath }
+                } catch (_: Exception) { emptyList() }
+
+                val allFiles = (toolFiles + cachedFiles).distinct()
+                _sessionFiles.value = allFiles
             }
         }
     }
 
+    private fun entityToMessage(entity: MessageEntity, totalBranches: Int = 1, activeBranchIndex: Int = 0): Message {
+        val parsedAttachments = if (!entity.attachmentsJson.isNullOrBlank()) {
+            try {
+                val arr = org.json.JSONArray(entity.attachmentsJson)
+                val list = mutableListOf<AttachmentItem>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    list.add(
+                        AttachmentItem(
+                            uri = o.getString("uri"),
+                            name = o.getString("name"),
+                            size = o.optLong("size", 0L),
+                            isImage = o.optBoolean("isImage", false),
+                            mimeType = if (o.isNull("mimeType")) null else o.optString("mimeType")
+                        )
+                    )
+                }
+                list
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } else if (!entity.attachmentUri.isNullOrBlank()) {
+            listOf(
+                AttachmentItem(
+                    uri = entity.attachmentUri,
+                    name = entity.attachmentName ?: "Attachment",
+                    size = 0L,
+                    isImage = entity.attachmentIsImage
+                )
+            )
+        } else {
+            emptyList()
+        }
+
+        val parsedToolExecutions = if (!entity.toolExecutionsJson.isNullOrBlank()) {
+            try {
+                val arr = org.json.JSONArray(entity.toolExecutionsJson)
+                val list = mutableListOf<ToolExecutionItem>()
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    list.add(
+                        ToolExecutionItem(
+                            id = o.optString("id", UUID.randomUUID().toString()),
+                            toolName = o.getString("toolName"),
+                            state = o.optString("state", "DONE"),
+                            command = if (o.isNull("command")) null else o.optString("command"),
+                            targetFile = if (o.isNull("targetFile")) null else o.optString("targetFile"),
+                            parametersSummary = if (o.isNull("parametersSummary")) null else o.optString("parametersSummary"),
+                            output = if (o.isNull("output")) null else o.optString("output"),
+                            durationSeconds = o.optDouble("durationSeconds", 0.0)
+                        )
+                    )
+                }
+                list
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } else emptyList()
+
+        val parsedMemoryUpdates = if (!entity.memoryUpdatesJson.isNullOrBlank()) {
+            try {
+                val arr = org.json.JSONArray(entity.memoryUpdatesJson)
+                val list = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    list.add(arr.getString(i))
+                }
+                list
+            } catch (_: Exception) {
+                emptyList()
+            }
+        } else emptyList()
+
+        return Message(
+            id = entity.id,
+            role = entity.role,
+            content = entity.content,
+            timestamp = entity.timestamp,
+            attachmentUri = entity.attachmentUri,
+            attachmentName = entity.attachmentName,
+            attachmentIsImage = entity.attachmentIsImage,
+            attachments = parsedAttachments,
+            feedback = entity.feedback,
+            isPinned = entity.isPinned,
+            thinking = entity.thinking,
+            toolExecutions = parsedToolExecutions,
+            toolExecution = if (parsedToolExecutions.isNotEmpty()) "Completed ${parsedToolExecutions.last().toolName}" else null,
+            modelName = entity.modelName,
+            replyToContent = entity.replyToContent,
+            replyToRole = entity.replyToRole,
+            memoryUpdates = parsedMemoryUpdates,
+            parentMessageId = entity.parentMessageId,
+            branchIndex = activeBranchIndex,
+            totalBranches = totalBranches
+        )
+    }
+
     fun deleteConversation(conversationId: String) {
         viewModelScope.launch {
-            chatDao.deleteConversation(conversationId)
-            if (currentConversationId == conversationId) {
-                startNewConversation()
+            try {
+                chatDao.deleteMessagesForConversation(conversationId)
+                chatDao.deleteConversation(conversationId)
+                fileDao.deleteFilesForConversation(conversationId)
+                if (currentConversationId == conversationId) {
+                    startNewConversation()
+                }
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to delete conversation $conversationId", e)
             }
         }
     }
