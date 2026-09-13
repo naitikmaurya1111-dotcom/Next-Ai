@@ -500,7 +500,7 @@ fun SettingsScreen(
                         ) {
                             Column(
                                 modifier = Modifier.padding(vertical = 12.dp),
-                                horizontalAlignment = Alignment.CenterVertically,
+                                horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 Icon(
