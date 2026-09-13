@@ -35,7 +35,40 @@ RESUME_FILE_NAME = "SESSION_RESUME.md"
 SNAPSHOT_FILE_NAME = "session_snapshot.json"
 ARCHIVE_FILE_NAME = "nextai_session_latest.tar.gz"
 
-CONVERSATION_ID = os.environ.get("CONVERSATION_ID", "a5b9af8a-4982-4585-b993-23915cd61ec8")
+def get_active_conversation_id() -> str:
+    """Dynamically resolve active conversation ID."""
+    env_id = os.environ.get("CONVERSATION_ID")
+    if env_id and (GEMINI_DIR / "brain" / env_id).exists():
+        return env_id
+    sum_db = GEMINI_DIR / "conversation_summaries.db"
+    if sum_db.exists():
+        try:
+            conn = sqlite3.connect(str(sum_db))
+            c = conn.cursor()
+            c.execute("SELECT conversation_id FROM conversation_summaries WHERE step_count > 0 ORDER BY last_modified_time DESC LIMIT 1;")
+            row = c.fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except Exception:
+            pass
+    return "2fd3f6ca-bd12-4113-8b81-7b9d56153473"
+
+def get_latest_git_info():
+    """Retrieve Git SHA, commit message, and active tag."""
+    sha = "unknown"
+    tag = "v1.0.50"
+    if PROJECT_DIR.exists():
+        try:
+            res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(PROJECT_DIR), capture_output=True, text=True)
+            if res.returncode == 0:
+                sha = res.stdout.strip()
+            res3 = subprocess.run(["git", "describe", "--tags", "--abbrev=0"], cwd=str(PROJECT_DIR), capture_output=True, text=True)
+            if res3.returncode == 0 and res3.stdout.strip():
+                tag = res3.stdout.strip()
+        except Exception:
+            pass
+    return sha, tag
 
 def is_drive_mounted() -> bool:
     """Check if Google Drive is mounted at /content/drive/MyDrive."""
@@ -62,15 +95,19 @@ def flush_sqlite_wal(db_path: Path):
     except Exception as e:
         print(f"  ⚠️ Warning flushing {db_path.name}: {e}")
 
-def generate_session_resume_md(target_path: Path, git_sha: str = "7da0dd9"):
+def generate_session_resume_md(target_path: Path, git_sha: str = None, conv_id: str = None, tag: str = None):
     """Generate comprehensive markdown summary for the model to resume instantly."""
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    active_cid = conv_id or get_active_conversation_id()
+    detected_sha, detected_tag = get_latest_git_info()
+    cur_sha = git_sha or detected_sha
+    cur_tag = tag or detected_tag
     
     content = f"""# 🧠 Next AI & Antigravity Session Resume Context
 > **Last Synced**: `{now_str}`  
-> **Conversation ID**: `{CONVERSATION_ID}`  
-> **Git Head SHA**: `{git_sha}`  
-> **Active App Version**: `v1.1.0`  
+> **Conversation ID**: `{active_cid}`  
+> **Git Head SHA**: `{cur_sha}`  
+> **Active App Version**: `{cur_tag}`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -115,8 +152,8 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.18`
-  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.18/app-debug.apk`
+  - Tag: `{cur_tag}`
+  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases`
 
 ---
 
@@ -124,14 +161,14 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
 - **Location**: `/content/Next-Ai/colab`
 - **Stack**: FastAPI + Uvicorn (Port 8000) + Cloudflare Tunnel (`cloudflared`)
 - **Execution**: Runs `/root/.local/bin/agy -p "<message>" --output-format stream-json --dangerously-skip-permissions`
-- **Session Continuity**: Retains `--conversation {CONVERSATION_ID}` across turns.
+- **Session Continuity**: Retains `--conversation {active_cid}` across turns.
 - **Launcher**: `/content/Next-Ai/colab/start_bridge.sh`
 
 ---
 
 ## 📂 Restored Antigravity State
 - **Conversation DBs**: `/root/.gemini/antigravity-cli/conversations/`
-- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/{CONVERSATION_ID}/`
+- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/{active_cid}/`
 - **History & Summaries**: `/root/.gemini/antigravity-cli/conversation_summaries.db`, `history.jsonl`
 
 ---
@@ -164,15 +201,9 @@ def backup():
     if sum_db.exists():
         flush_sqlite_wal(sum_db)
 
-    # Get Git SHA if available
-    git_sha = "unknown"
-    if PROJECT_DIR.exists():
-        try:
-            res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(PROJECT_DIR), capture_output=True, text=True)
-            if res.returncode == 0:
-                git_sha = res.stdout.strip()
-        except Exception:
-            pass
+    # Get Git info and active conversation
+    git_sha, tag = get_latest_git_info()
+    active_cid = get_active_conversation_id()
 
     # Create isolated temporary staging directory for the archive to prevent race conditions
     temp_dir_obj = tempfile.TemporaryDirectory(prefix="nextai_backup_")
@@ -198,14 +229,14 @@ def backup():
 
         # 2. Generate resume documentation
         resume_md_path = tmp_archive_dir / RESUME_FILE_NAME
-        generate_session_resume_md(resume_md_path, git_sha=git_sha)
+        generate_session_resume_md(resume_md_path, git_sha=git_sha, conv_id=active_cid, tag=tag)
 
         # 3. Create metadata snapshot json
         snapshot_data = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "conversation_id": CONVERSATION_ID,
+            "conversation_id": active_cid,
             "git_sha": git_sha,
-            "app_version": "v1.1.0",
+            "app_version": tag,
             "drive_mounted": is_mounted
         }
         with open(tmp_archive_dir / SNAPSHOT_FILE_NAME, "w") as f:
@@ -259,6 +290,14 @@ def backup():
     size_mb = round(archive_path.stat().st_size / (1024 * 1024), 2)
     print(f"✅ Backup complete in {elapsed}s! Archive size: {size_mb} MB")
     print(f"📄 Resume Context saved to: {target_dir / RESUME_FILE_NAME}")
+
+    # Also trigger CLI chat sync so NextAI_CLI_Chat_History and all session markdown logs stay 100% updated
+    try:
+        from cli_chat_sync import sync as run_cli_chat_sync
+        run_cli_chat_sync()
+    except Exception as e:
+        print(f"⚠️ Warning running cli_chat_sync from backup: {e}")
+
     if not is_mounted:
         print("💡 NOTE: Google Drive is not mounted yet. Backup is safely stored in local staging.")
         print("   Run `drive.mount('/content/drive')` in Colab to sync directly to Google Drive.")
@@ -327,9 +366,13 @@ def restore():
         try:
             token = token_file.read_text().strip()
             os.environ["GITHUB_TOKEN"] = token
+            subprocess.run(["git", "config", "--global", "credential.helper", "store"], check=False)
+            with open("/root/.git-credentials", "w") as gf:
+                gf.write(f"https://x-access-token:{token}@github.com\n")
+            os.chmod("/root/.git-credentials", 0o600)
             if PROJECT_DIR.exists():
                 subprocess.run(
-                    ["git", "remote", "set-url", "origin", f"https://naitikmaurya1111-dotcom:{token}@github.com/naitikmaurya1111-dotcom/Next-Ai.git"],
+                    ["git", "remote", "set-url", "origin", f"https://x-access-token:{token}@github.com/naitikmaurya1111-dotcom/Next-Ai.git"],
                     cwd=str(PROJECT_DIR),
                     check=False
                 )

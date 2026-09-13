@@ -9,6 +9,7 @@ android/.externalNativeBuild/
 android/.cxx/
 android/*.iml
 android/**/*.iml
+android/.kotlin/
 
 # Keystore files (NEVER commit these)
 *.jks

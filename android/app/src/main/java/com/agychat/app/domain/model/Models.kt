@@ -1,7 +1,9 @@
 package com.agychat.app.domain.model
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.Serializable
 
+@Immutable
 @Serializable
 data class ToolExecutionItem(
     val id: String = "",
@@ -14,6 +16,7 @@ data class ToolExecutionItem(
     val durationSeconds: Double = 0.0
 )
 
+@Immutable
 @Serializable
 data class AttachmentItem(
     val uri: String,
@@ -23,6 +26,7 @@ data class AttachmentItem(
     val mimeType: String? = null
 )
 
+@Immutable
 @Serializable
 data class Message(
     val id: String,
@@ -70,6 +74,7 @@ data class Message(
         }
 }
 
+@Immutable
 @Serializable
 data class Conversation(
     val id: String,
@@ -90,6 +95,7 @@ data class WorkspaceState(
     val isConnected: Boolean = false
 )
 
+@Immutable
 @Serializable
 data class MemoryItem(
     val id: String,
@@ -217,6 +223,7 @@ enum class ThinkingLevel(
     }
 }
 
+@Immutable
 @Serializable
 data class AiModel(
     val id: String,

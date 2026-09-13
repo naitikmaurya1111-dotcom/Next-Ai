@@ -1,6 +1,7 @@
 package com.agychat.app.ui.chat
 
 import android.content.Context
+import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agychat.app.data.local.ChatDao
@@ -44,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.util.Log
 import org.json.JSONObject
+import java.io.File
 import java.util.UUID
 import javax.inject.Inject
 
@@ -52,10 +54,19 @@ data class FileViewerData(
     val path: String,
     val size: Long = 0L,
     val content: String = "",
+    val bytes: ByteArray? = null,
+    val localDiskFile: File? = null,
+    val isBinary: Boolean = false,
+    val mimeType: String = "",
     val error: String? = null,
     val isLoading: Boolean = false,
     val isOfflineCached: Boolean = false
-)
+) {
+    val isPdf: Boolean get() = filename.lowercase().endsWith(".pdf") || mimeType == "application/pdf"
+    val isImage: Boolean get() = mimeType.startsWith("image/") || filename.lowercase().let {
+        it.endsWith(".png") || it.endsWith(".jpg") || it.endsWith(".jpeg") || it.endsWith(".webp") || it.endsWith(".gif")
+    }
+}
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -767,65 +778,129 @@ class ChatViewModel @Inject constructor(
     }
 
     fun fetchAndOpenFile(rawPathOrUrl: String) {
-        val cleanPath = cleanFilePathOrUrl(rawPathOrUrl)
-        val filename = cleanPath.substringAfterLast("/").ifBlank { "file.txt" }
-
-        // 1. Immediately check local phone storage cache (0ms, 100% offline!)
-        viewModelScope.launch {
-            val cached = localFileManager.getCachedFile(cleanPath)
-            if (cached != null && cached.content.isNotBlank()) {
-                _activeFileViewer.value = FileViewerData(
-                    filename = cached.filename,
-                    path = cached.remotePath,
-                    size = cached.size,
-                    content = cached.content,
-                    isLoading = false,
-                    isOfflineCached = true
-                )
-                // If offline, we are done! No internet needed!
-                if (_connectionState.value != ConnectionState.CONNECTED) {
-                    return@launch
-                }
-            } else {
-                _activeFileViewer.value = FileViewerData(
-                    filename = filename,
-                    path = cleanPath,
-                    size = 0L,
-                    content = "",
-                    isLoading = true,
-                    isOfflineCached = false
-                )
-            }
-
-            // If online, query bridge for newest version or remote fetch
-            if (_connectionState.value == ConnectionState.CONNECTED) {
+        // -1. Check if rawPathOrUrl is a normal web URL (e.g. https://google.com, https://github.com)
+        if (rawPathOrUrl.startsWith("http://", ignoreCase = true) || rawPathOrUrl.startsWith("https://", ignoreCase = true)) {
+            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+            val base = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+            val isColabEndpoint = rawPathOrUrl.contains("/api/file") ||
+                (base.isNotBlank() && rawPathOrUrl.contains(base.removePrefix("wss://").removePrefix("ws://").removeSuffix("/ws")))
+            if (!isColabEndpoint) {
                 try {
-                    val json = JSONObject().apply {
-                        put("action", "get_file")
-                        put("path", cleanPath)
+                    val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(rawPathOrUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    webSocketClient.sendMessage(json.toString())
-                } catch (t: Throwable) {
-                    Log.e("ChatViewModel", "Failed to send WS get_file", t)
+                    context.startActivity(browserIntent)
+                    return
+                } catch (e: Exception) {
+                    Log.w("ChatViewModel", "Could not open web link: $rawPathOrUrl", e)
                 }
-            } else if (cached == null) {
-                _activeFileViewer.value = FileViewerData(
-                    filename = filename,
-                    path = cleanPath,
-                    error = "Offline: File is not yet cached in phone storage. Connect to Colab to fetch it.",
-                    isLoading = false
-                )
             }
         }
 
-        // 2. OkHttp fallback in background for resilience when connected
+        val cleanPath = cleanFilePathOrUrl(rawPathOrUrl)
+        val filename = cleanPath.substringAfterLast("/").ifBlank { "file.txt" }
+
+        // 0. Check if rawPathOrUrl is a local content:// or file:// URI from user attachment
+        if (rawPathOrUrl.startsWith("content://") || rawPathOrUrl.startsWith("file://")) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val uri = Uri.parse(rawPathOrUrl)
+                    val mime = context.contentResolver.getType(uri) ?: localFileManager.detectMimeType(filename)
+                    val isBin = localFileManager.isBinaryFile(mime, filename)
+                    val bytes = try {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    } catch (_: Throwable) {
+                        if (uri.scheme == "file") {
+                            try { File(uri.path ?: "").readBytes() } catch (_: Throwable) { null }
+                        } else null
+                    }
+                    if (bytes != null) {
+                        val entity = localFileManager.cacheBinaryFile(currentConversationId, uri.toString(), filename, bytes)
+                        val diskFile = File(entity.localPath)
+                        withContext(Dispatchers.Main) {
+                            _activeFileViewer.value = FileViewerData(
+                                filename = filename,
+                                path = uri.toString(),
+                                size = bytes.size.toLong(),
+                                content = if (isBin) "" else try { String(bytes, Charsets.UTF_8) } catch (_: Throwable) { "" },
+                                bytes = bytes,
+                                localDiskFile = diskFile,
+                                isBinary = isBin,
+                                mimeType = mime,
+                                isLoading = false,
+                                isOfflineCached = true
+                            )
+                        }
+                        return@launch
+                    }
+                } catch (t: Throwable) {
+                    Log.e("ChatViewModel", "Failed to read local attachment URI: $rawPathOrUrl", t)
+                }
+            }
+        }
+
+        // 1. Immediately check local phone storage cache (0ms, 100% offline!)
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                if (_connectionState.value != ConnectionState.CONNECTED) return@launch
-                val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
-                val base = _serverUrl.value.ifBlank {
-                    prefs.getString("server_url", "") ?: ""
+                val cached = localFileManager.getCachedFile(cleanPath)
+                if (cached != null) {
+                    val diskFile = File(cached.localPath)
+                    val isBin = localFileManager.isBinaryFile(cached.mimeType, cached.filename)
+                    // Safeguard: only load in-memory byte buffer for small binaries (<= 2MB) to prevent OOM
+                    val bytes = if (isBin && diskFile.exists() && diskFile.length() <= 2 * 1024 * 1024) {
+                        try { diskFile.readBytes() } catch (_: Throwable) { null }
+                    } else null
+
+                    withContext(Dispatchers.Main) {
+                        _activeFileViewer.value = FileViewerData(
+                            filename = cached.filename,
+                            path = cached.remotePath,
+                            size = cached.size,
+                            content = cached.content,
+                            bytes = bytes,
+                            localDiskFile = if (diskFile.exists()) diskFile else null,
+                            isBinary = isBin,
+                            mimeType = cached.mimeType,
+                            isLoading = false,
+                            isOfflineCached = true
+                        )
+                    }
+                    // Offline or cached: immediate display, zero network waiting
+                    return@launch
                 }
+
+                // Not in local cache
+                withContext(Dispatchers.Main) {
+                    _activeFileViewer.value = FileViewerData(
+                        filename = filename,
+                        path = cleanPath,
+                        size = 0L,
+                        content = "",
+                        mimeType = localFileManager.detectMimeType(filename),
+                        isLoading = true,
+                        isOfflineCached = false
+                    )
+                }
+
+                if (_connectionState.value != ConnectionState.CONNECTED) {
+                    withContext(Dispatchers.Main) {
+                        _activeFileViewer.value = FileViewerData(
+                            filename = filename,
+                            path = cleanPath,
+                            mimeType = localFileManager.detectMimeType(filename),
+                            error = "Offline: File is not yet cached in phone storage. Connect to Colab to fetch it.",
+                            isLoading = false,
+                            isOfflineCached = false
+                        )
+                    }
+                    return@launch
+                }
+
+                // Online: fetch from Colab with timeout & streaming safeguards
+                val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                val base = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+                var loadedSuccessfully = false
+
                 if (base.isNotBlank()) {
                     val httpUrl = when {
                         base.startsWith("ws://") -> base.replace("ws://", "http://")
@@ -833,56 +908,128 @@ class ChatViewModel @Inject constructor(
                         !base.startsWith("http") -> "https://$base"
                         else -> base
                     }
-                    val cleanBase = httpUrl.removeSuffix("/").removeSuffix("/ws")
-                    val fullUrl = "$cleanBase/api/file?path=${Uri.encode(cleanPath)}"
+                    try {
+                        val entity = localFileManager.fetchAndCacheColabFile(httpUrl, cleanPath, currentConversationId)
+                        if (entity != null) {
+                            val diskFile = File(entity.localPath)
+                            val isBin = localFileManager.isBinaryFile(entity.mimeType, entity.filename)
+                            val bytes = if (isBin && diskFile.exists() && diskFile.length() <= 2 * 1024 * 1024) {
+                                try { diskFile.readBytes() } catch (_: Throwable) { null }
+                            } else null
 
-                    val request = okhttp3.Request.Builder().url(fullUrl).build()
-                    val response = okhttp3.OkHttpClient().newCall(request).execute()
-                    if (response.isSuccessful) {
-                        val body = response.body?.string() ?: ""
-                        val respJson = JSONObject(body)
-                        if (respJson.optString("status") == "ok") {
-                            val fName = respJson.optString("filename", filename)
-                            val fPath = respJson.optString("path", cleanPath)
-                            val fSize = respJson.optLong("size", 0L)
-                            val fContent = respJson.optString("content", "")
-                            localFileManager.cacheFile(currentConversationId, fPath, fName, fContent)
                             withContext(Dispatchers.Main) {
                                 _activeFileViewer.value = FileViewerData(
-                                    filename = fName,
-                                    path = fPath,
-                                    size = fSize,
-                                    content = fContent,
+                                    filename = entity.filename,
+                                    path = entity.remotePath,
+                                    size = entity.size,
+                                    content = entity.content,
+                                    bytes = bytes,
+                                    localDiskFile = if (diskFile.exists()) diskFile else null,
+                                    isBinary = isBin,
+                                    mimeType = entity.mimeType,
                                     isLoading = false,
                                     isOfflineCached = true
                                 )
                             }
+                            loadedSuccessfully = true
                         }
+                    } catch (t: Throwable) {
+                        Log.w("ChatViewModel", "HTTP fetchAndCacheColabFile failed: ${t.message}")
+                    }
+                }
+
+                // If HTTP did not succeed, fallback to WebSocket get_file
+                if (!loadedSuccessfully && _connectionState.value == ConnectionState.CONNECTED) {
+                    try {
+                        val json = JSONObject().apply {
+                            put("action", "get_file")
+                            put("path", cleanPath)
+                        }
+                        webSocketClient.sendMessage(json.toString())
+                    } catch (t: Throwable) {
+                        Log.e("ChatViewModel", "Failed to send WS get_file", t)
                     }
                 }
             } catch (t: Throwable) {
-                Log.w("ChatViewModel", "OkHttp fallback get_file failed: ${t.message}")
+                Log.e("ChatViewModel", "Unhandled error in fetchAndOpenFile", t)
+                withContext(Dispatchers.Main) {
+                    _activeFileViewer.value = FileViewerData(
+                        filename = filename,
+                        path = cleanPath,
+                        error = "Could not load file: ${t.message}",
+                        isLoading = false
+                    )
+                }
             }
         }
     }
 
     private fun cleanFilePathOrUrl(raw: String): String {
         var s = raw.trim()
+        s = s.trim('(', '[', '{', '\'', '"', '<', '`')
         if (s.startsWith("file://")) s = s.removePrefix("file://")
         if (s.contains("?path=")) s = s.substringAfter("?path=").substringBefore("&")
+        try {
+            s = java.net.URLDecoder.decode(s, "UTF-8")
+        } catch (_: Throwable) {}
+        s = s.trim()
+            .trimEnd('.', ',', ':', ';', ')', ']', '}', '\'', '"', '>', '`')
+            .trimStart('(', '[', '{', '\'', '"', '<', '`')
         return s.trim()
     }
 
     fun saveActiveFileToPhone(onResult: (Boolean, String) -> Unit) {
         val file = _activeFileViewer.value ?: return
-        if (file.content.isBlank()) {
-            onResult(false, "File content is empty")
-            return
-        }
-        viewModelScope.launch {
-            val (success, msg) = localFileManager.exportToPublicDownloads(file.filename, file.content)
+        viewModelScope.launch(Dispatchers.IO) {
+            val (success, msg) = when {
+                file.localDiskFile != null && file.localDiskFile.exists() -> {
+                    // Stream directly from disk file to Downloads without allocating entire file into RAM
+                    localFileManager.exportToPublicDownloads(file.localDiskFile, file.filename)
+                }
+                file.bytes != null && file.bytes.isNotEmpty() -> {
+                    localFileManager.exportToPublicDownloads(file.filename, file.bytes)
+                }
+                file.content.isNotBlank() -> {
+                    localFileManager.exportToPublicDownloads(file.filename, file.content)
+                }
+                else -> {
+                    Pair(false, "File content is empty or not yet loaded")
+                }
+            }
             withContext(Dispatchers.Main) {
                 onResult(success, msg)
+            }
+        }
+    }
+
+    fun openActiveFileInExternalApp(context: Context, onResult: (Boolean, String) -> Unit) {
+        val fileData = _activeFileViewer.value ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val diskFile: File? = fileData.localDiskFile?.takeIf { it.exists() } ?: run {
+                val tempFile = File(context.cacheDir, fileData.filename)
+                try {
+                    if (fileData.bytes != null) {
+                        tempFile.writeBytes(fileData.bytes)
+                        tempFile
+                    } else if (fileData.content.isNotBlank()) {
+                        tempFile.writeText(fileData.content, Charsets.UTF_8)
+                        tempFile
+                    } else null
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            if (diskFile == null || !diskFile.exists()) {
+                withContext(Dispatchers.Main) {
+                    onResult(false, "File not available on local device storage")
+                }
+                return@launch
+            }
+
+            val res = localFileManager.openFileInExternalApp(context, diskFile)
+            withContext(Dispatchers.Main) {
+                onResult(res.first, res.second)
             }
         }
     }
@@ -916,24 +1063,39 @@ class ChatViewModel @Inject constructor(
         connectionJob?.cancel()
         connectionJob = viewModelScope.launch(Dispatchers.IO + connectionExceptionHandler) {
             try {
-                webSocketClient.connect(cleanUrl).collectLatest { event ->
+                webSocketClient.connect(cleanUrl).collect { event ->
                     when (event) {
                         is WsEvent.Connected -> {
                             _connectionState.value = ConnectionState.CONNECTED
                             _currentStatus.value = null
                             reconnectAttempts = 0
                             reconnectJob?.cancel()
+
+                            // Automatically resume conversation stream if disconnected during active generation
+                            if (_isLoading.value || streamingMessageId != null) {
+                                try {
+                                    val resumePayload = JSONObject().apply {
+                                        put("action", "resume_conversation")
+                                        put("conversation_id", currentConversationId)
+                                        put("after_seq", lastReceivedSeq)
+                                    }
+                                    webSocketClient.sendMessage(resumePayload.toString())
+                                    Log.i("ChatViewModel", "Sent resume_conversation after reconnect, after_seq=$lastReceivedSeq")
+                                } catch (t: Throwable) {
+                                    Log.e("ChatViewModel", "Failed to send resume_conversation", t)
+                                }
+                            }
                         }
                         is WsEvent.Message -> handleIncomingMessage(event.text)
                         is WsEvent.Error -> {
                             _connectionState.value = ConnectionState.ERROR
-                            _isLoading.value = false
-                            _currentStatus.value = "Connection lost. Retrying..."
+                            persistCurrentStreamingState()
+                            _currentStatus.value = "Connection lost. Reconnecting..."
                             scheduleAutoReconnect()
                         }
                         is WsEvent.Closed -> {
                             _connectionState.value = ConnectionState.DISCONNECTED
-                            _isLoading.value = false
+                            persistCurrentStreamingState()
                             _currentStatus.value = null
                             scheduleAutoReconnect()
                         }
@@ -944,7 +1106,7 @@ class ChatViewModel @Inject constructor(
             } catch (t: Throwable) {
                 Log.e("ChatViewModel", "Exception in WebSocket event stream", t)
                 _connectionState.value = ConnectionState.ERROR
-                _isLoading.value = false
+                persistCurrentStreamingState()
                 _currentStatus.value = "Connection failed: ${t.message ?: "Retrying..."}"
                 scheduleAutoReconnect()
             }
@@ -963,18 +1125,18 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    // Auto-reconnect with exponential backoff
+    // Auto-reconnect with exponential backoff and seamless resume
     private var reconnectJob: Job? = null
     private var reconnectAttempts = 0
+    private var lastReceivedSeq = -1
 
     private fun scheduleAutoReconnect() {
         reconnectJob?.cancel()
-        if (reconnectAttempts >= 5) {
-            _currentStatus.value = "Connection failed. Tap to retry manually."
-            reconnectAttempts = 0
-            return
+        val delayMs = if (reconnectAttempts < 5) {
+            minOf(1000L * (1 shl reconnectAttempts), 16_000L) // 1s, 2s, 4s, 8s, 16s
+        } else {
+            8_000L // Keep retrying every 8s so tunnel reconnects automatically
         }
-        val delayMs = minOf(2000L * (1 shl reconnectAttempts), 30_000L) // 2s, 4s, 8s, 16s, 30s
         reconnectAttempts++
         reconnectJob = viewModelScope.launch(Dispatchers.IO + connectionExceptionHandler) {
             _currentStatus.value = "Reconnecting in ${delayMs / 1000}s... (attempt $reconnectAttempts)"
@@ -983,6 +1145,42 @@ class ChatViewModel @Inject constructor(
                 reconnect()
             }
         }
+    }
+
+    fun onAppResume() {
+        if (_connectionState.value != ConnectionState.CONNECTED) {
+            Log.i("ChatViewModel", "onAppResume: initiating tunnel reconnect")
+            reconnectJob?.cancel()
+            reconnectAttempts = 0
+            reconnect()
+        } else {
+            // Verify socket responsiveness after being backgrounded
+            try {
+                webSocketClient.sendMessage(JSONObject().apply { put("action", "ping") }.toString())
+            } catch (t: Throwable) {
+                Log.w("ChatViewModel", "onAppResume: socket ping failed, reconnecting", t)
+                reconnect()
+            }
+        }
+    }
+
+    private var lastStreamSaveTimestamp = 0L
+    private fun maybeThrottleSaveStreamingMessage(msg: Message) {
+        val now = System.currentTimeMillis()
+        if (now - lastStreamSaveTimestamp > 500L) {
+            lastStreamSaveTimestamp = now
+            saveMessageToDb(msg)
+        }
+    }
+
+    fun persistCurrentStreamingState() {
+        val id = streamingMessageId
+        val msg = if (id != null) {
+            _messages.value.find { it.id == id }
+        } else {
+            _messages.value.lastOrNull { it.role == "assistant" && it.isStreaming }
+        } ?: return
+        saveMessageToDb(msg)
     }
 
     private fun sanitizeChunk(raw: String): String {
@@ -997,6 +1195,10 @@ class ChatViewModel @Inject constructor(
     private fun handleIncomingMessage(rawText: String) {
         try {
             val json = JSONObject(rawText)
+            if (json.has("seq")) {
+                val s = json.optInt("seq", -1)
+                if (s >= 0) lastReceivedSeq = s
+            }
             val type = json.optString("type", "chunk")
             val content = json.optString("content", "")
 
@@ -1054,24 +1256,116 @@ class ChatViewModel @Inject constructor(
                 }
                 "file_data" -> {
                     val status = json.optString("status", "ok")
-                    if (status == "ok" || status == "success") {
-                        val fn = json.optString("filename", "file.txt")
-                        val fp = json.optString("path", "")
-                        val fsize = json.optLong("size", 0L)
-                        val fcontent = json.optString("content", "")
-                        viewModelScope.launch {
-                            localFileManager.cacheFile(currentConversationId, fp, fn, fcontent)
+                    val fn = json.optString("filename", "file.txt")
+                    val fp = json.optString("path", "")
+                    val fsize = json.optLong("size", 0L)
+                    val mime = localFileManager.detectMimeType(fn)
+
+                    if (status == "too_large") {
+                        val dlUrl = json.optString("download_url", "")
+                        if (dlUrl.isNotBlank()) {
+                            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                            val base = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+                            val httpUrl = when {
+                                base.startsWith("ws://") -> base.replace("ws://", "http://")
+                                base.startsWith("wss://") -> base.replace("wss://", "https://")
+                                !base.startsWith("http") -> "https://$base"
+                                else -> base
+                            }.removeSuffix("/").removeSuffix("/ws")
+                            val fullDlUrl = if (dlUrl.startsWith("http")) dlUrl else "$httpUrl$dlUrl"
+
+                            viewModelScope.launch(Dispatchers.IO) {
+                                val entity = localFileManager.downloadAndCacheRemoteFile(fullDlUrl, fp, currentConversationId)
+                                if (entity != null) {
+                                    val diskFile = File(entity.localPath)
+                                    val isBin = localFileManager.isBinaryFile(entity.mimeType, entity.filename)
+                                    val bytes = if (isBin && diskFile.exists() && diskFile.length() <= 2 * 1024 * 1024) try { diskFile.readBytes() } catch (_: Throwable) { null } else null
+                                    withContext(Dispatchers.Main) {
+                                        _activeFileViewer.value = FileViewerData(
+                                            filename = entity.filename,
+                                            path = entity.remotePath,
+                                            size = entity.size,
+                                            content = entity.content,
+                                            bytes = bytes,
+                                            localDiskFile = if (diskFile.exists()) diskFile else null,
+                                            isBinary = isBin,
+                                            mimeType = entity.mimeType,
+                                            isLoading = false,
+                                            isOfflineCached = true
+                                        )
+                                    }
+                                } else {
+                                    withContext(Dispatchers.Main) {
+                                        _activeFileViewer.value = _activeFileViewer.value?.copy(
+                                            error = "Failed to stream large file from Colab server",
+                                            isLoading = false
+                                        )
+                                    }
+                                }
+                            }
                         }
-                        _activeFileViewer.value = FileViewerData(
-                            filename = fn,
-                            path = fp,
-                            size = fsize,
-                            content = fcontent,
-                            isLoading = false,
-                            isOfflineCached = true
-                        )
+                    } else if (status == "ok" || status == "success") {
+                        val isBinary = json.optBoolean("is_binary", false)
+                        viewModelScope.launch(Dispatchers.IO) {
+                            try {
+                                if (isBinary) {
+                                    val b64 = json.optString("base64_content", "")
+                                    val bytes = try { Base64.decode(b64, Base64.DEFAULT) } catch (t: Throwable) { null }
+                                    if (bytes != null) {
+                                        val entity = localFileManager.cacheBinaryFile(currentConversationId, fp, fn, bytes)
+                                        val diskFile = File(entity.localPath)
+                                        val displayBytes = if (bytes.size <= 2 * 1024 * 1024) bytes else null
+                                        withContext(Dispatchers.Main) {
+                                            _activeFileViewer.value = FileViewerData(
+                                                filename = fn,
+                                                path = fp,
+                                                size = fsize,
+                                                bytes = displayBytes,
+                                                localDiskFile = diskFile,
+                                                isBinary = true,
+                                                mimeType = mime,
+                                                isLoading = false,
+                                                isOfflineCached = true
+                                            )
+                                        }
+                                    } else {
+                                        withContext(Dispatchers.Main) {
+                                            _activeFileViewer.value = _activeFileViewer.value?.copy(
+                                                error = "Could not decode file content (out of memory)",
+                                                isLoading = false
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    val fcontent = json.optString("content", "")
+                                    val entity = localFileManager.cacheFile(currentConversationId, fp, fn, fcontent)
+                                    val diskFile = File(entity.localPath)
+                                    withContext(Dispatchers.Main) {
+                                        _activeFileViewer.value = FileViewerData(
+                                            filename = fn,
+                                            path = fp,
+                                            size = fsize,
+                                            content = fcontent,
+                                            localDiskFile = diskFile,
+                                            isBinary = false,
+                                            mimeType = mime,
+                                            isLoading = false,
+                                            isOfflineCached = true
+                                        )
+                                    }
+                                }
+                            } catch (t: Throwable) {
+                                Log.e("ChatViewModel", "Error processing file_data event", t)
+                                withContext(Dispatchers.Main) {
+                                    _activeFileViewer.value = _activeFileViewer.value?.copy(
+                                        error = "Error loading file: ${t.message}",
+                                        isLoading = false
+                                    )
+                                }
+                            }
+                        }
                     } else {
-                        val errMsg = json.optString("error", "File not found on Colab server")
+                        val errMsg = json.optString("error", json.optString("message", "File not found on Colab server"))
                         _activeFileViewer.value = _activeFileViewer.value?.copy(
                             error = errMsg,
                             isLoading = false
@@ -1107,8 +1401,8 @@ class ChatViewModel @Inject constructor(
                     // Ignore unrecognized event types to prevent distorted syntax leakage
                 }
             }
-        } catch (e: Exception) {
-            // Never append unparsed JSON or raw control text directly into message content
+        } catch (t: Throwable) {
+            Log.e("ChatViewModel", "Uncaught error in handleIncomingMessage", t)
         }
     }
 
@@ -1229,8 +1523,45 @@ class ChatViewModel @Inject constructor(
                 ?: paramsObj?.optString("content")?.takeIf { it.isNotBlank() }
                 ?: paramsObj?.optString("ReplacementContent")?.takeIf { it.isNotBlank() }
             if (!writtenContent.isNullOrBlank()) {
-                viewModelScope.launch {
-                    localFileManager.cacheFile(currentConversationId, targetFile, null, writtenContent)
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        localFileManager.cacheFile(currentConversationId, targetFile, null, writtenContent)
+                    } catch (_: Throwable) {}
+                }
+            } else if ((toolName == "view_file" || toolName == "read_file") && output.isNotBlank()) {
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        localFileManager.cacheFile(currentConversationId, targetFile, null, output)
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+        if (toolName == "generate_image") {
+            val imgName = paramsObj?.optString("ImageName")
+            val imgRegex = Regex("""(?:file://|/content/|/root/|/tmp/)[^\s\)\]'"]+\.(?:png|jpg|jpeg|webp)""")
+            val imgPath = imgRegex.find(output)?.value ?: imgName?.let { "/tmp/$it.png" }
+            if (!imgPath.isNullOrBlank()) {
+                val cleanImg = cleanFilePathOrUrl(imgPath)
+                if (!_sessionFiles.value.contains(cleanImg)) {
+                    _sessionFiles.value = _sessionFiles.value + cleanImg
+                }
+                viewModelScope.launch(Dispatchers.IO) {
+                    try {
+                        if (localFileManager.getCachedFile(cleanImg) == null) {
+                            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                            val base = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+                            if (base.isNotBlank() && _connectionState.value == ConnectionState.CONNECTED) {
+                                val httpUrl = when {
+                                    base.startsWith("ws://") -> base.replace("ws://", "http://")
+                                    base.startsWith("wss://") -> base.replace("wss://", "https://")
+                                    !base.startsWith("http") -> "https://$base"
+                                    else -> base
+                                }.removeSuffix("/").removeSuffix("/ws")
+                                val dlUrl = "$httpUrl/api/file/download?path=${Uri.encode(cleanImg)}"
+                                localFileManager.downloadAndCacheRemoteFile(dlUrl, cleanImg, currentConversationId)
+                            }
+                        }
+                    } catch (_: Throwable) {}
                 }
             }
         }
@@ -1314,23 +1645,35 @@ class ChatViewModel @Inject constructor(
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == streamingMessageId }
 
+        val targetMsg: Message
         if (idx >= 0) {
             val cur = list[idx]
-            list[idx] = cur.copy(
+            targetMsg = cur.copy(
                 content = cur.content + cleanChunk,
                 isStreaming = true,
                 isThinking = false
             )
-        } else if (_isLoading.value) {
-            val newId = UUID.randomUUID().toString()
-            streamingMessageId = newId
-            val initialUpdates = synchronized(pendingMemoryUpdates) {
-                val copy = pendingMemoryUpdates.toList()
-                pendingMemoryUpdates.clear()
-                copy
-            }
-            list.add(
-                Message(
+            list[idx] = targetMsg
+        } else {
+            val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
+            if (lastAssistantIdx >= 0 && (list[lastAssistantIdx].isStreaming || _isLoading.value || list[lastAssistantIdx].content.isBlank() || list[lastAssistantIdx].thinking != null)) {
+                val cur = list[lastAssistantIdx]
+                streamingMessageId = cur.id
+                targetMsg = cur.copy(
+                    content = cur.content + cleanChunk,
+                    isStreaming = true,
+                    isThinking = false
+                )
+                list[lastAssistantIdx] = targetMsg
+            } else {
+                val newId = UUID.randomUUID().toString()
+                streamingMessageId = newId
+                val initialUpdates = synchronized(pendingMemoryUpdates) {
+                    val copy = pendingMemoryUpdates.toList()
+                    pendingMemoryUpdates.clear()
+                    copy
+                }
+                targetMsg = Message(
                     id = newId,
                     role = "assistant",
                     content = cleanChunk,
@@ -1341,10 +1684,12 @@ class ChatViewModel @Inject constructor(
                     parentMessageId = streamingParentMessageId,
                     branchIndex = streamingBranchIndex
                 )
-            )
+                list.add(targetMsg)
+            }
         }
         _messages.value = list
         _isLoading.value = true
+        maybeThrottleSaveStreamingMessage(targetMsg)
     }
 
     private fun appendThinkingChunk(chunk: String) {
@@ -1355,24 +1700,37 @@ class ChatViewModel @Inject constructor(
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == streamingMessageId }
 
+        val targetMsg: Message
         if (idx >= 0) {
             val cur = list[idx]
             val prevThinking = cur.thinking ?: ""
-            list[idx] = cur.copy(
+            targetMsg = cur.copy(
                 thinking = prevThinking + cleanChunk,
                 isStreaming = true,
                 isThinking = true
             )
-        } else if (_isLoading.value) {
-            val newId = UUID.randomUUID().toString()
-            streamingMessageId = newId
-            val initialUpdates = synchronized(pendingMemoryUpdates) {
-                val copy = pendingMemoryUpdates.toList()
-                pendingMemoryUpdates.clear()
-                copy
-            }
-            list.add(
-                Message(
+            list[idx] = targetMsg
+        } else {
+            val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
+            if (lastAssistantIdx >= 0 && (list[lastAssistantIdx].isStreaming || _isLoading.value || list[lastAssistantIdx].content.isBlank())) {
+                val cur = list[lastAssistantIdx]
+                streamingMessageId = cur.id
+                val prevThinking = cur.thinking ?: ""
+                targetMsg = cur.copy(
+                    thinking = prevThinking + cleanChunk,
+                    isStreaming = true,
+                    isThinking = true
+                )
+                list[lastAssistantIdx] = targetMsg
+            } else {
+                val newId = UUID.randomUUID().toString()
+                streamingMessageId = newId
+                val initialUpdates = synchronized(pendingMemoryUpdates) {
+                    val copy = pendingMemoryUpdates.toList()
+                    pendingMemoryUpdates.clear()
+                    copy
+                }
+                targetMsg = Message(
                     id = newId,
                     role = "assistant",
                     content = "",
@@ -1384,10 +1742,12 @@ class ChatViewModel @Inject constructor(
                     parentMessageId = streamingParentMessageId,
                     branchIndex = streamingBranchIndex
                 )
-            )
+                list.add(targetMsg)
+            }
         }
         _messages.value = list
         _isLoading.value = true
+        maybeThrottleSaveStreamingMessage(targetMsg)
     }
 
     private fun updateToolStatus(toolText: String) {
@@ -1433,6 +1793,37 @@ class ChatViewModel @Inject constructor(
                     } catch (_: Exception) {}
                 }
             }
+
+            // Background pre-cache any referenced files or artifacts in the message for instant offline availability
+            val fileRegex = Regex("""(?:file://|/content/|/root/|/tmp/)[^\s\)\]'"]+""")
+            val matches = fileRegex.findAll(resolvedContent).map { cleanFilePathOrUrl(it.value) }.filter { it.isNotBlank() }.toSet()
+            if (matches.isNotEmpty()) {
+                val currentSet = _sessionFiles.value.toMutableSet()
+                currentSet.addAll(matches)
+                _sessionFiles.value = currentSet.toList()
+
+                viewModelScope.launch(Dispatchers.IO) {
+                    for (fPath in matches) {
+                        try {
+                            val clean = cleanFilePathOrUrl(fPath)
+                            if (localFileManager.getCachedFile(clean) == null) {
+                                val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+                                val base = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+                                if (base.isNotBlank() && _connectionState.value == ConnectionState.CONNECTED) {
+                                    val httpUrl = when {
+                                        base.startsWith("ws://") -> base.replace("ws://", "http://")
+                                        base.startsWith("wss://") -> base.replace("wss://", "https://")
+                                        !base.startsWith("http") -> "https://$base"
+                                        else -> base
+                                    }.removeSuffix("/").removeSuffix("/ws")
+                                    val dlUrl = "$httpUrl/api/file/download?path=${Uri.encode(clean)}"
+                                    localFileManager.downloadAndCacheRemoteFile(dlUrl, clean, currentConversationId)
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }
+            }
         }
         streamingMessageId = null
         streamingParentMessageId = null
@@ -1468,6 +1859,7 @@ class ChatViewModel @Inject constructor(
                 put("conversation_id", currentConversationId)
             }
             webSocketClient.sendMessage(cancelPayload.toString())
+            lastReceivedSeq = -1
             finalizeStreamingMessage()
             _isLoading.value = false
             _currentStatus.value = "Generation stopped"
@@ -1561,30 +1953,42 @@ class ChatViewModel @Inject constructor(
             saveMessageToDb(userMessage)
         }
 
-        // Encode files to base64
-        val filesArray = org.json.JSONArray()
-        for (att in attachments) {
-            try {
-                val uri = Uri.parse(att.uri)
-                context.contentResolver.openInputStream(uri)?.use { stream ->
-                    val bytes = stream.readBytes()
-                    if (bytes.size <= 10 * 1024 * 1024) {
-                        val fileB64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                        val fObj = JSONObject().apply {
-                            put("name", att.name)
-                            put("is_image", att.isImage)
-                            put("mime_type", att.mimeType ?: if (att.isImage) "image/jpeg" else "application/octet-stream")
-                            put("data", fileB64)
-                        }
-                        filesArray.put(fObj)
+        viewModelScope.launch(Dispatchers.IO) {
+            // Encode files to base64 strictly on Dispatchers.IO to prevent UI freeze and OOM
+            val filesArray = org.json.JSONArray()
+            for (att in attachments) {
+                try {
+                    val uri = Uri.parse(att.uri)
+                    val bytes = try {
+                        context.contentResolver.openInputStream(uri)?.use { stream -> stream.readBytes() }
+                    } catch (_: Throwable) {
+                        if (uri.scheme == "file") {
+                            try { File(uri.path ?: "").readBytes() } catch (_: Throwable) { null }
+                        } else null
                     }
-                }
-            } catch (_: Exception) {
-                // Ignore single file read error
-            }
-        }
 
-        viewModelScope.launch {
+                    if (bytes != null && bytes.size <= 15 * 1024 * 1024) {
+                        val fileB64 = try {
+                            Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        } catch (t: Throwable) {
+                            Log.e("ChatViewModel", "Base64 encode error for attachment ${att.name}", t)
+                            null
+                        }
+                        if (fileB64 != null) {
+                            val fObj = JSONObject().apply {
+                                put("name", att.name)
+                                put("is_image", att.isImage)
+                                put("mime_type", att.mimeType ?: if (att.isImage) "image/jpeg" else "application/octet-stream")
+                                put("data", fileB64)
+                            }
+                            filesArray.put(fObj)
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.w("ChatViewModel", "Failed to process attachment ${att.name}: ${t.message}")
+                }
+            }
+
             val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
             val effort = prefs.getString("reasoning_effort", "high") ?: "high"
 
@@ -1782,9 +2186,15 @@ class ChatViewModel @Inject constructor(
             }
         }.toString()
 
-        webSocketClient.sendMessage(payload)
-        _isLoading.value = true
-        _currentStatus.value = "Next AI thinking..."
+        lastReceivedSeq = -1
+        val sent = webSocketClient.sendMessage(payload)
+        if (sent) {
+            _isLoading.value = true
+            _currentStatus.value = "Next AI thinking..."
+        } else {
+            appendSystemMessage("⚠️ Message could not be sent. Payload may exceed safe limit or WebSocket is disconnected.")
+            _isLoading.value = false
+        }
     }
 
     fun editAndResendMessage(messageId: String, newContent: String) {
@@ -2093,6 +2503,7 @@ class ChatViewModel @Inject constructor(
                 }
             }.toString()
 
+            lastReceivedSeq = -1
             webSocketClient.sendMessage(payload)
             _isLoading.value = true
             _currentStatus.value = "Regenerating response..."
@@ -2191,6 +2602,7 @@ class ChatViewModel @Inject constructor(
         streamingMessageId = null
         _currentStatus.value = null
         _isLoading.value = false
+        lastReceivedSeq = -1
         loadConversation(newId)
     }
 
@@ -2199,13 +2611,17 @@ class ChatViewModel @Inject constructor(
     }
 
     fun loadConversation(conversationId: String) {
+        val isSwitching = conversationId != currentConversationId
         currentConversationId = conversationId
-        streamingMessageId = null
+        if (isSwitching) {
+            streamingMessageId = null
+            _isLoading.value = false
+            _currentStatus.value = null
+            lastReceivedSeq = -1
+        }
         _selectedAttachments.value = emptyList()
         _selectedAttachment.value = null
         _replyToMessage.value = null
-        _isLoading.value = false
-        _currentStatus.value = null
         _activeBranchMap.value = emptyMap()
         _sessionFiles.value = emptyList()
 
@@ -2244,10 +2660,33 @@ class ChatViewModel @Inject constructor(
                     ) to minTimestamp
                 }.sortedBy { it.second }.map { it.first }
             }.collectLatest { loadedMessages ->
-                _messages.value = loadedMessages
+                val currentList = _messages.value
+                val activeStreamId = streamingMessageId ?: currentList.lastOrNull { it.role == "assistant" && (it.isStreaming || it.isThinking) }?.id
+                val resolvedMessages = if (activeStreamId != null) {
+                    val liveStreamingMsg = currentList.find { it.id == activeStreamId }
+                    if (liveStreamingMsg != null) {
+                        val hasActive = loadedMessages.any { it.id == activeStreamId }
+                        val updatedLoaded = loadedMessages.map { msg ->
+                            if (msg.id == activeStreamId) {
+                                msg.copy(
+                                    content = if (liveStreamingMsg.content.length > msg.content.length) liveStreamingMsg.content else msg.content,
+                                    thinking = if ((liveStreamingMsg.thinking?.length ?: 0) > (msg.thinking?.length ?: 0)) liveStreamingMsg.thinking else msg.thinking,
+                                    isStreaming = liveStreamingMsg.isStreaming || msg.isStreaming,
+                                    isThinking = liveStreamingMsg.isThinking || msg.isThinking,
+                                    isThinkingExpanded = liveStreamingMsg.isThinkingExpanded,
+                                    toolExecutions = if (liveStreamingMsg.toolExecutions.isNotEmpty()) liveStreamingMsg.toolExecutions else msg.toolExecutions,
+                                    toolExecution = liveStreamingMsg.toolExecution ?: msg.toolExecution
+                                )
+                            } else msg
+                        }
+                        if (hasActive) updatedLoaded else updatedLoaded + liveStreamingMsg
+                    } else loadedMessages
+                } else loadedMessages
+
+                _messages.value = resolvedMessages
 
                 // Extract all file references generated in this conversation from both tools and cached files
-                val toolFiles = loadedMessages.flatMap { msg ->
+                val toolFiles = resolvedMessages.flatMap { msg ->
                     msg.toolExecutions.mapNotNull { it.targetFile }
                 }.filter { it.isNotBlank() }
 

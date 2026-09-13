@@ -681,7 +681,12 @@ async def run_agy_command(
             if process.stdout is None:
                 break
 
-            line_bytes = await process.stdout.readline()
+            try:
+                line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=300.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"Process stdout readline timed out after 300s for conv {client_conv_id}")
+                yield _make_event("info", "Process execution timed out.")
+                break
             if not line_bytes:
                 break
 
@@ -713,7 +718,13 @@ async def run_agy_command(
                             tool_name = tool_info.get("name", "tool")
                         params = tool_info.get("parameters", {})
                         output = tool_info.get("output", "")
-                        duration = step_update.get("duration_seconds", 0.0)
+                        raw_out_str = str(output or "")
+                        clean_out = sanitize_text(raw_out_str)
+                        # Safeguard: truncate massive tool output to prevent memory/buffer overflow
+                        if len(clean_out) > 32_000:
+                            clean_out = clean_out[:32_000] + f"\n... [Output truncated from {len(raw_out_str)} to 32,000 chars for performance]"
+
+                        tool_duration = float(tool_info.get("duration") or step_update.get("duration") or 0.0)
 
                         yield _make_event(
                             "tool_event",
@@ -721,8 +732,8 @@ async def run_agy_command(
                             tool_name=str(tool_name),
                             tool_state=str(state),
                             tool_params=params,
-                            tool_output=sanitize_text(str(output)),
-                            duration=float(duration or 0.0)
+                            tool_output=clean_out,
+                            duration=tool_duration
                         )
                     elif step_type in ("thought", "reasoning", "thinking") and text_delta:
                         cleaned_thought = sanitize_text(text_delta)

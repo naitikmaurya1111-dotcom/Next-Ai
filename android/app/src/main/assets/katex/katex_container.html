@@ -18,42 +18,43 @@
         }
         body {
             margin: 0;
-            padding: 12px 16px 16px 16px;
+            padding: 2px 4px;
             background: transparent !important;
             font-family: "KaTeX_Main", "Times New Roman", Times, serif;
             overflow-x: auto;
-            overflow-y: visible;
+            overflow-y: hidden;
             -webkit-overflow-scrolling: touch;
             text-align: center;
-            min-height: 48px;
-            width: 100%;
+            min-height: 0;
+            width: auto;
+            display: inline-block;
         }
         #math-wrapper {
             display: inline-block;
-            min-width: 100%;
+            min-width: 0;
             text-align: center;
             overflow-x: auto;
-            overflow-y: visible;
-            padding: 2px 4px;
+            overflow-y: hidden;
+            padding: 0;
         }
         #math-container {
             display: inline-block;
             text-align: center;
-            font-size: 1.18em;
+            font-size: 1.15em;
             max-width: none;
             margin: 0 auto;
-            line-height: 1.35;
+            line-height: 1.25;
         }
         .katex-display {
             margin: 0 !important;
-            padding: 6px 0 !important;
+            padding: 2px 0 !important;
             text-align: center;
             overflow-x: auto;
-            overflow-y: visible;
+            overflow-y: hidden;
         }
         .katex {
             font-size: 1.1em;
-            line-height: 1.3;
+            line-height: 1.25;
             text-rendering: geometricPrecision;
         }
         .katex .katex-html {
@@ -80,18 +81,22 @@
     </div>
     <script>
         var lastReportedHeight = 0;
+        var lastReportedWidth = 0;
 
-        function reportHeight() {
+        function reportSize() {
             var container = document.getElementById('math-container');
             if (!container) return;
             var rect = container.getBoundingClientRect();
             var bodyH = document.body.offsetHeight;
-            var scrollH = document.documentElement.scrollHeight;
-            var h = Math.ceil(Math.max(rect.height + 26, bodyH + 16, scrollH + 8, 52));
+            var h = Math.ceil(Math.max(rect.height + 4, bodyH, 18));
+            var w = Math.ceil(Math.max(rect.width + 10, 24));
 
-            if (Math.abs(h - lastReportedHeight) >= 2) {
+            if (Math.abs(h - lastReportedHeight) >= 2 || Math.abs(w - lastReportedWidth) >= 4) {
                 lastReportedHeight = h;
-                if (window.AndroidBridge && window.AndroidBridge.onHeight) {
+                lastReportedWidth = w;
+                if (window.AndroidBridge && window.AndroidBridge.onSize) {
+                    window.AndroidBridge.onSize(w, h);
+                } else if (window.AndroidBridge && window.AndroidBridge.onHeight) {
                     window.AndroidBridge.onHeight(h);
                 }
             }
@@ -112,27 +117,27 @@
                 container.innerText = formula;
             }
 
-            reportHeight();
+            reportSize();
 
             // Wait for fonts to fully load and measure again
             if (document.fonts && document.fonts.ready) {
                 document.fonts.ready.then(function() {
-                    reportHeight();
+                    reportSize();
                 });
             }
 
             // Also check on next few animation frames
             requestAnimationFrame(function() {
-                reportHeight();
-                setTimeout(reportHeight, 60);
-                setTimeout(reportHeight, 200);
+                reportSize();
+                setTimeout(reportSize, 60);
+                setTimeout(reportSize, 200);
             });
         }
 
-        // Use ResizeObserver for automatic height tracking on any content change
+        // Use ResizeObserver for automatic size tracking on any content change
         if (window.ResizeObserver) {
             var ro = new ResizeObserver(function() {
-                reportHeight();
+                reportSize();
             });
             var target = document.getElementById('math-container');
             if (target) ro.observe(target);

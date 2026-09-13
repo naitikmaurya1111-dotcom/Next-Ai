@@ -19,6 +19,7 @@ class AgyWebSocketClient @Inject constructor(
 ) {
     companion object {
         private const val TAG = "AgyWebSocketClient"
+        private const val MAX_PAYLOAD_CHARS = 15 * 1024 * 1024 // 15MB safeguard against OOM / buffer overflow
     }
 
     private var webSocket: WebSocket? = null
@@ -80,11 +81,16 @@ class AgyWebSocketClient @Inject constructor(
         }
     }
 
-    fun sendMessage(text: String) {
-        try {
-            webSocket?.send(text)
+    fun sendMessage(text: String): Boolean {
+        if (text.length > MAX_PAYLOAD_CHARS) {
+            Log.e(TAG, "Payload too large for WebSocket (${text.length} chars > $MAX_PAYLOAD_CHARS), rejecting to prevent OOM/buffer overflow")
+            return false
+        }
+        return try {
+            webSocket?.send(text) ?: false
         } catch (t: Throwable) {
             Log.e(TAG, "Error sending message over WebSocket", t)
+            false
         }
     }
 

@@ -226,6 +226,25 @@ fun AGYChatNavHost(pluginManager: PluginManager) {
     val isOnboardingDone = remember { prefs.getBoolean("onboarding_completed", false) }
     val startDest = if (isOnboardingDone) AppRoutes.CHAT else AppRoutes.ONBOARDING
 
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner, sharedChatViewModel) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    sharedChatViewModel.onAppResume()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    sharedChatViewModel.persistCurrentStreamingState()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     NavHost(
         navController = navController,
         startDestination = startDest,

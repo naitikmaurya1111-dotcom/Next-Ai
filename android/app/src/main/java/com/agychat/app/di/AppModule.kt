@@ -81,9 +81,10 @@ object AppModule {
     @Singleton
     fun provideLocalFileManager(
         @ApplicationContext context: Context,
-        fileDao: com.agychat.app.data.local.FileDao
+        fileDao: com.agychat.app.data.local.FileDao,
+        okHttpClient: OkHttpClient
     ): com.agychat.app.data.local.LocalFileManager {
-        return com.agychat.app.data.local.LocalFileManager(context, fileDao)
+        return com.agychat.app.data.local.LocalFileManager(context, fileDao, okHttpClient)
     }
 
     @Provides

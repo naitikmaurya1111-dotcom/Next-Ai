@@ -1,8 +1,8 @@
 # 🧠 Next AI & Antigravity Session Resume Context
-> **Last Synced**: `2026-09-13 11:27:05 UTC`  
-> **Conversation ID**: `a5b9af8a-4982-4585-b993-23915cd61ec8`  
-> **Git Head SHA**: `b435bba`  
-> **Active App Version**: `v1.1.0`  
+> **Last Synced**: `2026-09-13 15:33:39 UTC`  
+> **Conversation ID**: `2fd3f6ca-bd12-4113-8b81-7b9d56153473`  
+> **Git Head SHA**: `0318f20`  
+> **Active App Version**: `v1.0.50`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -47,8 +47,8 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.18`
-  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases/download/v1.0.18/app-debug.apk`
+  - Tag: `v1.0.50`
+  - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases`
 
 ---
 
@@ -56,14 +56,14 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
 - **Location**: `/content/Next-Ai/colab`
 - **Stack**: FastAPI + Uvicorn (Port 8000) + Cloudflare Tunnel (`cloudflared`)
 - **Execution**: Runs `/root/.local/bin/agy -p "<message>" --output-format stream-json --dangerously-skip-permissions`
-- **Session Continuity**: Retains `--conversation a5b9af8a-4982-4585-b993-23915cd61ec8` across turns.
+- **Session Continuity**: Retains `--conversation 2fd3f6ca-bd12-4113-8b81-7b9d56153473` across turns.
 - **Launcher**: `/content/Next-Ai/colab/start_bridge.sh`
 
 ---
 
 ## 📂 Restored Antigravity State
 - **Conversation DBs**: `/root/.gemini/antigravity-cli/conversations/`
-- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/a5b9af8a-4982-4585-b993-23915cd61ec8/`
+- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/2fd3f6ca-bd12-4113-8b81-7b9d56153473/`
 - **History & Summaries**: `/root/.gemini/antigravity-cli/conversation_summaries.db`, `history.jsonl`
 
 ---

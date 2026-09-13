@@ -5,6 +5,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import androidx.compose.ui.graphics.asImageBitmap
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.speech.RecognizerIntent
@@ -12,6 +17,9 @@ import android.speech.tts.TextToSpeech
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import androidx.compose.animation.*
@@ -281,6 +289,28 @@ fun ChatScreen(
             val msg = if (items.size == 1) "File attached: ${items[0].name}" else "${items.size} files attached!"
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // Android Runtime Storage Permission launcher and state
+    var showStoragePermissionDialog by remember { mutableStateOf(false) }
+    var pendingStorageAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    val storagePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissionsMap ->
+        val anyGranted = permissionsMap.values.any { it }
+        if (anyGranted) {
+            Toast.makeText(context, "Storage permission granted", Toast.LENGTH_SHORT).show()
+            pendingStorageAction?.invoke()
+        } else {
+            Toast.makeText(
+                context,
+                "Storage permission denied. Files are saved in Next AI offline storage.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        pendingStorageAction = null
+        showStoragePermissionDialog = false
     }
 
     val showPinnedOnly by viewModel.showPinnedOnly.collectAsState()
@@ -1704,7 +1734,14 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f),
                         onClick = {
                             showAttachmentMenu = false
-                            imagePickerLauncher.launch("image/*")
+                            if (!com.agychat.app.data.local.StoragePermissions.hasReadPermission(context)) {
+                                pendingStorageAction = {
+                                    imagePickerLauncher.launch("image/*")
+                                }
+                                showStoragePermissionDialog = true
+                            } else {
+                                imagePickerLauncher.launch("image/*")
+                            }
                         }
                     )
 
@@ -1716,7 +1753,14 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f),
                         onClick = {
                             showAttachmentMenu = false
-                            filePickerLauncher.launch("*/*")
+                            if (!com.agychat.app.data.local.StoragePermissions.hasReadPermission(context)) {
+                                pendingStorageAction = {
+                                    filePickerLauncher.launch("*/*")
+                                }
+                                showStoragePermissionDialog = true
+                            } else {
+                                filePickerLauncher.launch("*/*")
+                            }
                         }
                     )
                 }
@@ -1921,8 +1965,25 @@ fun ChatScreen(
             fileData = fileData,
             onClose = { viewModel.closeFileViewer() },
             onSaveToPhone = {
-                viewModel.saveActiveFileToPhone { success, msg ->
-                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                val hasPerm = com.agychat.app.data.local.StoragePermissions.hasWritePermission(context)
+                if (!hasPerm) {
+                    pendingStorageAction = {
+                        viewModel.saveActiveFileToPhone { success, msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    showStoragePermissionDialog = true
+                } else {
+                    viewModel.saveActiveFileToPhone { success, msg ->
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            },
+            onOpenExternal = {
+                viewModel.openActiveFileInExternalApp(context) { success, msg ->
+                    if (!success) {
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    }
                 }
             },
             onCopy = {
@@ -1932,15 +1993,41 @@ fun ChatScreen(
             },
             onShare = {
                 try {
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_SUBJECT, fileData.filename)
-                        putExtra(Intent.EXTRA_TEXT, fileData.content)
+                    val shareIntent = if (fileData.isBinary && fileData.localDiskFile != null && fileData.localDiskFile.exists()) {
+                        val uri = viewModel.localFileManager.getUriForFile(fileData.localDiskFile)
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = fileData.mimeType.ifBlank { "application/octet-stream" }
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                    } else {
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_SUBJECT, fileData.filename)
+                            putExtra(Intent.EXTRA_TEXT, fileData.content)
+                        }
                     }
                     context.startActivity(Intent.createChooser(shareIntent, "Share ${fileData.filename}"))
                 } catch (t: Throwable) {
                     Toast.makeText(context, "Share failed: ${t.message}", Toast.LENGTH_SHORT).show()
                 }
+            }
+        )
+    }
+
+    if (showStoragePermissionDialog) {
+        StoragePermissionDialog(
+            onDismiss = {
+                showStoragePermissionDialog = false
+                pendingStorageAction = null
+            },
+            onGrant = {
+                storagePermissionLauncher.launch(com.agychat.app.data.local.StoragePermissions.getPermissions())
+            },
+            onOpenSettings = {
+                showStoragePermissionDialog = false
+                com.agychat.app.data.local.StoragePermissions.openAppSettings(context)
+                pendingStorageAction = null
             }
         )
     }
@@ -2197,7 +2284,8 @@ fun MessageItem(
                                                             modifier = Modifier
                                                                 .weight(1f)
                                                                 .height(115.dp)
-                                                                .clip(RoundedCornerShape(12.dp)),
+                                                                .clip(RoundedCornerShape(12.dp))
+                                                                .clickable { onOpenFile(img.uri) },
                                                             contentScale = ContentScale.Crop
                                                         )
                                                     }
@@ -2223,6 +2311,7 @@ fun MessageItem(
                                                     .clip(RoundedCornerShape(10.dp))
                                                     .background(MaterialTheme.colorScheme.surface)
                                                     .border(0.6.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                                    .clickable { onOpenFile(file.uri) }
                                                     .padding(horizontal = 10.dp, vertical = 7.dp),
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
@@ -2233,11 +2322,24 @@ fun MessageItem(
                                                     tint = ClaudeTerracotta
                                                 )
                                                 Spacer(Modifier.width(8.dp))
-                                                Text(
-                                                    text = file.name,
-                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text(
+                                                        text = file.name,
+                                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Text(
+                                                        text = "Tap to view file",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                                    )
+                                                }
+                                                Icon(
+                                                    Icons.Default.OpenInNew,
+                                                    contentDescription = "Open file",
+                                                    tint = ClaudeTerracotta,
+                                                    modifier = Modifier.size(14.dp)
                                                 )
                                             }
                                         }
@@ -2460,7 +2562,7 @@ fun MessageItem(
                     if (!message.thinking.isNullOrBlank()) {
                         ThinkingAccordionCard(
                             thinkingText = message.thinking,
-                            isExpanded = message.isThinkingExpanded,
+                            isExpanded = message.isThinkingExpanded || (message.isStreaming && message.isThinking),
                             onToggle = onToggleThinking
                         )
                         Spacer(Modifier.height(10.dp))
@@ -5301,6 +5403,7 @@ fun FileViewerBottomSheet(
     fileData: FileViewerData,
     onClose: () -> Unit,
     onSaveToPhone: () -> Unit,
+    onOpenExternal: () -> Unit,
     onShare: () -> Unit,
     onCopy: () -> Unit
 ) {
@@ -5337,6 +5440,8 @@ fun FileViewerBottomSheet(
                     modifier = Modifier.weight(1f)
                 ) {
                     val (headerIcon, iconBg, iconTint) = when {
+                        fileData.isPdf -> Triple(Icons.Default.PictureAsPdf, Color(0xFFE53935).copy(alpha = 0.15f), Color(0xFFE53935))
+                        fileData.isImage -> Triple(Icons.Default.Image, Color(0xFF1E88E5).copy(alpha = 0.15f), Color(0xFF1E88E5))
                         isMarkdown -> Triple(Icons.Default.Article, ClaudeTerracotta.copy(alpha = 0.15f), ClaudeTerracotta)
                         ext in setOf("py", "kt", "js", "ts", "java", "c", "cpp", "rs", "go", "html", "css") ->
                             Triple(Icons.Default.Code, ChatGptBlue.copy(alpha = 0.15f), ChatGptBlue)
@@ -5428,7 +5533,7 @@ fun FileViewerBottomSheet(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (isMarkdown) {
+                    if (isMarkdown && !fileData.isBinary) {
                         // Toggle between Rendered preview and Raw code
                         Surface(
                             onClick = {
@@ -5457,7 +5562,7 @@ fun FileViewerBottomSheet(
 
             Spacer(Modifier.height(10.dp))
 
-            // Quick Actions Bar: Save to Phone, Copy, Share
+            // Quick Actions Bar: Save, Open in App, Copy, Share
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -5469,26 +5574,43 @@ fun FileViewerBottomSheet(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1.2f),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Save to Phone", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onCopy()
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(0.8f),
+                    modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
                 ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("Copy", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                    Text("Save", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                }
+
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onOpenExternal()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ChatGptEmerald),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1.15f),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                ) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Open in App", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                }
+
+                if (!fileData.isBinary) {
+                    OutlinedButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onCopy()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(0.75f),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text("Copy", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
+                    }
                 }
 
                 OutlinedButton(
@@ -5497,11 +5619,11 @@ fun FileViewerBottomSheet(
                         onShare()
                     },
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(0.8f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    modifier = Modifier.weight(0.75f),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(3.dp))
                     Text("Share", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold))
                 }
             }
@@ -5555,6 +5677,26 @@ fun FileViewerBottomSheet(
                             )
                         }
                     }
+                    fileData.isPdf -> {
+                        InAppPdfViewer(
+                            file = fileData.localDiskFile,
+                            bytes = fileData.bytes,
+                            onOpenExternal = onOpenExternal
+                        )
+                    }
+                    fileData.isImage -> {
+                        InAppImageViewer(
+                            file = fileData.localDiskFile,
+                            bytes = fileData.bytes
+                        )
+                    }
+                    fileData.isBinary -> {
+                        BinaryFileSummaryView(
+                            fileData = fileData,
+                            onOpenExternal = onOpenExternal,
+                            onSaveToPhone = onSaveToPhone
+                        )
+                    }
                     else -> {
                         if (isMarkdown && viewMode == "rendered") {
                             Column(
@@ -5585,6 +5727,318 @@ fun FileViewerBottomSheet(
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun InAppPdfViewer(
+    file: File?,
+    bytes: ByteArray?,
+    onOpenExternal: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var pageBitmaps by remember { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var totalPageCount by remember { mutableIntStateOf(0) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(file, bytes) {
+        isLoading = true
+        errorMessage = null
+        withContext(Dispatchers.IO) {
+            try {
+                val targetFile: File? = file?.takeIf { it.exists() && it.length() > 0 } ?: run {
+                    if (bytes != null && bytes.isNotEmpty()) {
+                        val temp = File(context.cacheDir, "pdf_preview_${System.currentTimeMillis()}.pdf")
+                        temp.writeBytes(bytes)
+                        temp
+                    } else null
+                }
+
+                if (targetFile == null || !targetFile.exists()) {
+                    withContext(Dispatchers.Main) {
+                        errorMessage = "PDF content is not available on local device"
+                        isLoading = false
+                    }
+                    return@withContext
+                }
+
+                var pfd: ParcelFileDescriptor? = null
+                var renderer: PdfRenderer? = null
+                try {
+                    pfd = ParcelFileDescriptor.open(targetFile, ParcelFileDescriptor.MODE_READ_ONLY)
+                    renderer = PdfRenderer(pfd)
+                    val count = renderer.pageCount
+                    val maxPages = minOf(count, 20)
+                    val bitmaps = mutableListOf<Bitmap>()
+                    val displayWidth = context.resources.displayMetrics.widthPixels
+
+                    for (i in 0 until maxPages) {
+                        val page = renderer.openPage(i)
+                        val scale = (displayWidth.toFloat() / page.width.toFloat()).coerceIn(1.0f, 1.8f)
+                        val w = (page.width * scale).toInt().coerceAtLeast(1)
+                        val h = (page.height * scale).toInt().coerceAtLeast(1)
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+                        val canvas = Canvas(bmp)
+                        canvas.drawColor(android.graphics.Color.WHITE)
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        bitmaps.add(bmp)
+                        page.close()
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        pageBitmaps = bitmaps
+                        totalPageCount = count
+                        isLoading = false
+                    }
+                } finally {
+                    try { renderer?.close() } catch (_: Throwable) {}
+                    try { pfd?.close() } catch (_: Throwable) {}
+                }
+            } catch (t: Throwable) {
+                Log.e("PdfViewer", "Failed to render PDF pages", t)
+                withContext(Dispatchers.Main) {
+                    errorMessage = "Could not render PDF in-app: ${t.localizedMessage ?: "File may be protected or unsupported"}"
+                    isLoading = false
+                }
+            }
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        when {
+            isLoading -> {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = ClaudeTerracotta, modifier = Modifier.size(36.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("Rendering PDF pages…", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            errorMessage != null -> {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(40.dp))
+                    Spacer(Modifier.height(8.dp))
+                    Text(errorMessage ?: "", color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onOpenExternal,
+                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Open in External Viewer")
+                    }
+                }
+            }
+            pageBitmaps.isEmpty() -> {
+                Text("No pages found in PDF document", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(bottom = 28.dp)
+                ) {
+                    items(pageBitmaps.size) { idx ->
+                        Card(
+                            shape = RoundedCornerShape(10.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Image(
+                                    bitmap = pageBitmaps[idx].asImageBitmap(),
+                                    contentDescription = "Page ${idx + 1}",
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentScale = ContentScale.FillWidth
+                                )
+                                Surface(
+                                    color = Color(0xFFEEEEEE),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = "Page ${idx + 1} of $totalPageCount",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = Color.DarkGray,
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (totalPageCount > pageBitmaps.size) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(10.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Showing first ${pageBitmaps.size} of $totalPageCount pages",
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Open in external app to view the rest of the document.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Button(
+                                        onClick = onOpenExternal,
+                                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                                    ) {
+                                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Open", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun InAppImageViewer(
+    file: File?,
+    bytes: ByteArray?,
+    modifier: Modifier = Modifier
+) {
+    val bitmap = remember(file, bytes) {
+        try {
+            if (bytes != null && bytes.isNotEmpty()) {
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } else if (file != null && file.exists()) {
+                BitmapFactory.decodeFile(file.absolutePath)
+            } else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Default.BrokenImage, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(48.dp))
+                Spacer(Modifier.height(8.dp))
+                Text("Could not preview image", color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
+fun BinaryFileSummaryView(
+    fileData: FileViewerData,
+    onOpenExternal: () -> Unit,
+    onSaveToPhone: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(60.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.InsertDriveFile,
+                        contentDescription = null,
+                        tint = ClaudeTerracotta,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+
+                Text(
+                    text = fileData.filename,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    textAlign = TextAlign.Center
+                )
+
+                Text(
+                    text = "${fileData.mimeType.ifBlank { "Binary File" }} • ${if (fileData.size > 0) String.format(java.util.Locale.US, "%.1f KB", fileData.size / 1024.0) else "Ready"}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Text(
+                    text = "This file type can be opened with dedicated apps on your device (e.g. Office, Docs, Media Player).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    textAlign = TextAlign.Center
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = onOpenExternal,
+                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Open in App")
+                    }
+
+                    OutlinedButton(
+                        onClick = onSaveToPhone,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Download")
                     }
                 }
             }
@@ -5847,4 +6301,81 @@ fun SessionArtifactsBottomSheet(
             }
         }
     }
+}
+
+@Composable
+fun StoragePermissionDialog(
+    onDismiss: () -> Unit,
+    onGrant: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = ClaudeTerracotta,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+        },
+        title = {
+            Text(
+                text = "Storage Permission Required",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Next AI needs storage access to save and export files, attachments, and generated artifacts directly to your device's public Downloads folder.\n\nWithout this permission, your files remain safely accessible within the app's persistent offline storage.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onGrant,
+                colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("Allow Access", fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                TextButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Settings", color = MaterialTheme.colorScheme.primary)
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        },
+        shape = RoundedCornerShape(20.dp)
+    )
 }
