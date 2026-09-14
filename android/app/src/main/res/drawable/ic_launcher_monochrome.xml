@@ -5,16 +5,8 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Stylized Next "N" Monogram -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="9"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"
-        android:pathData="M 36,72 L 36,36 L 72,72 L 72,36" />
-
-    <!-- Radiant AI Intelligence Sparkle -->
+    <!-- Antigravity Neon Glass Star Monochrome Silhouette for Themed Icons (Android 13+) -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M 79,18.5 C 79,24.0 82.0,27.0 87.5,27.0 C 82.0,27.0 79,30.0 79,35.5 C 79,30.0 76.0,27.0 70.5,27.0 C 76.0,27.0 79,24.0 79,18.5 Z" />
+        android:pathData="M 54,22 C 54,42 66,54 86,54 C 66,54 54,66 54,86 C 54,66 42,54 22,54 C 42,54 54,42 54,22 Z" />
 </vector>
