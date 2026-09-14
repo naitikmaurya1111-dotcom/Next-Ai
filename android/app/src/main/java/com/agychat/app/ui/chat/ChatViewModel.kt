@@ -1624,7 +1624,17 @@ class ChatViewModel @Inject constructor(
         }
 
         val list = _messages.value.toMutableList()
-        val idx = list.indexOfFirst { it.id == streamingMessageId }
+        val lastUserIdx = list.indexOfLast { it.role == "user" }
+        val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
+        val isCurrentTurnAssistant = lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx
+        val idx = if (streamingMessageId != null) {
+            list.indexOfFirst { it.id == streamingMessageId }
+        } else if (isCurrentTurnAssistant) {
+            streamingMessageId = list[lastAssistantIdx].id
+            lastAssistantIdx
+        } else {
+            -1
+        }
 
         val statusText = if (toolState == "ACTIVE") "Running $toolName..." else "Completed $toolName"
         _currentStatus.value = statusText
@@ -1700,7 +1710,17 @@ class ChatViewModel @Inject constructor(
         if (cleanChunk.isEmpty()) return
 
         val list = _messages.value.toMutableList()
-        val idx = list.indexOfFirst { it.id == streamingMessageId }
+        val lastUserIdx = list.indexOfLast { it.role == "user" }
+        val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
+        val isCurrentTurnAssistant = lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx
+        val idx = if (streamingMessageId != null) {
+            list.indexOfFirst { it.id == streamingMessageId }
+        } else if (isCurrentTurnAssistant && (list[lastAssistantIdx].isStreaming || list[lastAssistantIdx].content.isBlank() || list[lastAssistantIdx].thinking != null)) {
+            streamingMessageId = list[lastAssistantIdx].id
+            lastAssistantIdx
+        } else {
+            -1
+        }
 
         val targetMsg: Message
         if (idx >= 0) {
@@ -1712,37 +1732,25 @@ class ChatViewModel @Inject constructor(
             )
             list[idx] = targetMsg
         } else {
-            val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
-            if (lastAssistantIdx >= 0 && (list[lastAssistantIdx].isStreaming || _isLoading.value || list[lastAssistantIdx].content.isBlank() || list[lastAssistantIdx].thinking != null)) {
-                val cur = list[lastAssistantIdx]
-                streamingMessageId = cur.id
-                targetMsg = cur.copy(
-                    content = cur.content + cleanChunk,
-                    isStreaming = true,
-                    isThinking = false
-                )
-                list[lastAssistantIdx] = targetMsg
-            } else {
-                val newId = UUID.randomUUID().toString()
-                streamingMessageId = newId
-                val initialUpdates = synchronized(pendingMemoryUpdates) {
-                    val copy = pendingMemoryUpdates.toList()
-                    pendingMemoryUpdates.clear()
-                    copy
-                }
-                targetMsg = Message(
-                    id = newId,
-                    role = "assistant",
-                    content = cleanChunk,
-                    memoryUpdates = initialUpdates,
-                    timestamp = System.currentTimeMillis(),
-                    isStreaming = true,
-                    isThinking = false,
-                    parentMessageId = streamingParentMessageId,
-                    branchIndex = streamingBranchIndex
-                )
-                list.add(targetMsg)
+            val newId = UUID.randomUUID().toString()
+            streamingMessageId = newId
+            val initialUpdates = synchronized(pendingMemoryUpdates) {
+                val copy = pendingMemoryUpdates.toList()
+                pendingMemoryUpdates.clear()
+                copy
             }
+            targetMsg = Message(
+                id = newId,
+                role = "assistant",
+                content = cleanChunk,
+                memoryUpdates = initialUpdates,
+                timestamp = System.currentTimeMillis(),
+                isStreaming = true,
+                isThinking = false,
+                parentMessageId = streamingParentMessageId,
+                branchIndex = streamingBranchIndex
+            )
+            list.add(targetMsg)
         }
         _messages.value = list
         _isLoading.value = true
@@ -1755,7 +1763,17 @@ class ChatViewModel @Inject constructor(
         if (cleanChunk.isEmpty()) return
 
         val list = _messages.value.toMutableList()
-        val idx = list.indexOfFirst { it.id == streamingMessageId }
+        val lastUserIdx = list.indexOfLast { it.role == "user" }
+        val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
+        val isCurrentTurnAssistant = lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx
+        val idx = if (streamingMessageId != null) {
+            list.indexOfFirst { it.id == streamingMessageId }
+        } else if (isCurrentTurnAssistant && (list[lastAssistantIdx].isStreaming || list[lastAssistantIdx].content.isBlank())) {
+            streamingMessageId = list[lastAssistantIdx].id
+            lastAssistantIdx
+        } else {
+            -1
+        }
 
         val targetMsg: Message
         if (idx >= 0) {
@@ -1768,39 +1786,26 @@ class ChatViewModel @Inject constructor(
             )
             list[idx] = targetMsg
         } else {
-            val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
-            if (lastAssistantIdx >= 0 && (list[lastAssistantIdx].isStreaming || _isLoading.value || list[lastAssistantIdx].content.isBlank())) {
-                val cur = list[lastAssistantIdx]
-                streamingMessageId = cur.id
-                val prevThinking = cur.thinking ?: ""
-                targetMsg = cur.copy(
-                    thinking = prevThinking + cleanChunk,
-                    isStreaming = true,
-                    isThinking = true
-                )
-                list[lastAssistantIdx] = targetMsg
-            } else {
-                val newId = UUID.randomUUID().toString()
-                streamingMessageId = newId
-                val initialUpdates = synchronized(pendingMemoryUpdates) {
-                    val copy = pendingMemoryUpdates.toList()
-                    pendingMemoryUpdates.clear()
-                    copy
-                }
-                targetMsg = Message(
-                    id = newId,
-                    role = "assistant",
-                    content = "",
-                    thinking = cleanChunk,
-                    memoryUpdates = initialUpdates,
-                    timestamp = System.currentTimeMillis(),
-                    isStreaming = true,
-                    isThinking = true,
-                    parentMessageId = streamingParentMessageId,
-                    branchIndex = streamingBranchIndex
-                )
-                list.add(targetMsg)
+            val newId = UUID.randomUUID().toString()
+            streamingMessageId = newId
+            val initialUpdates = synchronized(pendingMemoryUpdates) {
+                val copy = pendingMemoryUpdates.toList()
+                pendingMemoryUpdates.clear()
+                copy
             }
+            targetMsg = Message(
+                id = newId,
+                role = "assistant",
+                content = "",
+                thinking = cleanChunk,
+                memoryUpdates = initialUpdates,
+                timestamp = System.currentTimeMillis(),
+                isStreaming = true,
+                isThinking = true,
+                parentMessageId = streamingParentMessageId,
+                branchIndex = streamingBranchIndex
+            )
+            list.add(targetMsg)
         }
         _messages.value = list
         _isLoading.value = true
@@ -2507,14 +2512,20 @@ class ChatViewModel @Inject constructor(
 
     fun regenerateLastResponse() {
         val msgs = _messages.value
-        val lastUserMsg = msgs.lastOrNull { it.role == "user" } ?: return
-        val lastAssistant = msgs.lastOrNull { it.role == "assistant" }
+        val lastUserIdx = msgs.indexOfLast { it.role == "user" }
+        if (lastUserIdx < 0) return
+        val lastUserMsg = msgs[lastUserIdx]
+        val lastAssistantIdx = msgs.indexOfLast { it.role == "assistant" }
+        val isAssistantForCurrentTurn = lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx
+        val lastAssistant = if (isAssistantForCurrentTurn) msgs[lastAssistantIdx] else null
 
         if (_isLoading.value) {
             stopGenerating()
         }
 
         viewModelScope.launch {
+            val newId = UUID.randomUUID().toString()
+
             if (lastAssistant != null) {
                 val branchGroupId = lastAssistant.parentMessageId?.takeIf { it.isNotBlank() && it != "null" } ?: lastAssistant.id
                 val currentBranchCount = chatDao.getBranchCountForMessage(currentConversationId, branchGroupId)
@@ -2530,9 +2541,47 @@ class ChatViewModel @Inject constructor(
                 streamingBranchIndex = newBranchIndex
                 _activeBranchMap.value = _activeBranchMap.value + (branchGroupId to newBranchIndex)
 
-                // Temporarily remove from current list to prepare for new generation
-                val filtered = msgs.filterNot { it.id == lastAssistant.id }
-                _messages.value = filtered
+                // Replace old assistant message in-place with a new streaming placeholder
+                val updatedList = msgs.toMutableList()
+                val placeholder = Message(
+                    id = newId,
+                    role = "assistant",
+                    content = "",
+                    timestamp = System.currentTimeMillis(),
+                    isStreaming = true,
+                    isThinking = false,
+                    parentMessageId = streamingParentMessageId,
+                    branchIndex = streamingBranchIndex
+                )
+                val replaceIdx = updatedList.indexOfFirst { it.id == lastAssistant.id }
+                if (replaceIdx >= 0) {
+                    updatedList[replaceIdx] = placeholder
+                } else {
+                    updatedList.add(placeholder)
+                }
+                streamingMessageId = newId
+                _messages.value = updatedList
+            } else {
+                // There is NO assistant response for lastUserMsg (e.g. previous send failed or error)
+                // Remove any system error message badges shown after lastUserIdx
+                val cleanedList = msgs.filterIndexed { index, msg ->
+                    !(index > lastUserIdx && msg.role == "system" && msg.content.startsWith("⚠️"))
+                }.toMutableList()
+
+                streamingParentMessageId = null
+                streamingBranchIndex = 0
+
+                val placeholder = Message(
+                    id = newId,
+                    role = "assistant",
+                    content = "",
+                    timestamp = System.currentTimeMillis(),
+                    isStreaming = true,
+                    isThinking = false
+                )
+                cleanedList.add(placeholder)
+                streamingMessageId = newId
+                _messages.value = cleanedList
             }
 
             // Resend the last user message text with previous conversation history
@@ -2540,7 +2589,7 @@ class ChatViewModel @Inject constructor(
 
             val historyArray = org.json.JSONArray()
             val priorTurns = msgs
-                .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != lastUserMsg.id && it.id != lastAssistant?.id }
+                .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != lastUserMsg.id && (lastAssistant == null || it.id != lastAssistant.id) }
                 .takeLast(20)
             for (m in priorTurns) {
                 val item = JSONObject().apply {

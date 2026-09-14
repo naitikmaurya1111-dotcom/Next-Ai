@@ -28,6 +28,7 @@
             min-height: 0;
             width: auto;
             display: inline-block;
+            white-space: nowrap !important;
         }
         #math-wrapper {
             display: inline-block;
@@ -36,6 +37,7 @@
             overflow-x: auto;
             overflow-y: hidden;
             padding: 0;
+            white-space: nowrap !important;
         }
         #math-container {
             display: inline-block;
@@ -44,6 +46,7 @@
             max-width: none;
             margin: 0 auto;
             line-height: 1.25;
+            white-space: nowrap !important;
         }
         .katex-display {
             margin: 0 !important;
@@ -51,14 +54,17 @@
             text-align: center;
             overflow-x: auto;
             overflow-y: hidden;
+            white-space: nowrap !important;
         }
         .katex {
             font-size: 1.1em;
             line-height: 1.25;
             text-rendering: geometricPrecision;
+            white-space: nowrap !important;
         }
         .katex .katex-html {
             overflow: visible !important;
+            white-space: nowrap !important;
         }
         body.dark {
             color: #ECECF1;
@@ -70,8 +76,8 @@
             color: #E06C75 !important;
             font-family: monospace !important;
             font-size: 0.9em;
-            white-space: pre-wrap;
-            word-break: break-word;
+            white-space: nowrap !important;
+            word-break: normal !important;
         }
     </style>
 </head>

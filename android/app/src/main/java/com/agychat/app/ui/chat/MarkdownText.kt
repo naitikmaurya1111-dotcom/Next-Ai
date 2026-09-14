@@ -31,6 +31,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -58,6 +59,8 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 
 // Zero-allocation caches for 120 FPS buttery smooth scrolling
+// NOTE: markdownBlockCache is intentionally not used during streaming (isStreaming=true path)
+// to prevent partial LaTeX blocks from getting frozen/cached mid-render
 private val markdownBlockCache = LruCache<String, List<MarkdownBlock>>(300)
 private val latexUnicodeCache = LruCache<String, String>(300)
 private val syntaxHighlightCache = LruCache<String, androidx.compose.ui.text.AnnotatedString>(150)
@@ -302,12 +305,13 @@ fun isPureEquationLine(raw: String): Boolean {
     if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("* ") ||
         s.startsWith(">") || s.startsWith("|") || s.startsWith("```") ||
         s.matches(Regex("""^\d+\.\s+.*""")) || s.contains("**") || s.contains("~~") ||
-        s.contains("](") || s.contains("][") || s.startsWith("![")
+        s.contains("](") || s.contains("][") || s.startsWith("![") ||
+        s.contains("$") // Lines containing '$' are inline math prose (e.g. "When $\Delta G < 0$"), NOT standalone equations!
     ) {
         return false
     }
 
-    // Common English prose words: if multiple are present with spaces, it is prose, NOT a standalone formula!
+    // Common English prose words: if present, the line is prose, NOT a standalone equation!
     val englishWords = setOf(
         "the", "is", "of", "and", "in", "to", "that", "this", "we", "can",
         "for", "with", "as", "by", "from", "are", "which", "where", "quantum",
@@ -316,12 +320,25 @@ fun isPureEquationLine(raw: String): Boolean {
         "pure", "physical", "space", "spaces", "represented", "vector", "vectors",
         "potential", "electric", "dipole", "field", "charge", "energy", "force",
         "surface", "volume", "point", "distance", "plane", "line", "axis", "note",
-        "equation", "equations", "formula", "formulas", "consider", "assume", "given"
+        "equation", "equations", "formula", "formulas", "consider", "assume", "given",
+        "when", "if", "then", "since", "so", "thus", "hence", "therefore", "because",
+        "work", "expansion", "process", "spontaneous", "equilibrium", "temperature",
+        "pressure", "enthalpy", "entropy", "reaction", "forward", "reverse", "path"
     )
 
     val words = s.split(Regex("\\s+")).map { it.lowercase().filter { ch -> ch.isLetter() } }.filter { it.isNotBlank() }
+    val firstWord = words.firstOrNull() ?: ""
+    val proseStarters = setOf(
+        "when", "if", "then", "where", "for", "with", "since", "so", "thus",
+        "hence", "therefore", "because", "assuming", "let", "given", "here",
+        "also", "note", "by", "at", "in", "from", "substituting", "using",
+        "under", "on", "as", "always", "spontaneous", "non"
+    )
+    if (proseStarters.contains(firstWord)) return false
+
     val matchedEng = words.count { it in englishWords }
-    if (matchedEng >= 2 && words.size > 3) return false
+    if (matchedEng >= 1 && words.size > 2) return false
+    if (words.size > 4) return false
 
     val mathTokens = listOf(
         "\\frac", "frac{", "\\int", "int_", "\\sum", "sum_", "\\prod", "prod_", "\\sqrt", "sqrt{",
@@ -344,7 +361,7 @@ fun isPureEquationLine(raw: String): Boolean {
 
     // Bare mathematical expressions like `[H, \rho]` or `H\psi = E\psi` or `E = mc^2`
     if (s.contains("=") && (s.contains("\\") || s.contains("^") || s.contains("_") || s.contains("[") || s.contains("{"))) {
-        if (matchedEng <= 1) return true
+        if (matchedEng == 0) return true
     }
 
     return false
@@ -364,7 +381,12 @@ fun MarkdownContent(
     onLinkClick: ((String) -> Unit)? = null
 ) {
     val cleanText = remember(text) { sanitizeMarkdownInput(text) }
-    val sections = remember(cleanText) { parseMarkdownBlocks(cleanText) }
+    // During streaming we bypass the block cache so partial math blocks always re-render
+    val sections = if (isStreaming) {
+        remember(cleanText) { parseMarkdownBlocks(cleanText, skipCache = true) }
+    } else {
+        remember(cleanText) { parseMarkdownBlocks(cleanText) }
+    }
 
     Column(
         modifier = modifier,
@@ -413,11 +435,23 @@ fun MarkdownContent(
                             lineHeight = 24.sp,
                             fontSize = 18.sp
                         )
-                        else -> MaterialTheme.typography.titleSmall.copy(
+                        3 -> MaterialTheme.typography.titleSmall.copy(
                             fontWeight = FontWeight.SemiBold,
                             letterSpacing = (-0.1).sp,
                             lineHeight = 22.sp,
                             fontSize = 15.sp
+                        )
+                        4 -> MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.sp,
+                            lineHeight = 21.sp,
+                            fontSize = 14.sp
+                        )
+                        else -> MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.sp,
+                            lineHeight = 20.sp,
+                            fontSize = 13.sp
                         )
                     }
                     FormattedMarkdownText(
@@ -578,6 +612,7 @@ fun MathEquationBlockView(
     var showRawLatex by remember { mutableStateOf(false) }
     var measuredWidthDp by remember { mutableStateOf<androidx.compose.ui.unit.Dp?>(null) }
     var measuredHeightDp by remember { mutableStateOf<androidx.compose.ui.unit.Dp?>(null) }
+    var isKaTeXLoaded by remember { mutableStateOf(false) }
     val density = LocalDensity.current
 
     LaunchedEffect(isCopied) {
@@ -631,22 +666,55 @@ fun MathEquationBlockView(
                         textAlign = TextAlign.Center
                     )
                 } else {
-                    val estimatedInitialWidth = remember(unicodePreview) { (unicodePreview.length * 10 + 24).coerceIn(48, 380).dp }
-                    val dynamicWidthMod = if (measuredWidthDp != null) Modifier.width(measuredWidthDp!!.coerceIn(36.dp, 640.dp)) else Modifier.width(estimatedInitialWidth)
-                    val dynamicHeightMod = if (measuredHeightDp != null) Modifier.height(measuredHeightDp!!.coerceIn(24.dp, 600.dp)) else Modifier.height(34.dp)
+                    // The unicode preview always provides the base size for the container.
+                    // The KaTeX WebView renders on top once loaded, and overrides size via measuredWidthDp/Height.
+                    // This ensures the formula block is never collapsed to a tiny 34dp box during streaming.
+                    val estimatedInitialWidth = remember(unicodePreview) { (unicodePreview.length * 10 + 24).coerceIn(80, 480).dp }
+                    val dynamicWidthMod = if (measuredWidthDp != null)
+                        Modifier.width(measuredWidthDp!!.coerceIn(60.dp, 640.dp))
+                    else
+                        Modifier.widthIn(min = estimatedInitialWidth)
+                    val dynamicHeightMod = if (measuredHeightDp != null)
+                        Modifier.height(measuredHeightDp!!.coerceIn(28.dp, 600.dp))
+                    else
+                        Modifier.wrapContentHeight()  // Let unicode text size drive height until KaTeX loads
 
-                    KaTeXDisplayView(
-                        formula = normalizedFormula,
-                        unicodeFallback = unicodePreview,
-                        isDark = isDark,
-                        onSizeMeasured = { wPx, hPx ->
-                            with(density) {
-                                if (wPx > 0) measuredWidthDp = (wPx + 8).toDp()
-                                if (hPx > 0) measuredHeightDp = (hPx + 4).toDp()
-                            }
-                        },
-                        modifier = dynamicWidthMod.then(dynamicHeightMod)
-                    )
+                    Box(
+                        modifier = dynamicWidthMod.then(dynamicHeightMod),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Unicode preview — visible as the sizing anchor, seamlessly fades when KaTeX finishes rendering
+                        Text(
+                            text = unicodePreview,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontFamily = FontFamily.Serif,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 17.sp,
+                                letterSpacing = 0.4.sp
+                            ),
+                            color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
+                            modifier = Modifier
+                                .wrapContentSize()
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .alpha(if (isKaTeXLoaded) 0f else 1f),
+                            textAlign = TextAlign.Center
+                        )
+                        // KaTeX WebView overlays on top of unicode preview once loaded
+                        KaTeXDisplayView(
+                            formula = normalizedFormula,
+                            unicodeFallback = unicodePreview,
+                            isDark = isDark,
+                            onSizeMeasured = { wPx, hPx ->
+                                with(density) {
+                                    if (wPx > 0) measuredWidthDp = (wPx + 8).toDp()
+                                    if (hPx > 0) measuredHeightDp = (hPx + 4).toDp()
+                                }
+                            },
+                            onLoaded = { isKaTeXLoaded = true },
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
                 }
 
                 Spacer(Modifier.width(8.dp))
@@ -722,6 +790,7 @@ fun KaTeXDisplayView(
     unicodeFallback: String,
     isDark: Boolean,
     onSizeMeasured: (Int, Int) -> Unit,
+    onLoaded: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var isLoaded by remember { mutableStateOf(false) }
@@ -753,6 +822,7 @@ fun KaTeXDisplayView(
                                     override fun onPageFinished(view: WebView?, url: String?) {
                                         super.onPageFinished(view, url)
                                         isLoaded = true
+                                        onLoaded?.invoke()
                                         try {
                                             evaluateJavascript(
                                                 "renderMath(${JSONObject.quote(formula)}, $isDark);",
@@ -781,6 +851,7 @@ fun KaTeXDisplayView(
                     },
                     update = { view ->
                         if (isLoaded && !webViewFailed && view is WebView) {
+                            onLoaded?.invoke()
                             try {
                                 view.evaluateJavascript(
                                     "renderMath(${JSONObject.quote(formula)}, $isDark);",
@@ -795,25 +866,8 @@ fun KaTeXDisplayView(
                 )
             }
         }
-
-        // Instant mathematical Serif preview while WebView is evaluating KaTeX or if WebView fails
-        if (!isLoaded || webViewFailed) {
-            Text(
-                text = unicodeFallback,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontFamily = FontFamily.Serif,
-                    fontStyle = FontStyle.Italic,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 17.sp,
-                    letterSpacing = 0.4.sp
-                ),
-                color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
-                modifier = Modifier
-                    .wrapContentSize()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                textAlign = TextAlign.Center
-            )
-        }
+        // Note: unicode fallback is rendered by the parent MathEquationBlockView as a permanent
+        // sizing anchor. KaTeX WebView overlays on top when loaded. No duplicate text here.
     }
 }
 
@@ -1444,8 +1498,23 @@ fun buildFormattedInlineTextInternal(raw: String, baseColor: Color, isDark: Bool
                 }
                 fullMatch.startsWith("$") -> {
                     val mathContent = match.groupValues.getOrNull(9) ?: ""
+                    // Check if this is real math or a currency/plain-text dollar sign.
+                    // Math operators: = \ ^ _ + - < > ≤ ≥ ∈ ∉ ≠ ≈ → ∫ ∑ ∏ ∂ ∞ ∀ ∃
+                    val hasMathOperator = mathContent.contains("=") || mathContent.contains("\\") ||
+                        mathContent.contains("^") || mathContent.contains("_") ||
+                        mathContent.contains("+") || mathContent.contains("-") ||
+                        mathContent.contains("<") || mathContent.contains(">") ||
+                        mathContent.contains("≤") || mathContent.contains("≥") ||
+                        mathContent.contains("≠") || mathContent.contains("≈") ||
+                        mathContent.contains("→") || mathContent.contains("∫") ||
+                        mathContent.contains("∑") || mathContent.contains("∏") ||
+                        mathContent.contains("∂") || mathContent.contains("∞") ||
+                        mathContent.contains("∈") || mathContent.contains("∉") ||
+                        mathContent.contains("∀") || mathContent.contains("∃") ||
+                        mathContent.contains("frac") || mathContent.contains("sqrt") ||
+                        mathContent.contains("cdot") || mathContent.contains("times")
                     val isCurrencyOrPlain = mathContent.matches(Regex("""^\s*\d+(?:[.,]\d+)?\s*$""")) ||
-                        (mathContent.contains(" ") && !mathContent.contains("=") && !mathContent.contains("\\") && !mathContent.contains("^") && !mathContent.contains("_") && !mathContent.contains("+") && !mathContent.contains("-"))
+                        (mathContent.contains(" ") && !hasMathOperator)
                     if (isCurrencyOrPlain) {
                         append(fullMatch)
                     } else {
@@ -1532,10 +1601,12 @@ sealed class MarkdownBlock {
  * Intelligent Markdown and Math block parser.
  * Dispatches code blocks, tables, headings, lists, blockquotes, display math equations, and paragraphs.
  */
-fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
+fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownBlock> {
     if (raw.isBlank()) return emptyList()
-    val cached = markdownBlockCache.get(raw)
-    if (cached != null) return cached
+    if (!skipCache) {
+        val cached = markdownBlockCache.get(raw)
+        if (cached != null) return cached
+    }
     val blocks = mutableListOf<MarkdownBlock>()
     val lines = raw.split("\n")
     var inCodeBlock = false
@@ -1611,10 +1682,16 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
                 }
                 i++
                 continue
-            } else if (trimmed.startsWith("$$")) {
-                flushPara()
+            } else {
+                if (before.isNotEmpty()) {
+                    if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                    paraBuffer.append(before)
+                    flushPara()
+                } else {
+                    flushPara()
+                }
                 val mathBuffer = StringBuilder()
-                val first = trimmed.removePrefix("$$").trim()
+                val first = remainder.trim()
                 if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
                 i++
                 while (i < lines.size && !lines[i].trim().startsWith("$$")) {
@@ -1716,6 +1793,14 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         }
 
         when {
+            trimmed.startsWith("##### ") -> {
+                flushPara()
+                blocks.add(MarkdownBlock.Heading(5, trimmed.removePrefix("##### ").trim()))
+            }
+            trimmed.startsWith("#### ") -> {
+                flushPara()
+                blocks.add(MarkdownBlock.Heading(4, trimmed.removePrefix("#### ").trim()))
+            }
             trimmed.startsWith("### ") -> {
                 flushPara()
                 blocks.add(MarkdownBlock.Heading(3, trimmed.removePrefix("### ").trim()))
@@ -1779,6 +1864,8 @@ fun parseMarkdownBlocks(raw: String): List<MarkdownBlock> {
         flushPara()
     }
 
-    markdownBlockCache.put(raw, blocks)
+    if (!skipCache) {
+        markdownBlockCache.put(raw, blocks)
+    }
     return blocks
 }
