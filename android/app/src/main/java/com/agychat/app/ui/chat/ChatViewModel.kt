@@ -1955,14 +1955,35 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * Efficiently prepares and optimizes attachments for network transmission.
-     * High-resolution camera photos (>5MB - 30MB) are intelligently downscaled to max 2048px
-     * and compressed to JPEG quality 85, reducing transmission size to ~300KB-800KB without
-     * any visual quality degradation for vision models. Prevents WebSocket buffer overflow & OOM.
+     * Efficiently prepares and uploads attachments for network transmission.
+     * For PDFs, documents, or large files (>1.5MB), uploads directly to Colab bridge via HTTP multipart POST.
+     * For photos, downsamples to max 2048px and compresses to 85% JPEG (~300KB-800KB).
+     * Eliminates WebSocket frame limits, buffer overflow, and 413 Payload Too Large errors.
      */
-    private fun processAttachment(att: AttachmentItem): JSONObject? {
+    private suspend fun processAttachment(att: AttachmentItem): JSONObject? {
         val uri = Uri.parse(att.uri)
         val isImg = att.isImage || (att.mimeType?.startsWith("image/") == true)
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        val bridgeUrl = _serverUrl.value.ifBlank { prefs.getString("server_url", "") ?: "" }
+
+        val isPdfOrDoc = !isImg || att.mimeType?.contains("pdf") == true || att.name.endsWith(".pdf", ignoreCase = true)
+
+        // Technique: Upload PDFs and non-image files via HTTP multipart directly to Colab bridge
+        if (isPdfOrDoc && bridgeUrl.isNotBlank()) {
+            _currentStatus.value = "Uploading ${att.name} to Colab..."
+            val serverPath = localFileManager.uploadAttachmentToBridge(bridgeUrl, uri, att.name, att.mimeType)
+            if (serverPath != null) {
+                Log.i("ChatViewModel", "Attachment ${att.name} successfully uploaded via HTTP to $serverPath")
+                return JSONObject().apply {
+                    put("name", att.name)
+                    put("is_image", isImg)
+                    put("server_path", serverPath)
+                    put("mime_type", att.mimeType ?: "application/pdf")
+                }
+            } else {
+                Log.w("ChatViewModel", "HTTP upload failed for ${att.name}, trying fallback...")
+            }
+        }
 
         val bytes: ByteArray? = if (isImg) {
             try {
@@ -2023,11 +2044,25 @@ class ChatViewModel @Inject constructor(
             return null
         }
 
-        // 25MB maximum limit for non-image files / raw documents
-        if (bytes.size > 25 * 1024 * 1024) {
+        // If file is > 1.5MB and wasn't uploaded via HTTP yet, upload it now
+        if (bytes.size > 1500 * 1024 && bridgeUrl.isNotBlank()) {
+            _currentStatus.value = "Uploading ${att.name} (${bytes.size / (1024 * 1024)}MB)..."
+            val serverPath = localFileManager.uploadAttachmentToBridge(bridgeUrl, uri, att.name, att.mimeType)
+            if (serverPath != null) {
+                return JSONObject().apply {
+                    put("name", att.name)
+                    put("is_image", isImg)
+                    put("server_path", serverPath)
+                    put("mime_type", att.mimeType ?: "application/octet-stream")
+                }
+            }
+        }
+
+        // Inline base64 safeguard: maximum 3MB for inline WebSocket payload to prevent frame drops
+        if (bytes.size > 3 * 1024 * 1024) {
             val mb = bytes.size / (1024 * 1024)
-            Log.w("ChatViewModel", "Attachment ${att.name} exceeds 25MB limit ($mb MB)")
-            appendSystemMessage("⚠️ File \"${att.name}\" exceeds the 25MB limit ($mb MB) and was skipped. Please attach a smaller file.")
+            Log.w("ChatViewModel", "Attachment ${att.name} ($mb MB) exceeds inline limit and HTTP upload unavailable")
+            appendSystemMessage("⚠️ File \"${att.name}\" ($mb MB) is too large for inline message. Please verify Colab bridge connection.")
             return null
         }
 

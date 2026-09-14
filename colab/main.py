@@ -252,11 +252,13 @@ async def download_file(path: str):
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Accept file upload from Android app, save to /tmp with size limits."""
+    """Accept file upload from Android app, save to /tmp/uploads with size limits."""
     try:
+        os.makedirs("/tmp/uploads", exist_ok=True)
         safe_name = os.path.basename(file.filename or "upload")
-        file_path = f"/tmp/agychat_{safe_name}"
-        max_bytes = 50 * 1024 * 1024  # 50MB safeguard
+        timestamp = int(time.time() * 1000)
+        file_path = f"/tmp/uploads/{timestamp}_{safe_name}"
+        max_bytes = 100 * 1024 * 1024  # 100MB safeguard
         total_read = 0
         async with aio_open(file_path, "wb") as out_file:
             while True:
@@ -265,11 +267,12 @@ async def upload_file(file: UploadFile = File(...)):
                     break
                 total_read += len(chunk)
                 if total_read > max_bytes:
-                    raise HTTPException(status_code=413, detail="File too large (max 50MB)")
+                    raise HTTPException(status_code=413, detail="File too large (max 100MB)")
                 await out_file.write(chunk)
-        logger.info(f"Uploaded file: {file_path} ({total_read} bytes)")
+        logger.info(f"Uploaded file via HTTP: {file_path} ({total_read} bytes)")
         return {
             "filename": safe_name,
+            "server_path": file_path,
             "path": file_path,
             "size": total_read,
             "status": "uploaded"
@@ -617,8 +620,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     for f_idx, f_item in enumerate(attached_files):
                         try:
                             f_name = f_item.get("name", f"file_{f_idx}")
+                            f_server_path = f_item.get("server_path") or f_item.get("path")
                             f_data = f_item.get("data")
-                            if f_data:
+                            if f_server_path and os.path.exists(f_server_path):
+                                file_prefixes.append(f"[User attached file: {f_server_path}]")
+                                logger.info(f"Referenced pre-uploaded attachment: {f_server_path}")
+                            elif f_data:
                                 s_name = f"{f_idx}_{os.path.basename(f_name)}"
                                 s_path = f"/tmp/uploads/{s_name}"
                                 # Protect against decoding oversized files

@@ -51,6 +51,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.util.LruCache
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.JavascriptInterface
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import com.agychat.app.ui.theme.*
 import kotlinx.coroutines.delay
 import org.json.JSONObject
@@ -594,6 +601,95 @@ fun MarkdownContent(
  * Features instant Serif mathematical Unicode rendering, smooth horizontal scrolling for wide equations,
  * one-tap copy with haptic feedback, and raw LaTeX view toggle.
  */
+object MathRenderCache {
+    val bitmapCache = LruCache<String, Bitmap>(300)
+}
+
+class KaTeXCaptureBridge(private val onMeasured: (Int, Int) -> Unit) {
+    @JavascriptInterface
+    fun onSize(w: Float, h: Float) { onMeasured(w.toInt(), h.toInt()) }
+    @JavascriptInterface
+    fun onSize(w: Int, h: Int) { onMeasured(w, h) }
+    @JavascriptInterface
+    fun onSize(w: Double, h: Double) { onMeasured(w.toInt(), h.toInt()) }
+    @JavascriptInterface
+    fun onHeight(h: Float) { onMeasured(0, h.toInt()) }
+    @JavascriptInterface
+    fun onHeight(h: Int) { onMeasured(0, h) }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun GeminiKaTeXCaptureView(
+    formula: String,
+    isDark: Boolean,
+    onBitmapCaptured: (Bitmap) -> Unit
+) {
+    var hasCaptured by remember { mutableStateOf(false) }
+
+    AndroidView(
+        factory = { ctx ->
+            WebView(ctx).apply {
+                setBackgroundColor(0)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.allowFileAccess = true
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+
+                val bridge = KaTeXCaptureBridge { wPx, hPx ->
+                    post {
+                        if (!hasCaptured && width > 0 && height > 0) {
+                            hasCaptured = true
+                            try {
+                                val targetW = maxOf(width, wPx).coerceIn(40, 1600)
+                                val targetH = maxOf(height, hPx).coerceIn(24, 1200)
+                                val bmp = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                                val canvas = Canvas(bmp)
+                                draw(canvas)
+                                onBitmapCaptured(bmp)
+                            } catch (_: Throwable) {}
+                        }
+                    }
+                }
+                addJavascriptInterface(bridge, "AndroidBridge")
+
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        try {
+                            evaluateJavascript(
+                                "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                                null
+                            )
+                        } catch (_: Throwable) {}
+                        postDelayed({
+                            if (!hasCaptured && width > 0 && height > 0) {
+                                hasCaptured = true
+                                try {
+                                    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                    val canvas = Canvas(bmp)
+                                    draw(canvas)
+                                    onBitmapCaptured(bmp)
+                                } catch (_: Throwable) {}
+                            }
+                        }, 220)
+                    }
+                }
+                loadUrl("file:///android_asset/katex/katex_container.html")
+            }
+        },
+        modifier = Modifier.size(1.dp).alpha(0.01f)
+    )
+}
+
+/**
+ * Gemini App-style mathematical equation block.
+ * Renders publication-grade mathematical notation (fractions, integrals, radicals, matrices)
+ * inside a dedicated Gemini card with 100% static Bitmap caching for buttery smooth 120 FPS scrolling.
+ */
 @Composable
 fun MathEquationBlockView(
     formula: String,
@@ -605,6 +701,8 @@ fun MathEquationBlockView(
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
     val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
+    val cacheKey = remember(normalizedFormula, isDark) { "${normalizedFormula}__${if (isDark) "dark" else "light"}" }
+    var cachedBitmap by remember(cacheKey) { mutableStateOf(MathRenderCache.bitmapCache.get(cacheKey)) }
     var isCopied by remember { mutableStateOf(false) }
     var showRawLatex by remember { mutableStateOf(false) }
 
@@ -615,88 +713,148 @@ fun MathEquationBlockView(
         }
     }
 
-    val pillBg = if (isDark) Color(0xFF16161D).copy(alpha = 0.85f) else Color(0xFFF3F2ED).copy(alpha = 0.9f)
-    val borderColor = if (isDark) Color(0xFF2E2E38).copy(alpha = 0.6f) else Color(0xFFDFDED6).copy(alpha = 0.7f)
+    // Exact Gemini App math card styling
+    val cardBg = if (isDark) Color(0xFF1E1F24) else Color(0xFFF0F4F9)
+    val borderColor = if (isDark) Color(0xFF2E313A) else Color(0xFFD8DCE5)
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 4.dp),
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
-                isCopied = true
-                Toast.makeText(context, "Copied LaTeX", Toast.LENGTH_SHORT).show()
-            },
-            shape = RoundedCornerShape(8.dp),
-            color = pillBg,
-            border = androidx.compose.foundation.BorderStroke(0.6.dp, borderColor),
+            shape = RoundedCornerShape(14.dp),
+            color = cardBg,
+            border = androidx.compose.foundation.BorderStroke(0.8.dp, borderColor),
+            tonalElevation = 1.dp,
             modifier = Modifier
                 .wrapContentSize()
-                .widthIn(max = 680.dp)
+                .widthIn(max = 720.dp)
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .wrapContentSize()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                if (showRawLatex) {
-                    Text(
-                        text = normalizedFormula,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.5.sp,
-                            lineHeight = 18.sp
-                        ),
-                        color = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24),
-                        textAlign = TextAlign.Center
-                    )
-                } else {
-                    // The unicode preview always provides the base size for the container.
-                    // The KaTeX WebView renders on top once loaded, and overrides size via measuredWidthDp/Height.
-                    // This ensures the formula block is never collapsed to a tiny 34dp box during streaming.
-                    val estimatedInitialWidth = remember(unicodePreview) { (unicodePreview.length * 10 + 24).coerceIn(80, 480).dp }
-                    
-                    Box(
-                        modifier = Modifier
-                            .widthIn(min = estimatedInitialWidth)
-                            .wrapContentHeight(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        // Fully static, instantaneous Unicode native math rendering
-                        Text(
-                            text = unicodePreview,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                fontFamily = FontFamily.Serif,
-                                fontStyle = FontStyle.Italic,
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 17.sp,
-                                letterSpacing = 0.4.sp
-                            ),
-                            color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
+                // Formula display area with smooth horizontal scroll for wide equations
+                Row(
+                    modifier = Modifier
+                        .wrapContentSize()
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    if (showRawLatex) {
+                        SelectionContainer {
+                            Text(
+                                text = normalizedFormula,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                ),
+                                color = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24),
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else if (cachedBitmap != null) {
+                        // 100% Native, Static, publication-grade math rendering (Zero lag, 120 FPS)
+                        Image(
+                            bitmap = cachedBitmap!!.asImageBitmap(),
+                            contentDescription = "Mathematical equation: $normalizedFormula",
                             modifier = Modifier
                                 .wrapContentSize()
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                            textAlign = TextAlign.Center
+                                .padding(horizontal = 6.dp, vertical = 4.dp)
                         )
+                    } else {
+                        // Hybrid: render KaTeX once and snapshot to static Bitmap, while displaying Unicode preview
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = unicodePreview,
+                                style = MaterialTheme.typography.bodyLarge.copy(
+                                    fontFamily = FontFamily.Serif,
+                                    fontStyle = FontStyle.Italic,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 17.sp,
+                                    letterSpacing = 0.4.sp
+                                ),
+                                color = if (isDark) Color(0xFFE3E3E8) else Color(0xFF1F1F24),
+                                modifier = Modifier
+                                    .wrapContentSize()
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                                textAlign = TextAlign.Center
+                            )
+
+                            // Background capture WebView that draws to Bitmap once rendered
+                            GeminiKaTeXCaptureView(
+                                formula = normalizedFormula,
+                                isDark = isDark,
+                                onBitmapCaptured = { bmp ->
+                                    MathRenderCache.bitmapCache.put(cacheKey, bmp)
+                                    cachedBitmap = bmp
+                                }
+                            )
+                        }
                     }
                 }
 
-                Spacer(Modifier.width(8.dp))
+                // Discrete Gemini-style footer actions
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Raw LaTeX toggle
+                    Text(
+                        text = if (showRawLatex) "Preview" else "TeX",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 10.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { showRawLatex = !showRawLatex }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
 
-                Icon(
-                    imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                    contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
-                    tint = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFF7E7E8E) else Color(0xFF9E9EAA),
-                    modifier = Modifier.size(12.dp)
-                )
+                    Spacer(Modifier.width(8.dp))
+
+                    // Copy Button
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                            isCopied = true
+                            Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color.Transparent
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
+                                tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = if (isCopied) "Copied" else "Copy",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
             }
         }
     }

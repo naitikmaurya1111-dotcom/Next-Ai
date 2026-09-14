@@ -18,6 +18,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -506,6 +509,82 @@ class LocalFileManager @Inject constructor(
         } catch (t: Throwable) {
             Log.w(TAG, "Failed to fetch and cache Colab file $normPath: ${t.message}")
             null
+        }
+    }
+
+    /**
+     * Uploads large attachments (PDFs, docs, large files >1.5MB) directly to Colab bridge via HTTP multipart.
+     * Prevents Base64 payload bloat, WebSocket buffer overflow, and frame rejection.
+     * Returns server path (e.g. /tmp/uploads/1726..._doc.pdf) on success.
+     */
+    suspend fun uploadAttachmentToBridge(
+        bridgeUrl: String,
+        uri: Uri,
+        fileName: String,
+        mimeType: String?
+    ): String? = withContext(Dispatchers.IO) {
+        val base = bridgeUrl.trim().trimEnd('/')
+        if (base.isBlank()) return@withContext null
+
+        val httpUrl = when {
+            base.startsWith("ws://") -> base.replace("ws://", "http://")
+            base.startsWith("wss://") -> base.replace("wss://", "https://")
+            !base.startsWith("http") -> "https://$base"
+            else -> base
+        }
+        val uploadUrl = "$httpUrl/upload"
+
+        val tempFile = File.createTempFile("up_", "_${fileName.take(30)}", context.cacheDir)
+        try {
+            val inputStream = try {
+                context.contentResolver.openInputStream(uri)
+            } catch (_: Throwable) {
+                if (uri.scheme == "file") File(uri.path ?: "").inputStream() else null
+            } ?: return@withContext null
+
+            inputStream.use { input ->
+                FileOutputStream(tempFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            val mediaType = (mimeType ?: "application/octet-stream").toMediaTypeOrNull()
+            val requestBody = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "file",
+                    fileName,
+                    tempFile.asRequestBody(mediaType)
+                )
+                .build()
+
+            val request = Request.Builder()
+                .url(uploadUrl)
+                .post(requestBody)
+                .build()
+
+            val uploadClient = okHttpClient.newBuilder()
+                .connectTimeout(60, TimeUnit.SECONDS)
+                .writeTimeout(120, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
+                .build()
+
+            val response = uploadClient.newCall(request).execute()
+            if (response.isSuccessful) {
+                val respStr = response.body?.string() ?: ""
+                val json = JSONObject(respStr)
+                val serverPath = json.optString("server_path", json.optString("path", ""))
+                Log.i(TAG, "Uploaded $fileName (${tempFile.length()} bytes) to Colab bridge: $serverPath")
+                if (serverPath.isNotBlank()) serverPath else null
+            } else {
+                Log.w(TAG, "Upload failed for $fileName: HTTP ${response.code} ${response.message}")
+                null
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Exception uploading attachment $fileName to $uploadUrl", t)
+            null
+        } finally {
+            try { tempFile.delete() } catch (_: Throwable) {}
         }
     }
 
