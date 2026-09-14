@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <bitmap xmlns:android="http://schemas.android.com/apk/res/android"
-    android:src="@drawable/neon_glass_logo"
+    android:src="@drawable/ic_launcher_foreground_gemini"
     android:gravity="fill"
     android:antialias="true"
     android:filter="true" />

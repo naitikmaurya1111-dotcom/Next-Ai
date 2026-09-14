@@ -5,8 +5,13 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Antigravity Neon Glass Star Monochrome Silhouette for Themed Icons (Android 13+) -->
+    <!-- Gemini-inspired 4-Point Star Silhouette for Android 13+ Themed Icons -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M 54,22 C 54,42 66,54 86,54 C 66,54 54,66 54,86 C 54,66 42,54 22,54 C 42,54 54,42 54,22 Z" />
+        android:pathData="M 54,23 C 54,41.5 66.5,54 85,54 C 66.5,54 54,66.5 54,85 C 54,66.5 41.5,54 23,54 C 41.5,54 54,41.5 54,23 Z" />
+
+    <!-- Twin Satellite Spark -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 78,24 C 78,29 82,33 87,33 C 82,33 78,37 78,42 C 78,37 74,33 69,33 C 74,33 78,29 78,24 Z" />
 </vector>
