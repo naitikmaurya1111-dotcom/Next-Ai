@@ -147,6 +147,7 @@ fun ChatScreen(
     val activeTasksCount by viewModel.activeTasksCount.collectAsState()
     val customInstructions by viewModel.customInstructions.collectAsState()
     val personalization by viewModel.personalization.collectAsState()
+    val chatTextSizeScale by viewModel.chatTextSizeScale.collectAsState()
     val showFollowupSuggestions by viewModel.showFollowupSuggestions.collectAsState()
     val showStreamingCursor by viewModel.showStreamingCursor.collectAsState()
     val compactMessageDensity by viewModel.compactMessageDensity.collectAsState()
@@ -785,6 +786,21 @@ fun ChatScreen(
                                         )
                                         DropdownMenuItem(
                                             leadingIcon = {
+                                                Icon(Icons.Default.FormatSize, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            },
+                                            text = { Text("Text Size (${(chatTextSizeScale * 100).toInt()}%)", style = MaterialTheme.typography.bodyMedium) },
+                                            onClick = {
+                                                val next = when (chatTextSizeScale) {
+                                                    0.8f -> 1.0f
+                                                    1.0f -> 1.2f
+                                                    1.2f -> 1.4f
+                                                    else -> 0.8f
+                                                }
+                                                viewModel.setChatTextSizeScale(next)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            leadingIcon = {
                                                 Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                                             },
                                             text = { Text("Settings & Bridge", style = MaterialTheme.typography.bodyMedium) },
@@ -1369,12 +1385,19 @@ fun ChatScreen(
                 .padding(paddingValues),
             contentAlignment = Alignment.TopCenter
         ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .widthIn(max = 840.dp)
-                    .fillMaxWidth()
+            val currentDensity = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+                    density = currentDensity.density,
+                    fontScale = currentDensity.fontScale * chatTextSizeScale
+                )
             ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .widthIn(max = 840.dp)
+                        .fillMaxWidth()
+                ) {
                 if (displayedMessages.isEmpty()) {
                     if (showPinnedOnly) {
                         Box(
@@ -1564,12 +1587,12 @@ fun ChatScreen(
                         }
                     }
                 }
+                    }
+                }
             }
         }
     }
     }
-
-    if (isTablet) {
         Row(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = isTabletSidebarExpanded,

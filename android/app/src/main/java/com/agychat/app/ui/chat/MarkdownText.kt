@@ -4,9 +4,6 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.webkit.JavascriptInterface
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
@@ -610,10 +607,6 @@ fun MathEquationBlockView(
     val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
     var isCopied by remember { mutableStateOf(false) }
     var showRawLatex by remember { mutableStateOf(false) }
-    var measuredWidthDp by remember { mutableStateOf<androidx.compose.ui.unit.Dp?>(null) }
-    var measuredHeightDp by remember { mutableStateOf<androidx.compose.ui.unit.Dp?>(null) }
-    var isKaTeXLoaded by remember { mutableStateOf(false) }
-    val density = LocalDensity.current
 
     LaunchedEffect(isCopied) {
         if (isCopied) {
@@ -670,20 +663,14 @@ fun MathEquationBlockView(
                     // The KaTeX WebView renders on top once loaded, and overrides size via measuredWidthDp/Height.
                     // This ensures the formula block is never collapsed to a tiny 34dp box during streaming.
                     val estimatedInitialWidth = remember(unicodePreview) { (unicodePreview.length * 10 + 24).coerceIn(80, 480).dp }
-                    val dynamicWidthMod = if (measuredWidthDp != null)
-                        Modifier.width(measuredWidthDp!!.coerceIn(60.dp, 640.dp))
-                    else
-                        Modifier.widthIn(min = estimatedInitialWidth)
-                    val dynamicHeightMod = if (measuredHeightDp != null)
-                        Modifier.height(measuredHeightDp!!.coerceIn(28.dp, 600.dp))
-                    else
-                        Modifier.wrapContentHeight()  // Let unicode text size drive height until KaTeX loads
-
+                    
                     Box(
-                        modifier = dynamicWidthMod.then(dynamicHeightMod),
+                        modifier = Modifier
+                            .widthIn(min = estimatedInitialWidth)
+                            .wrapContentHeight(),
                         contentAlignment = Alignment.Center
                     ) {
-                        // Unicode preview — visible as the sizing anchor, seamlessly fades when KaTeX finishes rendering
+                        // Fully static, instantaneous Unicode native math rendering
                         Text(
                             text = unicodePreview,
                             style = MaterialTheme.typography.bodyLarge.copy(
@@ -696,23 +683,8 @@ fun MathEquationBlockView(
                             color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
                             modifier = Modifier
                                 .wrapContentSize()
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                .alpha(if (isKaTeXLoaded) 0f else 1f),
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
                             textAlign = TextAlign.Center
-                        )
-                        // KaTeX WebView overlays on top of unicode preview once loaded
-                        KaTeXDisplayView(
-                            formula = normalizedFormula,
-                            unicodeFallback = unicodePreview,
-                            isDark = isDark,
-                            onSizeMeasured = { wPx, hPx ->
-                                with(density) {
-                                    if (wPx > 0) measuredWidthDp = (wPx + 8).toDp()
-                                    if (hPx > 0) measuredHeightDp = (hPx + 4).toDp()
-                                }
-                            },
-                            onLoaded = { isKaTeXLoaded = true },
-                            modifier = Modifier.matchParentSize()
                         )
                     }
                 }
@@ -733,148 +705,6 @@ fun MathEquationBlockView(
 /**
  * Public JavaScript bridge for KaTeX HTML container communication.
  * Handles size changes dynamically for free-size math rendering.
- */
-class KaTeXBridge(private val onSizeChanged: (Int, Int) -> Unit) {
-    @JavascriptInterface
-    fun onHeight(h: Double) {
-        onSizeChanged(0, h.toInt())
-    }
-
-    @JavascriptInterface
-    fun onHeight(h: Float) {
-        onSizeChanged(0, h.toInt())
-    }
-
-    @JavascriptInterface
-    fun onHeight(h: Int) {
-        onSizeChanged(0, h)
-    }
-
-    @JavascriptInterface
-    fun onHeight(h: String) {
-        h.toDoubleOrNull()?.let { onSizeChanged(0, it.toInt()) }
-    }
-
-    @JavascriptInterface
-    fun onSize(w: Double, h: Double) {
-        onSizeChanged(w.toInt(), h.toInt())
-    }
-
-    @JavascriptInterface
-    fun onSize(w: Float, h: Float) {
-        onSizeChanged(w.toInt(), h.toInt())
-    }
-
-    @JavascriptInterface
-    fun onSize(w: Int, h: Int) {
-        onSizeChanged(w, h)
-    }
-
-    @JavascriptInterface
-    fun onSize(w: String, h: String) {
-        val width = w.toDoubleOrNull()?.toInt() ?: 0
-        val height = h.toDoubleOrNull()?.toInt() ?: 0
-        onSizeChanged(width, height)
-    }
-}
-
-/**
- * Transparent, free-sized KaTeX WebView display engine.
- * Renders publication-quality mathematical notation dynamically matching formula dimensions.
- * Fails gracefully to mathematical Serif Unicode typography if WebView is unavailable.
- */
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-fun KaTeXDisplayView(
-    formula: String,
-    unicodeFallback: String,
-    isDark: Boolean,
-    onSizeMeasured: (Int, Int) -> Unit,
-    onLoaded: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
-) {
-    var isLoaded by remember { mutableStateOf(false) }
-    var webViewFailed by remember { mutableStateOf(false) }
-
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        if (!webViewFailed) {
-            DisableSelection {
-                AndroidView(
-                    factory = { ctx ->
-                        try {
-                            WebView(ctx).apply {
-                                setBackgroundColor(0) // Transparent background
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = true
-                                settings.allowFileAccess = true
-                                settings.useWideViewPort = true
-                                settings.loadWithOverviewMode = true
-                                isVerticalScrollBarEnabled = false
-                                isHorizontalScrollBarEnabled = true
-                                isNestedScrollingEnabled = false
-
-                                val bridge = KaTeXBridge { wPx, hPx ->
-                                    post { onSizeMeasured(wPx, hPx) }
-                                }
-                                addJavascriptInterface(bridge, "AndroidBridge")
-
-                                webViewClient = object : WebViewClient() {
-                                    override fun onPageFinished(view: WebView?, url: String?) {
-                                        super.onPageFinished(view, url)
-                                        isLoaded = true
-                                        onLoaded?.invoke()
-                                        try {
-                                            evaluateJavascript(
-                                                "renderMath(${JSONObject.quote(formula)}, $isDark);",
-                                                null
-                                            )
-                                        } catch (_: Throwable) {}
-                                    }
-
-                                    override fun onReceivedError(
-                                        view: WebView?,
-                                        errorCode: Int,
-                                        description: String?,
-                                        failingUrl: String?
-                                    ) {
-                                        webViewFailed = true
-                                    }
-                                }
-
-                                loadUrl("file:///android_asset/katex/katex_container.html")
-                            }
-                        } catch (t: Throwable) {
-                            android.util.Log.e("KaTeXDisplayView", "WebView creation failed, using unicode fallback", t)
-                            webViewFailed = true
-                            android.view.View(ctx)
-                        }
-                    },
-                    update = { view ->
-                        if (isLoaded && !webViewFailed && view is WebView) {
-                            onLoaded?.invoke()
-                            try {
-                                view.evaluateJavascript(
-                                    "renderMath(${JSONObject.quote(formula)}, $isDark);",
-                                    null
-                                )
-                            } catch (t: Throwable) {
-                                android.util.Log.w("KaTeXDisplayView", "evaluateJavascript failed", t)
-                            }
-                        }
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
-        // Note: unicode fallback is rendered by the parent MathEquationBlockView as a permanent
-        // sizing anchor. KaTeX WebView overlays on top when loaded. No duplicate text here.
-    }
-}
-
-/**
- * Ultra-fast, zero-overhead syntax highlighter for Compose AnnotatedString.
- * Highlights keywords, types, strings, numbers, comments, and annotations
- * across Kotlin, Python, JavaScript, TypeScript, Bash, Java, C/C++, Rust, Go, SQL, JSON, etc.
  */
 object SyntaxHighlighter {
     private val keywords = setOf(

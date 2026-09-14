@@ -131,6 +131,9 @@ class ChatViewModel @Inject constructor(
     val showPinnedOnly: StateFlow<Boolean> = _showPinnedOnly.asStateFlow()
 
     // Chat Experience & Interaction Settings
+    private val _chatTextSizeScale = MutableStateFlow(1.0f)
+    val chatTextSizeScale: StateFlow<Float> = _chatTextSizeScale.asStateFlow()
+
     private val _showFollowupSuggestions = MutableStateFlow(true)
     val showFollowupSuggestions: StateFlow<Boolean> = _showFollowupSuggestions.asStateFlow()
 
@@ -142,6 +145,12 @@ class ChatViewModel @Inject constructor(
 
     private val _showMemoryActivityBadges = MutableStateFlow(true)
     val showMemoryActivityBadges: StateFlow<Boolean> = _showMemoryActivityBadges.asStateFlow()
+
+    fun setChatTextSizeScale(scale: Float) {
+        _chatTextSizeScale.value = scale
+        val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putFloat("chat_text_size_scale", scale).apply()
+    }
 
     fun setShowFollowupSuggestions(enabled: Boolean) {
         _showFollowupSuggestions.value = enabled
@@ -683,6 +692,8 @@ class ChatViewModel @Inject constructor(
 
             val savedEffort = prefs.getString("reasoning_effort", "high") ?: "high"
             _reasoningEffort.value = savedEffort
+            
+            _chatTextSizeScale.value = prefs.getFloat("chat_text_size_scale", 1.0f)
 
             val savedMemoryEnabled = prefs.getBoolean("memory_enabled", true)
             _isMemoryEnabled.value = savedMemoryEnabled
