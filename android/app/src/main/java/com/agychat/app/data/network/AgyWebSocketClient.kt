@@ -19,7 +19,7 @@ class AgyWebSocketClient @Inject constructor(
 ) {
     companion object {
         private const val TAG = "AgyWebSocketClient"
-        private const val MAX_PAYLOAD_CHARS = 15 * 1024 * 1024 // 15MB safeguard against OOM / buffer overflow
+        private const val MAX_PAYLOAD_CHARS = 35 * 1024 * 1024 // 35MB safeguard matching backend uploads ceiling
     }
 
     private var webSocket: WebSocket? = null

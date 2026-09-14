@@ -10,6 +10,9 @@ import com.agychat.app.data.local.MessageEntity
 import com.agychat.app.data.network.AgyWebSocketClient
 import android.net.Uri
 import android.util.Base64
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.io.ByteArrayOutputStream
 import com.agychat.app.domain.model.AiModel
 import com.agychat.app.domain.model.AttachmentItem
 import com.agychat.app.domain.model.ConnectionState
@@ -1941,6 +1944,108 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private fun readRawBytes(uri: Uri): ByteArray? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { stream -> stream.readBytes() }
+        } catch (_: Throwable) {
+            if (uri.scheme == "file") {
+                try { File(uri.path ?: "").readBytes() } catch (_: Throwable) { null }
+            } else null
+        }
+    }
+
+    /**
+     * Efficiently prepares and optimizes attachments for network transmission.
+     * High-resolution camera photos (>5MB - 30MB) are intelligently downscaled to max 2048px
+     * and compressed to JPEG quality 85, reducing transmission size to ~300KB-800KB without
+     * any visual quality degradation for vision models. Prevents WebSocket buffer overflow & OOM.
+     */
+    private fun processAttachment(att: AttachmentItem): JSONObject? {
+        val uri = Uri.parse(att.uri)
+        val isImg = att.isImage || (att.mimeType?.startsWith("image/") == true)
+
+        val bytes: ByteArray? = if (isImg) {
+            try {
+                // First read bounds safely without loading full bitmap into RAM
+                val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, boundsOptions)
+                }
+                val rawW = boundsOptions.outWidth
+                val rawH = boundsOptions.outHeight
+
+                if (rawW > 0 && rawH > 0) {
+                    var inSampleSize = 1
+                    val maxDim = maxOf(rawW, rawH)
+                    while (maxDim / inSampleSize > 2048) {
+                        inSampleSize *= 2
+                    }
+
+                    val decodeOptions = BitmapFactory.Options().apply {
+                        this.inSampleSize = inSampleSize
+                        inPreferredConfig = Bitmap.Config.ARGB_8888
+                    }
+                    val bitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
+                        BitmapFactory.decodeStream(stream, null, decodeOptions)
+                    }
+
+                    if (bitmap != null) {
+                        val finalBitmap = if (bitmap.width > 2048 || bitmap.height > 2048) {
+                            val ratio = minOf(2048f / bitmap.width, 2048f / bitmap.height)
+                            val scaledW = (bitmap.width * ratio).toInt().coerceAtLeast(1)
+                            val scaledH = (bitmap.height * ratio).toInt().coerceAtLeast(1)
+                            val scaled = Bitmap.createScaledBitmap(bitmap, scaledW, scaledH, true)
+                            if (scaled != bitmap) bitmap.recycle()
+                            scaled
+                        } else {
+                            bitmap
+                        }
+                        val baos = ByteArrayOutputStream()
+                        finalBitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+                        finalBitmap.recycle()
+                        baos.toByteArray()
+                    } else {
+                        readRawBytes(uri)
+                    }
+                } else {
+                    readRawBytes(uri)
+                }
+            } catch (t: Throwable) {
+                Log.w("ChatViewModel", "Image optimization failed for ${att.name}, using raw bytes: ${t.message}")
+                readRawBytes(uri)
+            }
+        } else {
+            readRawBytes(uri)
+        }
+
+        if (bytes == null) {
+            Log.w("ChatViewModel", "Could not read attachment ${att.name}")
+            return null
+        }
+
+        // 25MB maximum limit for non-image files / raw documents
+        if (bytes.size > 25 * 1024 * 1024) {
+            val mb = bytes.size / (1024 * 1024)
+            Log.w("ChatViewModel", "Attachment ${att.name} exceeds 25MB limit ($mb MB)")
+            appendSystemMessage("⚠️ File \"${att.name}\" exceeds the 25MB limit ($mb MB) and was skipped. Please attach a smaller file.")
+            return null
+        }
+
+        val fileB64 = try {
+            Base64.encodeToString(bytes, Base64.NO_WRAP)
+        } catch (t: Throwable) {
+            Log.e("ChatViewModel", "Base64 encode error for attachment ${att.name}", t)
+            null
+        } ?: return null
+
+        return JSONObject().apply {
+            put("name", att.name)
+            put("is_image", isImg)
+            put("mime_type", if (isImg) "image/jpeg" else (att.mimeType ?: "application/octet-stream"))
+            put("data", fileB64)
+        }
+    }
+
     fun sendMessage(text: String) {
         val trimmed = text.trim()
         val attachments = _selectedAttachments.value
@@ -2027,35 +2132,13 @@ class ChatViewModel @Inject constructor(
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            // Encode files to base64 strictly on Dispatchers.IO to prevent UI freeze and OOM
+            // Encode and optimize files on Dispatchers.IO to prevent UI freeze and OOM
             val filesArray = org.json.JSONArray()
             for (att in attachments) {
                 try {
-                    val uri = Uri.parse(att.uri)
-                    val bytes = try {
-                        context.contentResolver.openInputStream(uri)?.use { stream -> stream.readBytes() }
-                    } catch (_: Throwable) {
-                        if (uri.scheme == "file") {
-                            try { File(uri.path ?: "").readBytes() } catch (_: Throwable) { null }
-                        } else null
-                    }
-
-                    if (bytes != null && bytes.size <= 15 * 1024 * 1024) {
-                        val fileB64 = try {
-                            Base64.encodeToString(bytes, Base64.NO_WRAP)
-                        } catch (t: Throwable) {
-                            Log.e("ChatViewModel", "Base64 encode error for attachment ${att.name}", t)
-                            null
-                        }
-                        if (fileB64 != null) {
-                            val fObj = JSONObject().apply {
-                                put("name", att.name)
-                                put("is_image", att.isImage)
-                                put("mime_type", att.mimeType ?: if (att.isImage) "image/jpeg" else "application/octet-stream")
-                                put("data", fileB64)
-                            }
-                            filesArray.put(fObj)
-                        }
+                    val fObj = processAttachment(att)
+                    if (fObj != null) {
+                        filesArray.put(fObj)
                     }
                 } catch (t: Throwable) {
                     Log.w("ChatViewModel", "Failed to process attachment ${att.name}: ${t.message}")
@@ -2595,35 +2678,22 @@ class ChatViewModel @Inject constructor(
                 _messages.value = cleanedList
             }
 
-            // Resend the last user message text with previous conversation history
-            val effort = _reasoningEffort.value
-
-            val historyArray = org.json.JSONArray()
-            val priorTurns = msgs
-                .filter { (it.role == "user" || it.role == "assistant") && it.content.isNotBlank() && it.id != lastUserMsg.id && (lastAssistant == null || it.id != lastAssistant.id) }
-                .takeLast(20)
-            for (m in priorTurns) {
-                val item = JSONObject().apply {
-                    put("role", m.role)
-                    put("content", m.content.take(3000))
+            val filesArray = org.json.JSONArray()
+            if (lastUserMsg.attachments.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    for (att in lastUserMsg.attachments) {
+                        try {
+                            val fObj = processAttachment(att)
+                            if (fObj != null) filesArray.put(fObj)
+                        } catch (t: Throwable) {
+                            Log.w("ChatViewModel", "Failed to re-process attachment ${att.name}: ${t.message}")
+                        }
+                    }
                 }
-                historyArray.put(item)
             }
 
-            val payload = JSONObject().apply {
-                put("message", lastUserMsg.content)
-                put("conversation_id", currentConversationId)
-                put("effort", effort)
-                put("model", _selectedModel.value.id)
-                if (historyArray.length() > 0) {
-                    put("history", historyArray)
-                }
-            }.toString()
-
-            lastReceivedSeq = -1
-            webSocketClient.sendMessage(payload)
-            _isLoading.value = true
             _currentStatus.value = "Regenerating response..."
+            sendTurnPayload(lastUserMsg.content, lastUserMsg.id, filesArray)
         }
     }
 

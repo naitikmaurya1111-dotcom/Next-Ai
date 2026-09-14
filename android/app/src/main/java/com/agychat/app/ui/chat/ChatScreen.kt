@@ -98,6 +98,32 @@ fun queryFileName(context: Context, uri: Uri): String {
     return name
 }
 
+fun queryFileSize(context: Context, uri: Uri): String {
+    try {
+        if (uri.scheme == "file") {
+            val f = File(uri.path ?: "")
+            if (f.exists()) return formatBytes(f.length())
+        }
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (sizeIndex != -1 && cursor.moveToFirst()) {
+                val size = cursor.getLong(sizeIndex)
+                if (size > 0) return formatBytes(size)
+            }
+        }
+    } catch (_: Exception) {}
+    return ""
+}
+
+fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return ""
+    if (bytes < 1024) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024) return String.format(Locale.US, "%.1f KB", kb)
+    val mb = kb / 1024.0
+    return String.format(Locale.US, "%.1f MB", mb)
+}
+
 /** Format a timestamp as a relative human-readable string: "just now", "2m ago", "3h ago", "Yesterday", "Sep 11" */
 fun formatRelativeTime(epochMs: Long): String {
     val now = System.currentTimeMillis()
@@ -141,6 +167,7 @@ fun ChatScreen(
     var showMemorySheet by remember { mutableStateOf(false) }
     var showCustomInstructionsSheet by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showTextSizeSheet by remember { mutableStateOf(false) }
     val enabledMemoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val isTemporaryChat by viewModel.isTemporaryChat.collectAsState()
     val currentCwd by viewModel.currentCwd.collectAsState()
@@ -786,17 +813,17 @@ fun ChatScreen(
                                         )
                                         DropdownMenuItem(
                                             leadingIcon = {
-                                                Icon(Icons.Default.FormatSize, contentDescription = null, modifier = Modifier.size(18.dp))
+                                                Icon(Icons.Default.FormatSize, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(18.dp))
                                             },
-                                            text = { Text("Text Size (${(chatTextSizeScale * 100).toInt()}%)", style = MaterialTheme.typography.bodyMedium) },
-                                            onClick = {
-                                                val next = when (chatTextSizeScale) {
-                                                    0.8f -> 1.0f
-                                                    1.0f -> 1.2f
-                                                    1.2f -> 1.4f
-                                                    else -> 0.8f
+                                            text = {
+                                                Column {
+                                                    Text("Text Size & Display", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
+                                                    Text("${(chatTextSizeScale * 100).toInt()}% • Tap to customize", style = MaterialTheme.typography.labelSmall, color = ClaudeTerracotta)
                                                 }
-                                                viewModel.setChatTextSizeScale(next)
+                                            },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                showTextSizeSheet = true
                                             }
                                         )
                                         DropdownMenuItem(
@@ -1585,14 +1612,15 @@ fun ChatScreen(
                                 }
                             }
                         }
-                    }
-                }
-                    }
                 }
             }
         }
     }
     }
+    }
+}
+
+    if (isTablet) {
         Row(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(
                 visible = isTabletSidebarExpanded,
@@ -1932,6 +1960,16 @@ fun ChatScreen(
         com.agychat.app.ui.settings.CustomInstructionsSheet(
             viewModel = viewModel,
             onDismiss = { showCustomInstructionsSheet = false }
+        )
+    }
+
+    if (showTextSizeSheet) {
+        ChatTextSizeSheet(
+            currentScale = chatTextSizeScale,
+            compactDensity = compactMessageDensity,
+            onScaleChange = { viewModel.setChatTextSizeScale(it) },
+            onCompactDensityToggle = { viewModel.setCompactMessageDensity(!compactMessageDensity) },
+            onDismiss = { showTextSizeSheet = false }
         )
     }
 
@@ -3975,8 +4013,9 @@ fun ClaudeFloatingInputBar(
                                         overflow = TextOverflow.Ellipsis,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
+                                    val sizeStr = remember(att.uri) { queryFileSize(context, Uri.parse(att.uri)) }
                                     Text(
-                                        text = if (att.isImage) "Photo" else "Document",
+                                        text = listOfNotNull(if (att.isImage) "Photo" else "Document", sizeStr.ifBlank { null }).joinToString(" • "),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -6507,4 +6546,270 @@ fun StoragePermissionDialog(
         },
         shape = RoundedCornerShape(20.dp)
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatTextSizeSheet(
+    currentScale: Float,
+    compactDensity: Boolean,
+    onScaleChange: (Float) -> Unit,
+    onCompactDensityToggle: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+
+    val presets = listOf(
+        Triple("Small", 0.85f, "Compact"),
+        Triple("Default", 1.0f, "Standard"),
+        Triple("Comfort", 1.15f, "Balanced"),
+        Triple("Large", 1.30f, "Reading"),
+        Triple("Giant", 1.45f, "Maximum")
+    )
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.FormatSize,
+                            contentDescription = null,
+                            tint = ClaudeTerracotta,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Chat Text Size & Display",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Scale chat message text and density for comfortable reading",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Quick Preset Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                presets.forEach { (label, scale, _) ->
+                    val isSelected = kotlin.math.abs(currentScale - scale) < 0.04f
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onScaleChange(scale)
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = if (isSelected) 1.5.dp else 0.8.dp,
+                            color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                ),
+                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "${(scale * 100).toInt()}%",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Fine-tune Slider
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Fine-tune Scale: ${(currentScale * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    TextButton(onClick = { onScaleChange(1.0f) }) {
+                        Text("Reset (100%)", style = MaterialTheme.typography.labelSmall, color = ClaudeTerracotta)
+                    }
+                }
+                Slider(
+                    value = currentScale,
+                    onValueChange = { onScaleChange(it) },
+                    valueRange = 0.80f..1.50f,
+                    steps = 13,
+                    colors = SliderDefaults.colors(
+                        thumbColor = ClaudeTerracotta,
+                        activeTrackColor = ClaudeTerracotta,
+                        inactiveTrackColor = MaterialTheme.colorScheme.outlineVariant
+                    )
+                )
+            }
+
+            // Live Preview Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = if (isDark) Color(0xFF16161A) else Color(0xFFF6F5F0),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val previewDensity = androidx.compose.ui.platform.LocalDensity.current
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+                        density = previewDensity.density,
+                        fontScale = previewDensity.fontScale * currentScale
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "LIVE PREVIEW",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.8.sp,
+                                fontSize = 10.sp
+                            ),
+                            color = ClaudeTerracotta
+                        )
+
+                        // Sample User message
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp, 16.dp, 3.dp, 16.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    text = "Can you explain mass-energy equivalence?",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                )
+                            }
+                        }
+
+                        // Sample AI response with math
+                        Surface(
+                            shape = RoundedCornerShape(16.dp, 16.dp, 16.dp, 3.dp),
+                            color = MaterialTheme.colorScheme.surface,
+                            border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = "Einstein's principle establishes that mass and energy are interchangeable:",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "E = mc²",
+                                    style = MaterialTheme.typography.bodyLarge.copy(
+                                        fontFamily = FontFamily.Serif,
+                                        fontStyle = FontStyle.Italic,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = ClaudeTerracotta
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Compact Spacing Toggle Row
+            Surface(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onCompactDensityToggle()
+                },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Compact message density",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = if (compactDensity) "Reduced bubble spacing (8dp)" else "Standard spacious spacing (16dp)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = compactDensity,
+                        onCheckedChange = { onCompactDensityToggle() },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+            }
+        }
+    }
 }
