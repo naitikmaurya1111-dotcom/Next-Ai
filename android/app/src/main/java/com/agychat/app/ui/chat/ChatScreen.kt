@@ -48,6 +48,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
@@ -518,8 +519,7 @@ fun ChatScreen(
                                             modifier = Modifier
                                                 .size(7.dp)
                                                 .clip(CircleShape)
-                                                .background(statusColor)
-                                                .then(if (isLoading) Modifier.alpha(pulseAlpha) else Modifier)
+                                                .background(statusColor.copy(alpha = if (isLoading) pulseAlpha else 1f))
                                         )
                                         Spacer(Modifier.width(7.dp))
                                         val shortModelName = when {
