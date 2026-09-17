@@ -103,12 +103,12 @@ fun normalizeLatexFormula(raw: String): String {
     }
 
     // Convert top-level environments that KaTeX rejects in non-top-level display math to aligned/gathered
-    s = s.replace(Regex("""\\begin\{align\*?\}"""), "\\\\begin{aligned}")
-        .replace(Regex("""\\end\{align\*?\}"""), "\\\\end{aligned}")
-        .replace(Regex("""\\begin\{gather\*?\}"""), "\\\\begin{gathered}")
-        .replace(Regex("""\\end\{gather\*?\}"""), "\\\\end{gathered}")
-        .replace(Regex("""\\begin\{eqnarray\*?\}"""), "\\\\begin{aligned}")
-        .replace(Regex("""\\end\{eqnarray\*?\}"""), "\\\\end{aligned}")
+    s = s.replace(Regex("""\\begin\{align\*?\}""")) { "\\begin{aligned}" }
+        .replace(Regex("""\\end\{align\*?\}""")) { "\\end{aligned}" }
+        .replace(Regex("""\\begin\{gather\*?\}""")) { "\\begin{gathered}" }
+        .replace(Regex("""\\end\{gather\*?\}""")) { "\\end{gathered}" }
+        .replace(Regex("""\\begin\{eqnarray\*?\}""")) { "\\begin{aligned}" }
+        .replace(Regex("""\\end\{eqnarray\*?\}""")) { "\\end{aligned}" }
 
     // Fix markdown escaped underscores or ampersands within math mode
     s = s.replace("\\_", "_").replace("\\&", "&")
@@ -230,16 +230,25 @@ fun formatLatexToUnicode(raw: String): String {
         val den = m.groupValues[2].trim()
         val rep = when {
             num == "1" && den == "2" -> "½"
-            num == "1" && den == "4" -> "¼"
-            num == "3" && den == "4" -> "¾"
             num == "1" && den == "3" -> "⅓"
             num == "2" && den == "3" -> "⅔"
+            num == "1" && den == "4" -> "¼"
+            num == "3" && den == "4" -> "¾"
+            num == "1" && den == "5" -> "⅕"
+            num == "2" && den == "5" -> "⅖"
+            num == "3" && den == "5" -> "⅗"
+            num == "4" && den == "5" -> "⅘"
+            num == "1" && den == "6" -> "⅙"
+            num == "5" && den == "6" -> "⅚"
             num == "1" && den == "8" -> "⅛"
+            num == "3" && den == "8" -> "⅜"
+            num == "5" && den == "8" -> "⅝"
+            num == "7" && den == "8" -> "⅞"
             den.length > 2 || den.contains("+") || den.contains("-") || den.contains(" ") || den.contains("\\") -> {
-                if (num.contains("+") || num.contains("-") || num.contains(" ")) "($num)/($den)" else "$num/($den)"
+                if (num.contains("+") || num.contains("-") || num.contains(" ")) "($num) ⁄ ($den)" else "$num ⁄ ($den)"
             }
-            num.contains("+") || num.contains("-") || num.contains(" ") -> "($num)/$den"
-            else -> "$num/$den"
+            num.contains("+") || num.contains("-") || num.contains(" ") -> "($num) ⁄ $den"
+            else -> "$num ⁄ $den"
         }
         text = text.replaceRange(m.range, rep)
         m = fracRegex.find(text)
@@ -438,11 +447,9 @@ fun MarkdownContent(
     onLinkClick: ((String) -> Unit)? = null
 ) {
     val cleanText = remember(text) { sanitizeMarkdownInput(text) }
-    // During streaming we bypass the block cache so partial math blocks always re-render
-    val sections = if (isStreaming) {
-        remember(cleanText) { parseMarkdownBlocks(cleanText, skipCache = true) }
-    } else {
-        remember(cleanText) { parseMarkdownBlocks(cleanText) }
+    // Live re-parse when text changes or when streaming finishes so blocks finalize smoothly
+    val sections = remember(cleanText, isStreaming) {
+        parseMarkdownBlocks(cleanText, skipCache = isStreaming)
     }
 
     Column(
@@ -453,7 +460,8 @@ fun MarkdownContent(
             val isLast = index == sections.lastIndex
             val isTrailingStreaming = isStreaming && isLast
 
-            when (section) {
+            key(index, section.javaClass.name) {
+                when (section) {
                 is MarkdownBlock.Artifact -> {
                     InlineArtifactCardView(
                         artifact = section,
@@ -702,31 +710,28 @@ fun MarkdownContent(
                     )
                 }
             }
+            }
         }
     }
 }
 
 /**
  * High-performance JavaScript bridge for KaTeX HTML container.
- * Reports dynamic content width and height in real time via ResizeObserver.
+ * Reports dynamic content width and height in real time via ResizeObserver and render completion events.
  */
 class KaTeXCaptureBridge(private val onMeasured: (Int, Int) -> Unit) {
     @JavascriptInterface
-    fun onSize(w: Float, h: Float) { onMeasured(w.toInt(), h.toInt()) }
-    @JavascriptInterface
-    fun onSize(w: Int, h: Int) { onMeasured(w, h) }
+    fun onRenderComplete(w: Double, h: Double) { onMeasured(w.toInt(), h.toInt()) }
     @JavascriptInterface
     fun onSize(w: Double, h: Double) { onMeasured(w.toInt(), h.toInt()) }
     @JavascriptInterface
-    fun onHeight(h: Float) { onMeasured(0, h.toInt()) }
-    @JavascriptInterface
-    fun onHeight(h: Int) { onMeasured(0, h) }
+    fun onHeight(h: Double) { onMeasured(0, h.toInt()) }
 }
 
 /**
  * Direct, vector-quality KaTeX Math View.
  * Embeds a transparent, hardware-accelerated WebView that renders formulas directly from local assets.
- * Self-sizing via AndroidBridge.onSize and supports smooth horizontal scrolling for wide equations.
+ * Self-sizing via AndroidBridge and supports live-streaming equation rendering during active chat.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -735,9 +740,25 @@ fun KaTeXMathView(
     isDark: Boolean,
     modifier: Modifier = Modifier
 ) {
-    var measuredHeightDp by remember(formula) { mutableStateOf(52.dp) }
-    var isLoaded by remember(formula) { mutableStateOf(false) }
+    val currentFormula by rememberUpdatedState(formula)
+    val currentIsDark by rememberUpdatedState(isDark)
+    var measuredHeightDp by remember { mutableStateOf(52.dp) }
+    var isLoaded by remember { mutableStateOf(false) }
     val unicodeFallback = remember(formula) { formatLatexToUnicode(formula) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var isPageFinished by remember { mutableStateOf(false) }
+
+    // Live update WebView whenever formula, dark theme, or page load state changes
+    LaunchedEffect(formula, isDark, isPageFinished) {
+        val wv = webViewRef
+        if (wv != null && isPageFinished) {
+            val safeFormula = JSONObject.quote(formula)
+            wv.evaluateJavascript(
+                "if (window.renderMath) { window.renderMath($safeFormula, $isDark); }",
+                null
+            )
+        }
+    }
 
     Box(
         modifier = modifier
@@ -745,7 +766,7 @@ fun KaTeXMathView(
             .height(measuredHeightDp),
         contentAlignment = Alignment.Center
     ) {
-        // Fallback display if KaTeX is loading or initializing
+        // Fallback display while KaTeX is first initializing
         if (!isLoaded) {
             Text(
                 text = unicodeFallback,
@@ -792,21 +813,25 @@ fun KaTeXMathView(
                     webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
+                            isPageFinished = true
                             try {
-                                evaluateJavascript(
-                                    "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                                view?.evaluateJavascript(
+                                    "if (window.renderMath) { window.renderMath(${JSONObject.quote(currentFormula)}, $currentIsDark); }",
                                     null
                                 )
                             } catch (_: Throwable) {}
                         }
                     }
                     loadUrl("file:///android_asset/katex/katex_container.html")
+                    webViewRef = this
                 }
             },
             update = { webView ->
+                webViewRef = webView
                 try {
+                    val safeFormula = JSONObject.quote(formula)
                     webView.evaluateJavascript(
-                        "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                        "if (window.renderMath) { window.renderMath($safeFormula, $isDark); }",
                         null
                     )
                 } catch (_: Throwable) {}
@@ -992,11 +1017,13 @@ fun MathEquationBlockView(
                         )
                     }
                 } else {
-                    KaTeXMathView(
-                        formula = normalizedFormula,
-                        isDark = isDark,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    DisableSelection {
+                        KaTeXMathView(
+                            formula = normalizedFormula,
+                            isDark = isDark,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
         }

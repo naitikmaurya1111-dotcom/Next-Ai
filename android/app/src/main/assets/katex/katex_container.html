@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
     <link rel="stylesheet" href="katex.min.css">
     <script src="katex.min.js"></script>
+    <script>
+        window.__isKaTeXReady = false;
+        window.__pendingRender = null;
+        window.renderMath = function(formula, isDark) {
+            if (!window.__isKaTeXReady || typeof katex === 'undefined' || !document.getElementById('math-container')) {
+                window.__pendingRender = { formula: formula, isDark: isDark };
+                return;
+            }
+            if (window._doRenderMath) {
+                window._doRenderMath(formula, isDark);
+            }
+        };
+    </script>
     <style>
         * {
             box-sizing: border-box;
@@ -89,7 +102,7 @@
         var lastReportedHeight = 0;
         var lastReportedWidth = 0;
 
-        function reportSize() {
+        function reportSize(force) {
             var container = document.getElementById('math-container');
             if (!container) return;
             var rect = container.getBoundingClientRect();
@@ -97,20 +110,25 @@
             var h = Math.ceil(Math.max(rect.height + 4, bodyH, 18));
             var w = Math.ceil(Math.max(rect.width + 10, 24));
 
-            if (Math.abs(h - lastReportedHeight) >= 2 || Math.abs(w - lastReportedWidth) >= 4) {
+            if (force || Math.abs(h - lastReportedHeight) >= 1 || Math.abs(w - lastReportedWidth) >= 2) {
                 lastReportedHeight = h;
                 lastReportedWidth = w;
-                if (window.AndroidBridge && window.AndroidBridge.onSize) {
-                    window.AndroidBridge.onSize(w, h);
-                } else if (window.AndroidBridge && window.AndroidBridge.onHeight) {
-                    window.AndroidBridge.onHeight(h);
+                if (window.AndroidBridge) {
+                    if (window.AndroidBridge.onRenderComplete) {
+                        window.AndroidBridge.onRenderComplete(w, h);
+                    } else if (window.AndroidBridge.onSize) {
+                        window.AndroidBridge.onSize(w, h);
+                    } else if (window.AndroidBridge.onHeight) {
+                        window.AndroidBridge.onHeight(h);
+                    }
                 }
             }
         }
 
-        function renderMath(formula, isDark) {
+        function _doRenderMath(formula, isDark) {
             document.body.className = isDark ? 'dark' : 'light';
             var container = document.getElementById('math-container');
+            if (!container) return;
             try {
                 katex.render(formula, container, {
                     displayMode: true,
@@ -123,27 +141,37 @@
                 container.innerText = formula;
             }
 
-            reportSize();
+            // Always force report size and notify Android on complete
+            reportSize(true);
 
-            // Wait for fonts to fully load and measure again
+            // Re-check size when fonts finish loading
             if (document.fonts && document.fonts.ready) {
                 document.fonts.ready.then(function() {
-                    reportSize();
+                    reportSize(true);
                 });
             }
 
-            // Also check on next few animation frames
+            // Animation frame checks for dynamic sizing
             requestAnimationFrame(function() {
-                reportSize();
-                setTimeout(reportSize, 60);
-                setTimeout(reportSize, 200);
+                reportSize(true);
+                setTimeout(function() { reportSize(true); }, 50);
+                setTimeout(function() { reportSize(true); }, 180);
             });
+        }
+
+        window._doRenderMath = _doRenderMath;
+        window.renderMath = _doRenderMath;
+        window.__isKaTeXReady = true;
+
+        if (window.__pendingRender) {
+            _doRenderMath(window.__pendingRender.formula, window.__pendingRender.isDark);
+            window.__pendingRender = null;
         }
 
         // Use ResizeObserver for automatic size tracking on any content change
         if (window.ResizeObserver) {
             var ro = new ResizeObserver(function() {
-                reportSize();
+                reportSize(false);
             });
             var target = document.getElementById('math-container');
             if (target) ro.observe(target);
