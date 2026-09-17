@@ -780,7 +780,6 @@ fun KaTeXMathView(
     val currentFormula by rememberUpdatedState(formula)
     val currentIsDark by rememberUpdatedState(isDark)
     var isLoaded by remember { mutableStateOf(false) }
-    val unicodeFallback = remember(formula) { formatLatexToUnicode(formula) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var isPageFinished by remember { mutableStateOf(false) }
 
@@ -802,25 +801,6 @@ fun KaTeXMathView(
             .height(measuredHeightDp),
         contentAlignment = Alignment.Center
     ) {
-        // Fallback display while KaTeX is first initializing
-        if (!isLoaded) {
-            Text(
-                text = unicodeFallback,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontFamily = FontFamily.Serif,
-                    fontStyle = FontStyle.Italic,
-                    fontWeight = FontWeight.Medium,
-                    fontSize = 17.sp,
-                    letterSpacing = 0.4.sp
-                ),
-                color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 6.dp)
-            )
-        }
 
         AndroidView(
             factory = { ctx ->
@@ -840,7 +820,7 @@ fun KaTeXMathView(
                         post {
                             if (wPx > 0) reportedWidthPx = wPx
                             if (hPx > 0) {
-                                val targetDp = (hPx + 10).coerceIn(36, 800).dp
+                                val targetDp = (hPx + 4).coerceIn(24, 800).dp
                                 measuredHeightDp = targetDp
                                 isLoaded = true
 
@@ -914,9 +894,9 @@ fun KaTeXMathView(
 }
 
 /**
- * Modern, publication-grade mathematical formula block view.
- * Embeds crisp vector KaTeX rendering inside a dedicated math card with domain category badge,
- * TeX source toggle, smooth horizontal scrolling for matrices, and one-tap copy with haptic feedback.
+ * Modern, publication-grade mathematical formula block view matching ChatGPT's aesthetic.
+ * Clean, unboxed, and rendered seamlessly on the chat canvas without distracting cards or borders.
+ * Supports horizontal scrolling for wide equations and long-press to copy the raw LaTeX.
  */
 @Composable
 fun MathEquationBlockView(
@@ -928,173 +908,29 @@ fun MathEquationBlockView(
     val haptic = LocalHapticFeedback.current
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
-    val category = remember(normalizedFormula) { detectMathCategory(normalizedFormula) }
-    var isCopied by remember { mutableStateOf(false) }
-    var showRawLatex by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isCopied) {
-        if (isCopied) {
-            delay(2000)
-            isCopied = false
-        }
-    }
-
-    val cardBg = if (isDark) Color(0xFF1E1F24) else Color(0xFFF4F6FA)
-    val borderColor = if (isDark) Color(0xFF2E313A) else Color(0xFFDCE1EB)
-    val badgeTint = ClaudeTerracotta
 
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 8.dp, horizontal = 4.dp)
+            .pointerInput(normalizedFormula) {
+                detectTapGestures(
+                    onLongPress = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                        Toast.makeText(context, "LaTeX copied to clipboard", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            },
         contentAlignment = Alignment.Center
     ) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = cardBg,
-            border = androidx.compose.foundation.BorderStroke(0.8.dp, borderColor),
-            tonalElevation = 1.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .widthIn(max = 760.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                // Header Action Bar: Category Badge + TeX toggle + Copy button
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Category Badge
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = badgeTint.copy(alpha = 0.12f)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = when (category) {
-                                    "Matrix" -> "⊞"
-                                    "Integral" -> "∫"
-                                    "Series" -> "∑"
-                                    "Calculus" -> "∂"
-                                    "Vectors" -> "→"
-                                    "Quantum" -> "Ψ"
-                                    else -> "ƒ"
-                                },
-                                fontSize = 11.sp,
-                                color = badgeTint,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = category.uppercase(),
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 9.sp,
-                                    letterSpacing = 0.5.sp
-                                ),
-                                color = badgeTint
-                            )
-                        }
-                    }
-
-                    // Actions: TeX Toggle + Copy Formula
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        // Raw LaTeX toggle
-                        Surface(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                showRawLatex = !showRawLatex
-                            },
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        ) {
-                            Text(
-                                text = if (showRawLatex) "Preview" else "TeX",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 10.5.sp
-                                ),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                            )
-                        }
-
-                        // Copy Button
-                        Surface(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
-                                isCopied = true
-                                Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                    contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
-                                    tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(11.dp)
-                                )
-                                Text(
-                                    text = if (isCopied) "Copied" else "Copy",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.SemiBold
-                                    ),
-                                    color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // Formula Content Area
-                if (showRawLatex) {
-                    SelectionContainer {
-                        Text(
-                            text = normalizedFormula,
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                lineHeight = 19.sp
-                            ),
-                            color = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(vertical = 6.dp)
-                        )
-                    }
-                } else {
-                    DisableSelection {
-                        KaTeXMathView(
-                            formula = normalizedFormula,
-                            isDark = isDark,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
+        DisableSelection {
+            KaTeXMathView(
+                formula = normalizedFormula,
+                isDark = isDark,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

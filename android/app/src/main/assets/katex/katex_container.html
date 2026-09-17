@@ -23,55 +23,61 @@
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
         }
-        html {
+        html, body {
             margin: 0;
             padding: 0;
             background: transparent !important;
-            overflow: visible;
-        }
-        body {
-            margin: 0;
-            padding: 2px 4px;
-            background: transparent !important;
-            font-family: "KaTeX_Main", "Times New Roman", Times, serif;
             overflow-x: auto;
             overflow-y: hidden;
             -webkit-overflow-scrolling: touch;
-            text-align: center;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        ::-webkit-scrollbar {
+            display: none;
+            width: 0;
+            height: 0;
+        }
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
             min-height: 0;
-            width: auto;
-            display: inline-block;
+            padding: 4px 6px;
+            font-family: "KaTeX_Main", "Times New Roman", Times, serif;
+            text-align: center;
             white-space: nowrap !important;
         }
         #math-wrapper {
-            display: inline-block;
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
             min-width: 0;
             text-align: center;
-            overflow-x: auto;
-            overflow-y: hidden;
+            overflow: visible;
             padding: 0;
             white-space: nowrap !important;
         }
         #math-container {
             display: inline-block;
             text-align: center;
-            font-size: 1.15em;
+            font-size: 1.22em;
             max-width: none;
             margin: 0 auto;
-            line-height: 1.25;
+            line-height: 1.35;
             white-space: nowrap !important;
         }
         .katex-display {
             margin: 0 !important;
             padding: 2px 0 !important;
             text-align: center;
-            overflow-x: auto;
-            overflow-y: hidden;
+            overflow: visible;
             white-space: nowrap !important;
         }
         .katex {
-            font-size: 1.1em;
-            line-height: 1.25;
+            font-size: 1.2em;
+            line-height: 1.35;
             text-rendering: geometricPrecision;
             white-space: nowrap !important;
         }
@@ -83,10 +89,10 @@
             color: #ECECF1;
         }
         body.light {
-            color: #1A1A1E;
+            color: #0D0D0D;
         }
         .katex-error {
-            color: #E06C75 !important;
+            color: #EF5350 !important;
             font-family: monospace !important;
             font-size: 0.9em;
             white-space: nowrap !important;
@@ -106,9 +112,8 @@
             var container = document.getElementById('math-container');
             if (!container) return;
             var rect = container.getBoundingClientRect();
-            var bodyH = document.body.offsetHeight;
-            var h = Math.ceil(Math.max(rect.height + 4, bodyH, 18));
-            var w = Math.ceil(Math.max(rect.width + 10, 24));
+            var h = Math.ceil(Math.max(rect.height + 6, 22));
+            var w = Math.ceil(Math.max(rect.width + 12, 24));
 
             if (force || Math.abs(h - lastReportedHeight) >= 1 || Math.abs(w - lastReportedWidth) >= 2) {
                 lastReportedHeight = h;
