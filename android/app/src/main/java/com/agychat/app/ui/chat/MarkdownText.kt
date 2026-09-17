@@ -70,6 +70,19 @@ private val markdownBlockCache = LruCache<String, List<MarkdownBlock>>(300)
 private val latexUnicodeCache = LruCache<String, String>(300)
 private val syntaxHighlightCache = LruCache<String, androidx.compose.ui.text.AnnotatedString>(150)
 private val inlineTextCache = LruCache<String, androidx.compose.ui.text.AnnotatedString>(400)
+private val katexBitmapCache = LruCache<String, Bitmap>(250)
+private val katexHeightCache = LruCache<String, Int>(250)
+
+fun clearKaTeXCache(): Int {
+    val count = katexBitmapCache.snapshot().size
+    katexBitmapCache.evictAll()
+    katexHeightCache.evictAll()
+    return count
+}
+
+fun getKaTeXCacheCount(): Int {
+    return katexBitmapCache.snapshot().size
+}
 
 /**
  * Sanitizes markdown input by removing ANSI escape sequences and terminal noise.
@@ -740,9 +753,32 @@ fun KaTeXMathView(
     isDark: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val cacheKey = remember(formula, isDark) { "$isDark:$formula" }
+    var cachedBitmap by remember(cacheKey) { mutableStateOf(katexBitmapCache.get(cacheKey)) }
+    var measuredHeightDp by remember(cacheKey) {
+        mutableStateOf((katexHeightCache.get(cacheKey) ?: 52).dp)
+    }
+
+    // Instant zero-cost path: if formula was already rendered, display from hardware-cached bitmap at 120 FPS
+    if (cachedBitmap != null) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(measuredHeightDp)
+                .horizontalScroll(rememberScrollState()),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                bitmap = cachedBitmap!!.asImageBitmap(),
+                contentDescription = "LaTeX Formula",
+                modifier = Modifier.wrapContentSize()
+            )
+        }
+        return
+    }
+
     val currentFormula by rememberUpdatedState(formula)
     val currentIsDark by rememberUpdatedState(isDark)
-    var measuredHeightDp by remember { mutableStateOf(52.dp) }
     var isLoaded by remember { mutableStateOf(false) }
     val unicodeFallback = remember(formula) { formatLatexToUnicode(formula) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
@@ -799,12 +835,45 @@ fun KaTeXMathView(
                     isVerticalScrollBarEnabled = false
                     setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
 
-                    val bridge = KaTeXCaptureBridge { _, hPx ->
+                    var reportedWidthPx = 0
+                    val bridge = KaTeXCaptureBridge { wPx, hPx ->
                         post {
+                            if (wPx > 0) reportedWidthPx = wPx
                             if (hPx > 0) {
                                 val targetDp = (hPx + 10).coerceIn(36, 800).dp
                                 measuredHeightDp = targetDp
                                 isLoaded = true
+
+                                // Snapshot rendered equation into high-DPI bitmap cache to eliminate WebView overhead
+                                postDelayed({
+                                    try {
+                                        if (width > 0 && height > 0) {
+                                            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                            val canvas = Canvas(bmp)
+                                            draw(canvas)
+
+                                            // Ensure bitmap has rendered non-blank pixels before adding to cache
+                                            var hasDrawnContent = false
+                                            val stepX = (width / 15).coerceAtLeast(1)
+                                            val stepY = (height / 15).coerceAtLeast(1)
+                                            for (x in 0 until width step stepX) {
+                                                for (y in 0 until height step stepY) {
+                                                    if (bmp.getPixel(x, y) != 0) {
+                                                        hasDrawnContent = true
+                                                        break
+                                                    }
+                                                }
+                                                if (hasDrawnContent) break
+                                            }
+
+                                            if (hasDrawnContent) {
+                                                katexBitmapCache.put(cacheKey, bmp)
+                                                katexHeightCache.put(cacheKey, targetDp.value.toInt())
+                                                cachedBitmap = bmp
+                                            }
+                                        }
+                                    } catch (_: Throwable) {}
+                                }, 120)
                             }
                         }
                     }

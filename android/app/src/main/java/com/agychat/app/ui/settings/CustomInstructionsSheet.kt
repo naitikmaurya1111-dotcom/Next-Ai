@@ -255,17 +255,6 @@ fun CustomInstructionsSheet(
                                 }
                             }
 
-                            // Primary Code Language
-                            OutlinedTextField(
-                                value = draft.codeLanguage,
-                                onValueChange = { draft = draft.copy(codeLanguage = it) },
-                                label = { Text("Default Code Language") },
-                                placeholder = { Text("Kotlin") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-
                             // Toggles
                             BehaviorToggleRow(
                                 title = "Code Examples",

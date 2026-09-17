@@ -159,6 +159,7 @@ fun ChatScreen(
     val selectedAttachments by viewModel.selectedAttachments.collectAsState()
     val reasoningEffort by viewModel.reasoningEffort.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
+    val connectionLatency by viewModel.connectionLatencyMs.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showPluginBottomSheet by remember { mutableStateOf(false) }
@@ -415,10 +416,10 @@ fun ChatScreen(
 
     LaunchedEffect(streamContentLength) {
         if (isStreamingActive && isScrolledToBottom && !listState.isScrollInProgress && displayedMessages.isNotEmpty()) {
-            kotlinx.coroutines.delay(40)
+            kotlinx.coroutines.delay(35)
             val count = listState.layoutInfo.totalItemsCount
             if (count > 0) {
-                listState.scrollToItem(count - 1)
+                listState.scrollToItem(count - 1, 100000)
             }
         }
     }
@@ -497,6 +498,16 @@ fun ChatScreen(
                                         modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        val pulseTransition = rememberInfiniteTransition(label = "modelPulse")
+                                        val pulseAlpha by pulseTransition.animateFloat(
+                                            initialValue = 0.35f,
+                                            targetValue = 1.0f,
+                                            animationSpec = infiniteRepeatable(
+                                                animation = tween(650, easing = LinearEasing),
+                                                repeatMode = RepeatMode.Reverse
+                                            ),
+                                            label = "dotPulse"
+                                        )
                                         val statusColor = when (connectionState) {
                                             ConnectionState.CONNECTED -> Color(0xFF10A37F)
                                             ConnectionState.CONNECTING -> Color(0xFFF59E0B)
@@ -505,9 +516,10 @@ fun ChatScreen(
                                         }
                                         Box(
                                             modifier = Modifier
-                                                .size(6.5.dp)
+                                                .size(7.dp)
                                                 .clip(CircleShape)
                                                 .background(statusColor)
+                                                .then(if (isLoading) Modifier.alpha(pulseAlpha) else Modifier)
                                         )
                                         Spacer(Modifier.width(7.dp))
                                         val shortModelName = when {
@@ -520,13 +532,22 @@ fun ChatScreen(
                                             selectedModel.id.contains("gpt-oss") -> "GPT-OSS 120B"
                                             else -> selectedModel.name
                                         }
+                                        val effortSuffix = if (selectedModel.supportsEffort && reasoningEffort.isNotBlank()) " · ${reasoningEffort.replaceFirstChar { it.uppercase() }}" else ""
                                         Text(
-                                            text = shortModelName,
-                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 14.sp),
+                                            text = "$shortModelName$effortSuffix",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 13.5.sp),
                                             color = MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
+                                        if (connectionState == ConnectionState.CONNECTED && connectionLatency != null) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = "${connectionLatency}ms",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                                color = if (connectionLatency!! < 120) Color(0xFF10A37F) else Color(0xFFF59E0B)
+                                            )
+                                        }
                                         Spacer(Modifier.width(3.dp))
                                         Icon(
                                             Icons.Default.KeyboardArrowDown,
@@ -1473,13 +1494,14 @@ fun ChatScreen(
                             hasCustomInstructions = customInstructions.isEnabled && (customInstructions.aboutUser.isNotBlank() || customInstructions.responsePreferences.isNotBlank()),
                             userName = personalization.name,
                             userOccupation = personalization.occupation,
-                            preferredCodeLang = personalization.codeLanguage,
+                            depthLevel = personalization.depthLevel,
                             showMemoryBadge = showMemoryActivityBadges,
                             onOpenMemorySheet = { showMemorySheet = true },
                             onOpenCustomInstructions = { showCustomInstructionsSheet = true }
                         )
                     }
                 } else {
+                    val lastAssistantId = remember(displayedMessages) { displayedMessages.lastOrNull { it.role == "assistant" }?.id }
                     LazyColumn(
                         state = listState,
                         modifier = Modifier
@@ -1489,7 +1511,7 @@ fun ChatScreen(
                         contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp)
                     ) {
                         items(displayedMessages, key = { it.id }) { msg ->
-                            val isLastAssistant = msg.id == displayedMessages.lastOrNull { it.role == "assistant" }?.id
+                            val isLastAssistant = msg.id == lastAssistantId
                             val isSpeaking = speakingMessageId == msg.id
                             val isSearchMatch = inChatSearchQuery.isNotBlank() && (
                                 msg.content.contains(inChatSearchQuery, ignoreCase = true) ||
@@ -2267,8 +2289,7 @@ fun MessageItem(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.End
             ) {
-                SelectionContainer {
-                    Box(
+                Box(
                         modifier = Modifier
                             .widthIn(min = 48.dp, max = 560.dp)
                             .clip(RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
@@ -2447,7 +2468,6 @@ fun MessageItem(
                             }
                         }
                     }
-                }
 
                 // Interactive Quick Actions for User Message
                 Row(
@@ -2841,13 +2861,11 @@ fun MessageItem(
 
                     // 3. Main Message Markdown Content with inline streaming cursor (Borderless Canvas Flow)
                     if (message.content.isNotBlank()) {
-                        SelectionContainer {
-                            MarkdownContent(
-                                text = message.content,
-                                isStreaming = showStreamingCursor && message.isStreaming,
-                                onLinkClick = onOpenFile
-                            )
-                        }
+                        MarkdownContent(
+                            text = message.content,
+                            isStreaming = showStreamingCursor && message.isStreaming,
+                            onLinkClick = onOpenFile
+                        )
                     }
 
                     // Initial streaming state before first token arrives
@@ -3281,10 +3299,16 @@ fun ThinkingAccordionCard(
     isExpanded: Boolean,
     onToggle: () -> Unit
 ) {
+    val context = LocalContext.current
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val bgColor = if (isDark) ThinkingPurpleBgDark else ThinkingPurpleBgLight
     val borderColor = if (isDark) ThinkingPurpleBorderDark else ThinkingPurpleBorderLight
     val textColor = if (isDark) ThinkingPurpleTextDark else ThinkingPurpleTextLight
+
+    val wordCount = remember(thinkingText) {
+        thinkingText.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+    }
+    val summaryLabel = if (wordCount > 0) "Thought process (~$wordCount words)" else "Thinking Process"
 
     Column(
         modifier = Modifier
@@ -3292,11 +3316,12 @@ fun ThinkingAccordionCard(
             .clip(RoundedCornerShape(14.dp))
             .background(bgColor)
             .border(1.dp, borderColor, RoundedCornerShape(14.dp))
-            .clickable(onClick = onToggle)
             .padding(12.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onToggle),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -3309,20 +3334,44 @@ fun ThinkingAccordionCard(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "Thinking Process",
+                    text = summaryLabel,
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                     color = textColor
                 )
             }
-            Icon(
-                if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = textColor
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isExpanded) {
+                    IconButton(
+                        onClick = {
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("Thinking Chain", thinkingText))
+                            Toast.makeText(context, "Copied thinking process", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = "Copy thinking",
+                            modifier = Modifier.size(13.dp),
+                            tint = textColor.copy(alpha = 0.7f)
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                }
+                Icon(
+                    if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = textColor
+                )
+            }
         }
 
-        AnimatedVisibility(visible = isExpanded) {
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3336,17 +3385,16 @@ fun ThinkingAccordionCard(
                         .background(textColor.copy(alpha = 0.45f))
                 )
                 Spacer(Modifier.width(10.dp))
-                SelectionContainer(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = thinkingText,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            lineHeight = 19.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        color = textColor.copy(alpha = 0.9f)
-                    )
-                }
+                Text(
+                    text = thinkingText,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        lineHeight = 19.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp
+                    ),
+                    color = textColor.copy(alpha = 0.9f),
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
@@ -4458,7 +4506,7 @@ fun EmptyChatGreeting(
     hasCustomInstructions: Boolean = false,
     userName: String = "",
     userOccupation: String = "",
-    preferredCodeLang: String = "",
+    depthLevel: String = "Expert",
     showMemoryBadge: Boolean = true,
     onOpenMemorySheet: () -> Unit = {},
     onOpenCustomInstructions: () -> Unit = {}
@@ -4479,33 +4527,33 @@ fun EmptyChatGreeting(
         else "Choose a prompt below or ask any question to get started"
     }
 
-    val starterPrompts = remember(userOccupation, preferredCodeLang) {
+    val starterPrompts = remember(userOccupation, depthLevel) {
         val occLower = userOccupation.lowercase()
-        val langLower = preferredCodeLang.lowercase()
+        val isDeep = depthLevel.equals("Expert", ignoreCase = true) || depthLevel.equals("Research", ignoreCase = true)
         when {
-            occLower.contains("android") || occLower.contains("mobile") || langLower == "kotlin" -> listOf(
+            occLower.contains("android") || occLower.contains("mobile") -> listOf(
                 Triple("📱 Jetpack Compose Architecture", "Review state hoisting, recomposition & UI performance", "Analyze our Jetpack Compose UI architecture, state hoisting patterns, and recomposition performance"),
                 Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
                 Triple("🌐 Android & Kotlin Docs", "Search latest AndroidX releases and official guidance", "/browser search latest Android Jetpack libraries and Kotlin releases"),
                 Triple("🎯 Autonomous Test Suite", "Run agentic loop until unit & UI tests are created", "/goal write comprehensive unit tests with edge cases")
             )
-            occLower.contains("data") || occLower.contains("ml") || occLower.contains("ai") || langLower == "python" -> listOf(
-                Triple("🐍 Python Pipeline Optimization", "Vectorize operations and profile memory usage", "Review Python data processing pipeline and suggest vectorized numpy/polars optimizations"),
+            occLower.contains("data") || occLower.contains("ml") || occLower.contains("ai") -> listOf(
+                Triple("🐍 Data Pipeline Optimization", "Vectorize operations and profile memory usage", "Review data processing pipeline and suggest vectorized high-performance optimizations"),
                 Triple("📊 Model Evaluation & Benchmarks", "Design metrics framework with precision & recall", "Design an automated evaluation benchmark framework with comprehensive evaluation metrics"),
                 Triple("🌐 AI Research Papers", "Search latest open-weights LLMs and arxiv papers", "/browser search latest open-weights LLMs and benchmark comparisons"),
                 Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features")
-            )
-            occLower.contains("web") || occLower.contains("frontend") || occLower.contains("fullstack") || langLower == "typescript" || langLower == "javascript" -> listOf(
-                Triple("⚡ Web Performance Audit", "Audit SSR hydration, caching & bundle size", "Review frontend architecture, SSR hydration bottlenecks, and bundle size reduction"),
-                Triple("💻 Full-Stack API Design", "Design type-safe endpoints and resilient error handling", "/boost inspect API endpoints and design robust type-safe error handling"),
-                Triple("🌐 Modern Framework Docs", "Search latest React, Next.js or Vite features", "/browser search latest Next.js and React server component best practices"),
-                Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
             )
             occLower.contains("student") || occLower.contains("learner") -> listOf(
                 Triple("🎓 Socratic Concept Tutor", "Break down complex topics using intuitive analogies", "Explain distributed consensus and Raft algorithm using intuitive everyday analogies"),
                 Triple("💻 Step-by-Step Code Walkthrough", "Analyze algorithms with time and space complexity", "Walk through this algorithm step-by-step with Big-O time and space complexity"),
                 Triple("🌐 Learning Resources & Guides", "Find top-rated tutorials and documentation", "/browser search best practical guides and documentation for beginners"),
                 Triple("📋 Structured Study Roadmap", "Build a 4-week structured curriculum", "/plan create 4-week structured study roadmap")
+            )
+            isDeep -> listOf(
+                Triple("🧠 Deep Architectural Analysis", "Holistic system review, edge cases & performance bottlenecks", "/boost analyze system architecture, concurrency invariants and bottlenecks"),
+                Triple("🎯 Autonomous Goal Execution", "Continuous agent loop until objective is verified and complete", "/goal implement comprehensive automated verification and tests"),
+                Triple("🌐 Real-time Internet Synthesis", "Live search for newest documentation, release notes & papers", "/browser search latest advances and official documentation"),
+                Triple("📋 Strategic Multi-step Plan", "Break down complex initiatives into verified milestones", "/plan design milestone-driven implementation roadmap")
             )
             else -> listOf(
                 Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),

@@ -222,7 +222,6 @@ class ChatViewModel @Inject constructor(
                 "Tone: ${p.toneStyle}",
                 "Depth: ${p.depthLevel}",
                 "Length: ${p.responseLength}",
-                if (p.codeLanguage.isNotBlank()) "Code Language: ${p.codeLanguage}" else null,
                 if (p.extraInstructions.isNotBlank()) p.extraInstructions else null
             ).joinToString("\n"),
             tonePreset = p.toneStyle,
@@ -474,6 +473,19 @@ class ChatViewModel @Inject constructor(
 
     private val _serverUrl = MutableStateFlow("")
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
+
+    private var pingStartTime = 0L
+    private val _connectionLatencyMs = MutableStateFlow<Long?>(null)
+    val connectionLatencyMs: StateFlow<Long?> = _connectionLatencyMs.asStateFlow()
+
+    fun pingBridge() {
+        pingStartTime = System.currentTimeMillis()
+        try {
+            webSocketClient.sendMessage(JSONObject().apply { put("action", "ping") }.toString())
+        } catch (t: Throwable) {
+            Log.w("ChatViewModel", "Failed to send ping", t)
+        }
+    }
 
     private val _selectedAttachments = MutableStateFlow<List<AttachmentItem>>(emptyList())
     val selectedAttachments: StateFlow<List<AttachmentItem>> = _selectedAttachments.asStateFlow()
@@ -1321,16 +1333,12 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private var lastStreamSaveTimestamp = 0L
-    private fun maybeThrottleSaveStreamingMessage(msg: Message) {
-        val now = System.currentTimeMillis()
-        if (now - lastStreamSaveTimestamp > 500L) {
-            lastStreamSaveTimestamp = now
-            saveMessageToDb(msg)
-        }
-    }
-
     fun persistCurrentStreamingState() {
+        synchronized(streamBatchLock) {
+            streamBatchJob?.cancel()
+            streamBatchJob = null
+            flushStreamingBatchesLocked(System.currentTimeMillis())
+        }
         val id = streamingMessageId
         val msg = if (id != null) {
             _messages.value.find { it.id == id }
@@ -1362,6 +1370,10 @@ class ChatViewModel @Inject constructor(
             when (type) {
                 "ping" -> {
                     // Server keep-alive heartbeat to prevent Cloudflare 100s timeout
+                }
+                "pong" -> {
+                    val latency = if (pingStartTime > 0L) (System.currentTimeMillis() - pingStartTime).coerceAtLeast(1L) else null
+                    _connectionLatencyMs.value = latency
                 }
                 "connected" -> {
                     _connectionState.value = ConnectionState.CONNECTED
@@ -1723,6 +1735,12 @@ class ChatViewModel @Inject constructor(
             }
         }
 
+        synchronized(streamBatchLock) {
+            streamBatchJob?.cancel()
+            streamBatchJob = null
+            flushStreamingBatchesLocked(System.currentTimeMillis())
+        }
+
         val list = _messages.value.toMutableList()
         val lastUserIdx = list.indexOfLast { it.role == "user" }
         val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
@@ -1804,10 +1822,20 @@ class ChatViewModel @Inject constructor(
         _isLoading.value = true
     }
 
-    private fun appendContentChunk(chunk: String) {
-        if (isGenerationCancelled) return
-        val cleanChunk = sanitizeChunk(chunk)
-        if (cleanChunk.isEmpty()) return
+    private val streamBatchLock = Any()
+    private val pendingContentChunks = StringBuilder()
+    private val pendingThinkingChunks = StringBuilder()
+    private var lastStreamUiUpdateTime = 0L
+    private var streamBatchJob: Job? = null
+
+    private fun flushStreamingBatchesLocked(now: Long) {
+        val contentToAppend = pendingContentChunks.toString()
+        pendingContentChunks.clear()
+        val thinkingToAppend = pendingThinkingChunks.toString()
+        pendingThinkingChunks.clear()
+        lastStreamUiUpdateTime = now
+
+        if (contentToAppend.isEmpty() && thinkingToAppend.isEmpty()) return
 
         val list = _messages.value.toMutableList()
         val lastUserIdx = list.indexOfLast { it.role == "user" }
@@ -1825,10 +1853,13 @@ class ChatViewModel @Inject constructor(
         val targetMsg: Message
         if (idx >= 0) {
             val cur = list[idx]
+            val newContent = if (contentToAppend.isNotEmpty()) cur.content + contentToAppend else cur.content
+            val newThinking = if (thinkingToAppend.isNotEmpty()) (cur.thinking ?: "") + thinkingToAppend else cur.thinking
             targetMsg = cur.copy(
-                content = cur.content + cleanChunk,
+                content = newContent,
+                thinking = newThinking,
                 isStreaming = true,
-                isThinking = false
+                isThinking = thinkingToAppend.isNotEmpty() && contentToAppend.isEmpty()
             )
             list[idx] = targetMsg
         } else {
@@ -1842,11 +1873,12 @@ class ChatViewModel @Inject constructor(
             targetMsg = Message(
                 id = newId,
                 role = "assistant",
-                content = cleanChunk,
+                content = contentToAppend,
+                thinking = if (thinkingToAppend.isNotEmpty()) thinkingToAppend else null,
                 memoryUpdates = initialUpdates,
                 timestamp = System.currentTimeMillis(),
                 isStreaming = true,
-                isThinking = false,
+                isThinking = thinkingToAppend.isNotEmpty() && contentToAppend.isEmpty(),
                 parentMessageId = streamingParentMessageId,
                 branchIndex = streamingBranchIndex
             )
@@ -1854,7 +1886,27 @@ class ChatViewModel @Inject constructor(
         }
         _messages.value = list
         _isLoading.value = true
-        maybeThrottleSaveStreamingMessage(targetMsg)
+    }
+
+    private fun appendContentChunk(chunk: String) {
+        if (isGenerationCancelled) return
+        val cleanChunk = sanitizeChunk(chunk)
+        if (cleanChunk.isEmpty()) return
+
+        synchronized(streamBatchLock) {
+            pendingContentChunks.append(cleanChunk)
+            val now = System.currentTimeMillis()
+            if (now - lastStreamUiUpdateTime >= 35L) {
+                flushStreamingBatchesLocked(now)
+            } else if (streamBatchJob == null || streamBatchJob?.isActive != true) {
+                streamBatchJob = viewModelScope.launch {
+                    delay(35L)
+                    synchronized(streamBatchLock) {
+                        flushStreamingBatchesLocked(System.currentTimeMillis())
+                    }
+                }
+            }
+        }
     }
 
     private fun appendThinkingChunk(chunk: String) {
@@ -1862,57 +1914,28 @@ class ChatViewModel @Inject constructor(
         val cleanChunk = sanitizeChunk(chunk)
         if (cleanChunk.isEmpty()) return
 
-        val list = _messages.value.toMutableList()
-        val lastUserIdx = list.indexOfLast { it.role == "user" }
-        val lastAssistantIdx = list.indexOfLast { it.role == "assistant" }
-        val isCurrentTurnAssistant = lastAssistantIdx >= 0 && lastAssistantIdx > lastUserIdx
-        val idx = if (streamingMessageId != null) {
-            list.indexOfFirst { it.id == streamingMessageId }
-        } else if (isCurrentTurnAssistant && (list[lastAssistantIdx].isStreaming || list[lastAssistantIdx].content.isBlank())) {
-            streamingMessageId = list[lastAssistantIdx].id
-            lastAssistantIdx
-        } else {
-            -1
-        }
-
-        val targetMsg: Message
-        if (idx >= 0) {
-            val cur = list[idx]
-            val prevThinking = cur.thinking ?: ""
-            targetMsg = cur.copy(
-                thinking = prevThinking + cleanChunk,
-                isStreaming = true,
-                isThinking = true
-            )
-            list[idx] = targetMsg
-        } else {
-            val newId = UUID.randomUUID().toString()
-            streamingMessageId = newId
-            val initialUpdates = synchronized(pendingMemoryUpdates) {
-                val copy = pendingMemoryUpdates.toList()
-                pendingMemoryUpdates.clear()
-                copy
+        synchronized(streamBatchLock) {
+            pendingThinkingChunks.append(cleanChunk)
+            val now = System.currentTimeMillis()
+            if (now - lastStreamUiUpdateTime >= 35L) {
+                flushStreamingBatchesLocked(now)
+            } else if (streamBatchJob == null || streamBatchJob?.isActive != true) {
+                streamBatchJob = viewModelScope.launch {
+                    delay(35L)
+                    synchronized(streamBatchLock) {
+                        flushStreamingBatchesLocked(System.currentTimeMillis())
+                    }
+                }
             }
-            targetMsg = Message(
-                id = newId,
-                role = "assistant",
-                content = "",
-                thinking = cleanChunk,
-                memoryUpdates = initialUpdates,
-                timestamp = System.currentTimeMillis(),
-                isStreaming = true,
-                isThinking = true,
-                parentMessageId = streamingParentMessageId,
-                branchIndex = streamingBranchIndex
-            )
-            list.add(targetMsg)
         }
-        _messages.value = list
-        _isLoading.value = true
-        maybeThrottleSaveStreamingMessage(targetMsg)
     }
 
     private fun updateToolStatus(toolText: String) {
+        synchronized(streamBatchLock) {
+            streamBatchJob?.cancel()
+            streamBatchJob = null
+            flushStreamingBatchesLocked(System.currentTimeMillis())
+        }
         val cleanStatus = sanitizeChunk(toolText)
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == streamingMessageId }
@@ -1923,6 +1946,11 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun finalizeStreamingMessage(finalContent: String? = null) {
+        synchronized(streamBatchLock) {
+            streamBatchJob?.cancel()
+            streamBatchJob = null
+            flushStreamingBatchesLocked(System.currentTimeMillis())
+        }
         val id = streamingMessageId ?: return
         val list = _messages.value.toMutableList()
         val idx = list.indexOfFirst { it.id == id }
@@ -2015,6 +2043,12 @@ class ChatViewModel @Inject constructor(
     fun stopGenerating() {
         if (!_isLoading.value) return
         isGenerationCancelled = true
+        synchronized(streamBatchLock) {
+            streamBatchJob?.cancel()
+            streamBatchJob = null
+            pendingContentChunks.clear()
+            pendingThinkingChunks.clear()
+        }
         viewModelScope.launch {
             val cancelPayload = JSONObject().apply {
                 put("type", "cancel")

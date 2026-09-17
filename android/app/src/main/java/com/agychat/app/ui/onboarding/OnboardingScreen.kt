@@ -44,7 +44,7 @@ fun OnboardingScreen(
     var userName by remember { mutableStateOf("") }
     var occupation by remember { mutableStateOf("") }
     var expertise by remember { mutableStateOf("") }
-    var selectedLanguage by remember { mutableStateOf("Kotlin") }
+    var selectedDepth by remember { mutableStateOf("Expert") }
     var selectedTone by remember { mutableStateOf("Direct") }
 
     fun completeOnboarding(skipPersonalization: Boolean = false) {
@@ -57,7 +57,7 @@ fun OnboardingScreen(
                 name = userName.trim(),
                 occupation = occupation.trim(),
                 expertise = expertise.trim(),
-                codeLanguage = selectedLanguage,
+                depthLevel = selectedDepth,
                 toneStyle = selectedTone,
                 isEnabled = true
             )
@@ -135,8 +135,8 @@ fun OnboardingScreen(
                     onNext = { step = 2 }
                 )
                 2 -> PreferencesStep(
-                    selectedLanguage = selectedLanguage,
-                    onLanguageChange = { selectedLanguage = it },
+                    selectedDepth = selectedDepth,
+                    onDepthChange = { selectedDepth = it },
                     selectedTone = selectedTone,
                     onToneChange = { selectedTone = it },
                     onFinish = { completeOnboarding(skipPersonalization = false) }
@@ -315,13 +315,13 @@ private fun ProfileStep(
 
 @Composable
 private fun PreferencesStep(
-    selectedLanguage: String,
-    onLanguageChange: (String) -> Unit,
+    selectedDepth: String,
+    onDepthChange: (String) -> Unit,
     selectedTone: String,
     onToneChange: (String) -> Unit,
     onFinish: () -> Unit
 ) {
-    val languages = listOf("Kotlin", "Python", "TypeScript", "Rust", "Go", "Java", "C++")
+    val depthLevels = listOf("Beginner", "Intermediate", "Expert", "Research")
     val tones = listOf(
         "Direct" to "Fast, concise, zero fluff",
         "Detailed" to "Comprehensive with deep explanations",
@@ -346,7 +346,7 @@ private fun PreferencesStep(
             Spacer(Modifier.height(6.dp))
 
             Text(
-                text = "Customize default programming language and response tone.",
+                text = "Customize reasoning depth and communication style to match your workflow.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -354,37 +354,21 @@ private fun PreferencesStep(
             Spacer(Modifier.height(20.dp))
 
             Text(
-                text = "Preferred Code Language",
+                text = "Reasoning & Knowledge Depth",
                 style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
             )
 
             Spacer(Modifier.height(8.dp))
 
-            // Language chips
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                languages.take(4).forEach { lang ->
+                depthLevels.forEach { depth ->
                     FilterChip(
-                        selected = selectedLanguage == lang,
-                        onClick = { onLanguageChange(lang) },
-                        label = { Text(lang) },
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                }
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                languages.drop(4).forEach { lang ->
-                    FilterChip(
-                        selected = selectedLanguage == lang,
-                        onClick = { onLanguageChange(lang) },
-                        label = { Text(lang) },
+                        selected = selectedDepth == depth,
+                        onClick = { onDepthChange(depth) },
+                        label = { Text(depth) },
                         shape = RoundedCornerShape(10.dp)
                     )
                 }

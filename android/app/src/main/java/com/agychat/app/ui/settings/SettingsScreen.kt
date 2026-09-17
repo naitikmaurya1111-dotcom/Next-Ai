@@ -69,6 +69,9 @@ fun SettingsScreen(
     val showStreamingCursor by chatViewModel.showStreamingCursor.collectAsState()
     val compactMessageDensity by chatViewModel.compactMessageDensity.collectAsState()
     val showMemoryActivityBadges by chatViewModel.showMemoryActivityBadges.collectAsState()
+    val latencyMs by chatViewModel.connectionLatencyMs.collectAsState()
+    var mathCacheCount by remember { mutableIntStateOf(com.agychat.app.ui.chat.getKaTeXCacheCount()) }
+    var hapticsEnabled by remember { mutableStateOf(prefs.getBoolean("haptics_enabled", true)) }
     var showRestoreConfirmDialog by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
@@ -323,6 +326,53 @@ fun SettingsScreen(
                             Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                             Text("Sync Live URL from Gist Now")
+                        }
+                    }
+                }
+
+                if (connectionState == ConnectionState.CONNECTED) {
+                    Spacer(Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                val dotColor = when {
+                                    latencyMs == null -> Color.Gray
+                                    latencyMs!! < 120 -> Color(0xFF4CAF50)
+                                    latencyMs!! < 300 -> Color(0xFFFFB300)
+                                    else -> Color(0xFFEF5350)
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(dotColor)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = if (latencyMs != null) "Ping: ${latencyMs}ms" else "WebSocket Active",
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            FilledTonalButton(
+                                onClick = { chatViewModel.pingBridge() },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Ping Test", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
                         }
                     }
                 }
@@ -750,6 +800,74 @@ fun SettingsScreen(
                         )
                     )
                 }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Tactile Haptic Feedback
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Tactile Haptic Feedback",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "Subtle vibration feedback on button presses, copying, and prompt actions",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = hapticsEnabled,
+                        onCheckedChange = {
+                            hapticsEnabled = it
+                            prefs.edit().putBoolean("haptics_enabled", it).apply()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = ClaudeTerracotta
+                        )
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                Spacer(Modifier.height(12.dp))
+
+                // Hardware Math Equation Bitmap Cache
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Hardware Math Cache (120 FPS)",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = "$mathCacheCount pre-rendered LaTeX formula bitmaps in memory",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            val cleared = com.agychat.app.ui.chat.clearKaTeXCache()
+                            mathCacheCount = 0
+                            Toast.makeText(context, "Cleared $cleared formula bitmaps from memory", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.CleaningServices, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Clear Cache", fontSize = 12.sp)
+                    }
+                }
             }
 
             // ── Section 5: Personalization & Memory (ChatGPT Style) ───────
@@ -1080,7 +1198,7 @@ fun SettingsScreen(
                             .background(ClaudeTerracotta.copy(alpha = 0.12f))
                             .padding(horizontal = 8.dp, vertical = 2.dp)
                     ) {
-                        Text("v2.0.0", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = ClaudeTerracotta)
+                        Text("v3.0.1 (Build 13)", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = ClaudeTerracotta)
                     }
                     Text(
                         text = "Next AI",
@@ -1092,14 +1210,14 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
 
                 val features = listOf(
-                    "🤖 Antigravity CLI integration (stream-json)",
-                    "🧠 Persistent memory across sessions",
-                    "⚡ Auto-reconnect with exponential backoff",
-                    "🔊 Text-to-speech & voice dictation",
-                    "📎 File & image attachment support",
-                    "💡 /boost, /goal, /plan, /browser, /learn",
-                    "🛑 Stop generation mid-stream",
-                    "📜 Chat history with search & rename"
+                    "⚡ v3.0.1 Redesigned Ultra-Fluid Chat UI & UX",
+                    "🏎️ Zero-Lag 120 FPS KaTeX Bitmap Hardware Caching",
+                    "🤖 Antigravity CLI Integration (stream-json & WebSocket)",
+                    "🧠 Autonomous In-Conversation Memory & Personalization",
+                    "🎛️ Dynamic Reasoning Effort (Low, Medium, High)",
+                    "🛑 Instant Red Subprocess Cancellation",
+                    "🌐 8 Autonomous Slash Commands (/goal, /plan, /boost...)",
+                    "☁️ Auto-Syncing Google Drive Cloud Persistence"
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     features.forEach { feature ->

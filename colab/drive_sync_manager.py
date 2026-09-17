@@ -57,7 +57,7 @@ def get_active_conversation_id() -> str:
 def get_latest_git_info():
     """Retrieve Git SHA, commit message, and active tag."""
     sha = "unknown"
-    tag = "v1.0.50"
+    tag = "v3.0.1"
     if PROJECT_DIR.exists():
         try:
             res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(PROJECT_DIR), capture_output=True, text=True)

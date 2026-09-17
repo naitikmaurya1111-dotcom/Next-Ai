@@ -431,12 +431,6 @@ fun PersonalizeTab(
                         selected = draft.responseFormat,
                         onSelect = { update(draft.copy(responseFormat = it)) }
                     )
-                    PersonaTextField(
-                        label = "Primary Code Language",
-                        value = draft.codeLanguage,
-                        hint = "Kotlin",
-                        onValueChange = { update(draft.copy(codeLanguage = it)) }
-                    )
 
                     // ── Section: Behavior Flags ──────────────────────────────
                     SectionHeader(icon = Icons.Outlined.Settings, title = "AI Behavior Flags", subtitle = "Fine-grained control over how AI operates")
