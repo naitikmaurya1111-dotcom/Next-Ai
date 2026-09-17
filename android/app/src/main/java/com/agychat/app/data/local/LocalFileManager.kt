@@ -131,15 +131,29 @@ class LocalFileManager @Inject constructor(
 
         fun normalizeFileId(rawPathOrUrl: String): String {
             var s = rawPathOrUrl.trim()
-            s = s.trim('(', '[', '{', '\'', '"', '<', '`')
+            if (s.startsWith("[") && s.contains("](") && s.endsWith(")")) {
+                s = s.substringAfter("](").removeSuffix(")")
+            }
+            if (s.contains("#")) {
+                s = s.substringBefore("#")
+            }
+            if (s.contains("?path=")) {
+                s = s.substringAfter("?path=").substringBefore("&")
+            } else if (s.contains("?")) {
+                s = s.substringBefore("?")
+            }
             if (s.startsWith("file://")) s = s.removePrefix("file://")
-            if (s.contains("?path=")) s = s.substringAfter("?path=").substringBefore("&")
             try {
                 s = java.net.URLDecoder.decode(s, "UTF-8")
             } catch (_: Throwable) {}
             s = s.trim()
                 .trimEnd('.', ',', ':', ';', ')', ']', '}', '\'', '"', '>', '`')
                 .trimStart('(', '[', '{', '\'', '"', '<', '`')
+            if (!s.startsWith("/") && !s.startsWith("http://") && !s.startsWith("https://") && !s.startsWith("content://")) {
+                if (s.startsWith("content/") || s.startsWith("drive/") || s.startsWith("root/") || s.startsWith("tmp/")) {
+                    s = "/$s"
+                }
+            }
             return s.trim()
         }
 
@@ -486,7 +500,12 @@ class LocalFileManager @Inject constructor(
                 val status = json.optString("status")
 
                 if (status == "too_large") {
-                    val dlUrl = "$cleanBase/api/file/download?path=${Uri.encode(normPath)}"
+                    val serverDlUrl = json.optString("download_url", "")
+                    val dlUrl = if (serverDlUrl.isNotBlank()) {
+                        if (serverDlUrl.startsWith("http")) serverDlUrl else "$cleanBase$serverDlUrl"
+                    } else {
+                        "$cleanBase/api/file/download?path=${Uri.encode(normPath)}"
+                    }
                     return@withContext downloadAndCacheRemoteFile(dlUrl, normPath, conversationId)
                 } else if (status == "ok" || status == "success") {
                     val fName = json.optString("filename", filename)

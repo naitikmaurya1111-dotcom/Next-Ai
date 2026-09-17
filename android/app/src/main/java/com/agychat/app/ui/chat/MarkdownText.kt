@@ -101,6 +101,17 @@ fun normalizeLatexFormula(raw: String): String {
         s = s.substring(1, s.length - 1).trim()
     }
 
+    // Convert top-level environments that KaTeX rejects in non-top-level display math to aligned/gathered
+    s = s.replace(Regex("""\\begin\{align\*?\}"""), "\\\\begin{aligned}")
+        .replace(Regex("""\\end\{align\*?\}"""), "\\\\end{aligned}")
+        .replace(Regex("""\\begin\{gather\*?\}"""), "\\\\begin{gathered}")
+        .replace(Regex("""\\end\{gather\*?\}"""), "\\\\end{gathered}")
+        .replace(Regex("""\\begin\{eqnarray\*?\}"""), "\\\\begin{aligned}")
+        .replace(Regex("""\\end\{eqnarray\*?\}"""), "\\\\end{aligned}")
+
+    // Fix markdown escaped underscores or ampersands within math mode
+    s = s.replace("\\_", "_").replace("\\&", "&")
+
     // Fix missing leading backslashes on common LaTeX keywords (e.g. "frac{" -> "\frac{")
     val missingSlashRegex = Regex("""(?<!\\)\b(frac|sqrt|sum|int|prod|partial|hbar|alpha|beta|gamma|delta|epsilon|theta|lambda|mu|pi|rho|sigma|tau|phi|psi|omega|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|ket|bra|braket|hat|vec|mathcal|mathbf|mathbb)\b""")
     s = s.replace(missingSlashRegex) { "\\${it.value}" }
@@ -112,8 +123,10 @@ fun normalizeLatexFormula(raw: String): String {
     val leftCount = Regex("""\\left\b""").findAll(s).count()
     val rightCount = Regex("""\\right\b""").findAll(s).count()
     if (leftCount != rightCount) {
-        s = s.replace(Regex("""\\left\s*([(\[{|.])"""), "$1")
-            .replace(Regex("""\\right\s*([)\]}|.])"""), "$1")
+        s = s.replace(Regex("""\\left\s*\."""), "")
+            .replace(Regex("""\\right\s*\."""), "")
+            .replace(Regex("""\\left\s*([(\[{|])"""), "$1")
+            .replace(Regex("""\\right\s*([)\]}|])"""), "$1")
     }
 
     // Auto-balance unclosed curly braces { } (common during streaming)
@@ -137,7 +150,25 @@ fun formatLatexToUnicode(raw: String): String {
     if (cached != null) return cached
     var text = normalizeLatexFormula(raw)
 
-    // Strip LaTeX environments
+    // Handle matrix environments nicely in Unicode
+    text = text.replace(Regex("""\\begin\{(?:bmatrix)\}([\s\S]*?)\\end\{(?:bmatrix)\}""")) {
+        val inner = it.groupValues[1].replace("&", "   ").replace("\\\\", " ┃ ").trim()
+        "⎡ $inner ⎤"
+    }
+    text = text.replace(Regex("""\\begin\{(?:pmatrix)\}([\s\S]*?)\\end\{(?:pmatrix)\}""")) {
+        val inner = it.groupValues[1].replace("&", "   ").replace("\\\\", " ┃ ").trim()
+        "⎛ $inner ⎞"
+    }
+    text = text.replace(Regex("""\\begin\{(?:vmatrix)\}([\s\S]*?)\\end\{(?:vmatrix)\}""")) {
+        val inner = it.groupValues[1].replace("&", "   ").replace("\\\\", " ┃ ").trim()
+        "| $inner |"
+    }
+    text = text.replace(Regex("""\\begin\{(?:matrix|array)\}(?:\{[^\}]*\})?([\s\S]*?)\\end\{(?:matrix|array)\}""")) {
+        val inner = it.groupValues[1].replace("&", "   ").replace("\\\\", " ┃ ").trim()
+        "[ $inner ]"
+    }
+
+    // Strip remaining LaTeX equation/alignment environments
     text = text.replace(Regex("""\\begin\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
     text = text.replace(Regex("""\\end\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
 
@@ -213,7 +244,9 @@ fun formatLatexToUnicode(raw: String): String {
         m = fracRegex.find(text)
     }
 
-    // Square roots: \sqrt{x} -> √(x)
+    // Roots: \sqrt[3]{x} -> ∛(x), \sqrt{x} -> √(x)
+    text = text.replace(Regex("""\\?sqrt\[3\]\{([^{}]+)\}""")) { "∛(${it.groupValues[1]})" }
+    text = text.replace(Regex("""\\?sqrt\[4\]\{([^{}]+)\}""")) { "∜(${it.groupValues[1]})" }
     text = text.replace(Regex("""\\?sqrt\{([^{}]+)\}""")) { "√(${it.groupValues[1]})" }
 
     // Greek letters and math symbols (ordered from specific to general)
@@ -247,6 +280,7 @@ fun formatLatexToUnicode(raw: String): String {
         "\\circ" to "°", "\\degree" to "°", "\\prime" to "′",
         "\\ldots" to "…", "\\cdots" to "⋯", "\\dots" to "…",
         "\\cos" to "cos", "\\sin" to "sin", "\\tan" to "tan",
+        "\\det" to "det", "\\gcd" to "gcd", "\\lim" to "lim",
         "\\ln" to "ln", "\\log" to "log", "\\exp" to "exp",
         "\\{" to "{", "\\}" to "}", "\\," to " ", "\\;" to " ", "\\quad" to " ", "\\qquad" to "  "
     )
@@ -301,6 +335,24 @@ fun formatLatexToUnicode(raw: String): String {
 }
 
 /**
+ * Detects the mathematical domain/category of a formula for UI badging.
+ */
+fun detectMathCategory(formula: String): String {
+    val f = formula.lowercase()
+    return when {
+        f.contains("matrix") || f.contains("pmatrix") || f.contains("bmatrix") || f.contains("vmatrix") || f.contains("det(") || f.contains("\\det") -> "Matrix"
+        f.contains("\\int") || f.contains("\\iint") || f.contains("\\iiint") || f.contains("\\oint") -> "Integral"
+        f.contains("\\sum") || f.contains("\\prod") -> "Series"
+        f.contains("\\frac{d") || f.contains("\\partial") || f.contains("\\nabla") -> "Calculus"
+        f.contains("\\vec") || f.contains("\\hat") || f.contains("\\dot") -> "Vectors"
+        f.contains("\\ket") || f.contains("\\bra") || f.contains("\\hbar") -> "Quantum"
+        f.contains("\\lim") -> "Limit"
+        f.contains("=") -> "Equation"
+        else -> "Formula"
+    }
+}
+
+/**
  * Detects if a standalone line is purely a mathematical equation (like `\frac{d\rho}{dt} = ...`)
  * while strictly ignoring regular English sentences/paragraphs and list items.
  */
@@ -309,7 +361,7 @@ fun isPureEquationLine(raw: String): Boolean {
     if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("* ") ||
         s.startsWith(">") || s.startsWith("|") || s.startsWith("```") ||
         s.matches(Regex("""^\d+\.\s+.*""")) || s.contains("**") || s.contains("~~") ||
-        s.contains("](") || s.contains("][") || s.startsWith("![") ||
+        s.contains("](") || s.contains("][") || s.startsWith("![") || s.startsWith("<") ||
         s.contains("$") // Lines containing '$' are inline math prose (e.g. "When $\Delta G < 0$"), NOT standalone equations!
     ) {
         return false
@@ -401,6 +453,21 @@ fun MarkdownContent(
             val isTrailingStreaming = isStreaming && isLast
 
             when (section) {
+                is MarkdownBlock.Artifact -> {
+                    InlineArtifactCardView(
+                        artifact = section,
+                        onOpenArtifact = {
+                            if (onLinkClick != null) {
+                                onLinkClick(section.identifier)
+                            }
+                        }
+                    )
+                    if (isTrailingStreaming) {
+                        Box(modifier = Modifier.padding(top = 2.dp)) {
+                            StreamingCursorBlink()
+                        }
+                    }
+                }
                 is MarkdownBlock.MathEquation -> {
                     MathEquationBlockView(formula = section.formula, textColor = textColor)
                     if (isTrailingStreaming) {
@@ -539,6 +606,49 @@ fun MarkdownContent(
                         }
                     }
                 }
+                is MarkdownBlock.ListBlock -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        section.items.forEachIndexed { itemIdx, item ->
+                            val isItemLast = itemIdx == section.items.lastIndex
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 4.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                if (item.isOrdered) {
+                                    Text(
+                                        text = "${item.index}.",
+                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = ClaudeTerracotta,
+                                        modifier = Modifier.width(22.dp)
+                                    )
+                                } else {
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(top = 8.dp, end = 10.dp)
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(ClaudeTerracotta)
+                                    )
+                                }
+                                FormattedMarkdownText(
+                                    text = item.text,
+                                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 23.sp),
+                                    color = textColor,
+                                    modifier = Modifier.weight(1f),
+                                    showTrailingCursor = isTrailingStreaming && isItemLast,
+                                    onLinkClick = onLinkClick
+                                )
+                            }
+                        }
+                    }
+                }
                 is MarkdownBlock.ListItem -> {
                     Row(
                         modifier = Modifier
@@ -596,15 +706,9 @@ fun MarkdownContent(
 }
 
 /**
- * Modern, publication-grade mathematical formula block view.
- * Free-sized according to formula dimensions: wraps content tightly without bulky boxes.
- * Features instant Serif mathematical Unicode rendering, smooth horizontal scrolling for wide equations,
- * one-tap copy with haptic feedback, and raw LaTeX view toggle.
+ * High-performance JavaScript bridge for KaTeX HTML container.
+ * Reports dynamic content width and height in real time via ResizeObserver.
  */
-object MathRenderCache {
-    val bitmapCache = LruCache<String, Bitmap>(300)
-}
-
 class KaTeXCaptureBridge(private val onMeasured: (Int, Int) -> Unit) {
     @JavascriptInterface
     fun onSize(w: Float, h: Float) { onMeasured(w.toInt(), h.toInt()) }
@@ -618,77 +722,106 @@ class KaTeXCaptureBridge(private val onMeasured: (Int, Int) -> Unit) {
     fun onHeight(h: Int) { onMeasured(0, h) }
 }
 
+/**
+ * Direct, vector-quality KaTeX Math View.
+ * Embeds a transparent, hardware-accelerated WebView that renders formulas directly from local assets.
+ * Self-sizing via AndroidBridge.onSize and supports smooth horizontal scrolling for wide equations.
+ */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun GeminiKaTeXCaptureView(
+fun KaTeXMathView(
     formula: String,
     isDark: Boolean,
-    onBitmapCaptured: (Bitmap) -> Unit
+    modifier: Modifier = Modifier
 ) {
-    var hasCaptured by remember { mutableStateOf(false) }
+    var measuredHeightDp by remember(formula) { mutableStateOf(52.dp) }
+    var isLoaded by remember(formula) { mutableStateOf(false) }
+    val unicodeFallback = remember(formula) { formatLatexToUnicode(formula) }
 
-    AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
-                setBackgroundColor(0)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.allowFileAccess = true
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-                isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(measuredHeightDp),
+        contentAlignment = Alignment.Center
+    ) {
+        // Fallback display if KaTeX is loading or initializing
+        if (!isLoaded) {
+            Text(
+                text = unicodeFallback,
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 17.sp,
+                    letterSpacing = 0.4.sp
+                ),
+                color = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 6.dp, vertical = 6.dp)
+            )
+        }
 
-                val bridge = KaTeXCaptureBridge { wPx, hPx ->
-                    post {
-                        if (!hasCaptured && width > 0 && height > 0) {
-                            hasCaptured = true
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    setBackgroundColor(0) // 100% transparent background
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.allowFileAccess = true
+                    settings.useWideViewPort = false
+                    settings.loadWithOverviewMode = false
+                    isHorizontalScrollBarEnabled = true
+                    isVerticalScrollBarEnabled = false
+                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+
+                    val bridge = KaTeXCaptureBridge { _, hPx ->
+                        post {
+                            if (hPx > 0) {
+                                val targetDp = (hPx + 10).coerceIn(36, 800).dp
+                                measuredHeightDp = targetDp
+                                isLoaded = true
+                            }
+                        }
+                    }
+                    addJavascriptInterface(bridge, "AndroidBridge")
+
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
                             try {
-                                val targetW = maxOf(width, wPx).coerceIn(40, 1600)
-                                val targetH = maxOf(height, hPx).coerceIn(24, 1200)
-                                val bmp = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-                                val canvas = Canvas(bmp)
-                                draw(canvas)
-                                onBitmapCaptured(bmp)
+                                evaluateJavascript(
+                                    "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                                    null
+                                )
                             } catch (_: Throwable) {}
                         }
                     }
+                    loadUrl("file:///android_asset/katex/katex_container.html")
                 }
-                addJavascriptInterface(bridge, "AndroidBridge")
-
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        try {
-                            evaluateJavascript(
-                                "renderMath(${JSONObject.quote(formula)}, $isDark);",
-                                null
-                            )
-                        } catch (_: Throwable) {}
-                        postDelayed({
-                            if (!hasCaptured && width > 0 && height > 0) {
-                                hasCaptured = true
-                                try {
-                                    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                                    val canvas = Canvas(bmp)
-                                    draw(canvas)
-                                    onBitmapCaptured(bmp)
-                                } catch (_: Throwable) {}
-                            }
-                        }, 220)
-                    }
-                }
-                loadUrl("file:///android_asset/katex/katex_container.html")
-            }
-        },
-        modifier = Modifier.size(1.dp).alpha(0.01f)
-    )
+            },
+            update = { webView ->
+                try {
+                    webView.evaluateJavascript(
+                        "renderMath(${JSONObject.quote(formula)}, $isDark);",
+                        null
+                    )
+                } catch (_: Throwable) {}
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(measuredHeightDp)
+                .alpha(if (isLoaded) 1f else 0.01f)
+        )
+    }
 }
 
 /**
- * Gemini App-style mathematical equation block.
- * Renders publication-grade mathematical notation (fractions, integrals, radicals, matrices)
- * inside a dedicated Gemini card with 100% static Bitmap caching for buttery smooth 120 FPS scrolling.
+ * Modern, publication-grade mathematical formula block view.
+ * Embeds crisp vector KaTeX rendering inside a dedicated math card with domain category badge,
+ * TeX source toggle, smooth horizontal scrolling for matrices, and one-tap copy with haptic feedback.
  */
 @Composable
 fun MathEquationBlockView(
@@ -700,9 +833,7 @@ fun MathEquationBlockView(
     val haptic = LocalHapticFeedback.current
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
     val normalizedFormula = remember(formula) { normalizeLatexFormula(formula) }
-    val unicodePreview = remember(normalizedFormula) { formatLatexToUnicode(normalizedFormula) }
-    val cacheKey = remember(normalizedFormula, isDark) { "${normalizedFormula}__${if (isDark) "dark" else "light"}" }
-    var cachedBitmap by remember(cacheKey) { mutableStateOf(MathRenderCache.bitmapCache.get(cacheKey)) }
+    val category = remember(normalizedFormula) { detectMathCategory(normalizedFormula) }
     var isCopied by remember { mutableStateOf(false) }
     var showRawLatex by remember { mutableStateOf(false) }
 
@@ -713,9 +844,9 @@ fun MathEquationBlockView(
         }
     }
 
-    // Exact Gemini App math card styling
-    val cardBg = if (isDark) Color(0xFF1E1F24) else Color(0xFFF0F4F9)
-    val borderColor = if (isDark) Color(0xFF2E313A) else Color(0xFFD8DCE5)
+    val cardBg = if (isDark) Color(0xFF1E1F24) else Color(0xFFF4F6FA)
+    val borderColor = if (isDark) Color(0xFF2E313A) else Color(0xFFDCE1EB)
+    val badgeTint = ClaudeTerracotta
 
     Box(
         modifier = modifier
@@ -729,131 +860,342 @@ fun MathEquationBlockView(
             border = androidx.compose.foundation.BorderStroke(0.8.dp, borderColor),
             tonalElevation = 1.dp,
             modifier = Modifier
-                .wrapContentSize()
-                .widthIn(max = 720.dp)
+                .fillMaxWidth()
+                .widthIn(max = 760.dp)
         ) {
             Column(
                 modifier = Modifier
-                    .wrapContentSize()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
-                // Formula display area with smooth horizontal scroll for wide equations
+                // Header Action Bar: Category Badge + TeX toggle + Copy button
                 Row(
-                    modifier = Modifier
-                        .wrapContentSize()
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (showRawLatex) {
-                        SelectionContainer {
+                    // Category Badge
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = badgeTint.copy(alpha = 0.12f)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
                             Text(
-                                text = normalizedFormula,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp
+                                text = when (category) {
+                                    "Matrix" -> "⊞"
+                                    "Integral" -> "∫"
+                                    "Series" -> "∑"
+                                    "Calculus" -> "∂"
+                                    "Vectors" -> "→"
+                                    "Quantum" -> "Ψ"
+                                    else -> "ƒ"
+                                },
+                                fontSize = 11.sp,
+                                color = badgeTint,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = category.uppercase(),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 9.sp,
+                                    letterSpacing = 0.5.sp
                                 ),
-                                color = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24),
-                                textAlign = TextAlign.Center
+                                color = badgeTint
                             )
                         }
-                    } else if (cachedBitmap != null) {
-                        // 100% Native, Static, publication-grade math rendering (Zero lag, 120 FPS)
-                        Image(
-                            bitmap = cachedBitmap!!.asImageBitmap(),
-                            contentDescription = "Mathematical equation: $normalizedFormula",
-                            modifier = Modifier
-                                .wrapContentSize()
-                                .padding(horizontal = 6.dp, vertical = 4.dp)
-                        )
-                    } else {
-                        // Hybrid: render KaTeX once and snapshot to static Bitmap, while displaying Unicode preview
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = unicodePreview,
-                                style = MaterialTheme.typography.bodyLarge.copy(
-                                    fontFamily = FontFamily.Serif,
-                                    fontStyle = FontStyle.Italic,
-                                    fontWeight = FontWeight.Medium,
-                                    fontSize = 17.sp,
-                                    letterSpacing = 0.4.sp
-                                ),
-                                color = if (isDark) Color(0xFFE3E3E8) else Color(0xFF1F1F24),
-                                modifier = Modifier
-                                    .wrapContentSize()
-                                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                                textAlign = TextAlign.Center
-                            )
+                    }
 
-                            // Background capture WebView that draws to Bitmap once rendered
-                            GeminiKaTeXCaptureView(
-                                formula = normalizedFormula,
-                                isDark = isDark,
-                                onBitmapCaptured = { bmp ->
-                                    MathRenderCache.bitmapCache.put(cacheKey, bmp)
-                                    cachedBitmap = bmp
-                                }
+                    // Actions: TeX Toggle + Copy Formula
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // Raw LaTeX toggle
+                        Surface(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showRawLatex = !showRawLatex
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Text(
+                                text = if (showRawLatex) "Preview" else "TeX",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 10.5.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                             )
+                        }
+
+                        // Copy Button
+                        Surface(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                                isCopied = true
+                                Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(6.dp),
+                            color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                    contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
+                                    tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Text(
+                                    text = if (isCopied) "Copied" else "Copy",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    ),
+                                    color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }
 
-                // Discrete Gemini-style footer actions
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Raw LaTeX toggle
-                    Text(
-                        text = if (showRawLatex) "Preview" else "TeX",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 10.sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .clickable { showRawLatex = !showRawLatex }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                Spacer(Modifier.height(8.dp))
+
+                // Formula Content Area
+                if (showRawLatex) {
+                    SelectionContainer {
+                        Text(
+                            text = normalizedFormula,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                lineHeight = 19.sp
+                            ),
+                            color = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(vertical = 6.dp)
+                        )
+                    }
+                } else {
+                    KaTeXMathView(
+                        formula = normalizedFormula,
+                        isDark = isDark,
+                        modifier = Modifier.fillMaxWidth()
                     )
+                }
+            }
+        }
+    }
+}
 
-                    Spacer(Modifier.width(8.dp))
+/**
+ * Modern Claude/Gemini-style Interactive Inline Artifact Card.
+ * Renders document, code, markdown, html, or svg artifacts generated directly in assistant messages
+ * with rich iconography, copy action, and one-tap full-screen / bottom-sheet exploration.
+ */
+@Composable
+fun InlineArtifactCardView(
+    artifact: MarkdownBlock.Artifact,
+    onOpenArtifact: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    var isCopied by remember { mutableStateOf(false) }
 
-                    // Copy Button
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            delay(2000)
+            isCopied = false
+        }
+    }
+
+    val typeLower = artifact.type.lowercase()
+    val langLower = artifact.language.lowercase()
+    val (icon, tint, badgeLabel) = when {
+        typeLower.contains("code") || langLower in setOf("python", "py", "kotlin", "kt", "js", "ts", "java", "cpp", "c", "rust", "rs", "go", "sh", "bash") ->
+            Triple(Icons.Default.Code, ChatGptBlue, if (artifact.language.isNotBlank()) artifact.language.uppercase() else "CODE")
+        typeLower.contains("html") || langLower in setOf("html", "htm") ->
+            Triple(Icons.Default.Language, Color(0xFFE65100), "HTML")
+        typeLower.contains("svg") || langLower == "svg" ->
+            Triple(Icons.Default.Brush, Color(0xFF9C27B0), "SVG")
+        typeLower.contains("markdown") || langLower in setOf("markdown", "md") ->
+            Triple(Icons.Default.Article, ClaudeTerracotta, "NOTES")
+        typeLower.contains("csv") || typeLower.contains("json") || langLower in setOf("csv", "json") ->
+            Triple(Icons.Default.TableChart, ChatGptEmerald, "DATA")
+        else ->
+            Triple(Icons.Default.Description, ClaudeTerracotta, if (artifact.language.isNotBlank()) artifact.language.uppercase() else "DOC")
+    }
+
+    val cardBg = if (isDark) Color(0xFF1B1C22) else Color(0xFFF7F6F3)
+    val headerBg = if (isDark) Color(0xFF22242C) else Color(0xFFEFECE5)
+    val borderColor = if (isDark) Color(0xFF2F323E) else Color(0xFFDEDBD2)
+    val previewLines = remember(artifact.content) {
+        artifact.content.lines().take(5).joinToString("\n")
+    }
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onOpenArtifact()
+            },
+        shape = RoundedCornerShape(14.dp),
+        color = cardBg
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Header Bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(headerBg)
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(tint.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(Modifier.width(9.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = artifact.title.ifBlank { artifact.identifier },
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = tint.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = badgeLabel,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 9.sp
+                                    ),
+                                    color = tint,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Artifact • Tap to view & save to phone",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+
+                // Actions: Open & Copy
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     Surface(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normalizedFormula))
+                            cm.setPrimaryClip(ClipData.newPlainText(artifact.title, artifact.content))
                             isCopied = true
-                            Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Artifact content copied", Toast.LENGTH_SHORT).show()
                         },
                         shape = RoundedCornerShape(6.dp),
-                        color = Color.Transparent
+                        color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
                     ) {
                         Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp),
-                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
-                                imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
-                                tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = "Copy",
+                                tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(11.dp)
                             )
                             Text(
                                 text = if (isCopied) "Copied" else "Copy",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                                color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
+
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onOpenArtifact()
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = ClaudeTerracotta
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.OpenInNew, contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
+                            Text(
+                                text = "Open",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Code / Text Preview Snippet
+            if (previewLines.isNotBlank()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
+                    Text(
+                        text = previewLines,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                        maxLines = 5,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -1486,27 +1828,27 @@ fun buildFormattedInlineTextInternal(raw: String, baseColor: Color, isDark: Bool
                 }
                 fullMatch.startsWith("$") -> {
                     val mathContent = match.groupValues.getOrNull(9) ?: ""
-                    // Check if this is real math or a currency/plain-text dollar sign.
-                    // Math operators: = \ ^ _ + - < > ≤ ≥ ∈ ∉ ≠ ≈ → ∫ ∑ ∏ ∂ ∞ ∀ ∃
-                    val hasMathOperator = mathContent.contains("=") || mathContent.contains("\\") ||
-                        mathContent.contains("^") || mathContent.contains("_") ||
-                        mathContent.contains("+") || mathContent.contains("-") ||
-                        mathContent.contains("<") || mathContent.contains(">") ||
-                        mathContent.contains("≤") || mathContent.contains("≥") ||
-                        mathContent.contains("≠") || mathContent.contains("≈") ||
-                        mathContent.contains("→") || mathContent.contains("∫") ||
-                        mathContent.contains("∑") || mathContent.contains("∏") ||
-                        mathContent.contains("∂") || mathContent.contains("∞") ||
-                        mathContent.contains("∈") || mathContent.contains("∉") ||
-                        mathContent.contains("∀") || mathContent.contains("∃") ||
-                        mathContent.contains("frac") || mathContent.contains("sqrt") ||
-                        mathContent.contains("cdot") || mathContent.contains("times")
-                    val isCurrencyOrPlain = mathContent.matches(Regex("""^\s*\d+(?:[.,]\d+)?\s*$""")) ||
-                        (mathContent.contains(" ") && !hasMathOperator)
+                    val trimmedMath = mathContent.trim()
+                    val hasMathOperator = trimmedMath.contains("=") || trimmedMath.contains("\\") ||
+                        trimmedMath.contains("^") || trimmedMath.contains("_") ||
+                        trimmedMath.contains("+") || trimmedMath.contains("-") ||
+                        trimmedMath.contains("<") || trimmedMath.contains(">") ||
+                        trimmedMath.contains("≤") || trimmedMath.contains("≥") ||
+                        trimmedMath.contains("≠") || trimmedMath.contains("≈") ||
+                        trimmedMath.contains("→") || trimmedMath.contains("∫") ||
+                        trimmedMath.contains("∑") || trimmedMath.contains("∏") ||
+                        trimmedMath.contains("∂") || trimmedMath.contains("∞") ||
+                        trimmedMath.contains("∈") || trimmedMath.contains("∉") ||
+                        trimmedMath.contains("∀") || trimmedMath.contains("∃") ||
+                        trimmedMath.contains("frac") || trimmedMath.contains("sqrt") ||
+                        trimmedMath.contains("cdot") || trimmedMath.contains("times") ||
+                        (trimmedMath.length <= 3 && trimmedMath.all { it.isLetter() })
+                    val isCurrencyOrPlain = trimmedMath.matches(Regex("""^\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|INR|dollars?|cents?)?$""")) ||
+                        (trimmedMath.contains(" ") && !hasMathOperator)
                     if (isCurrencyOrPlain) {
                         append(fullMatch)
                     } else {
-                        val cleanMath = formatLatexToUnicode(mathContent)
+                        val cleanMath = formatLatexToUnicode(trimmedMath)
                         withStyle(
                             SpanStyle(
                                 fontFamily = FontFamily.Serif,
@@ -1580,8 +1922,16 @@ sealed class MarkdownBlock {
     data class Code(val language: String, val code: String) : MarkdownBlock()
     data class Table(val headers: List<String>, val rows: List<List<String>>) : MarkdownBlock()
     data class Blockquote(val text: String) : MarkdownBlock()
+    data class ListBlock(val items: List<ListItem>) : MarkdownBlock()
     data class ListItem(val isOrdered: Boolean, val index: Int, val text: String) : MarkdownBlock()
     data class MathEquation(val formula: String) : MarkdownBlock()
+    data class Artifact(
+        val identifier: String,
+        val title: String,
+        val type: String,
+        val language: String,
+        val content: String
+    ) : MarkdownBlock()
     object Divider : MarkdownBlock()
 }
 
@@ -1621,6 +1971,69 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
     while (i < lines.size) {
         val line = lines[i]
         val trimmed = line.trim()
+
+        // Claude & Antigravity Inline Artifact Blocks: <antArtifact ...>...</antArtifact> or <artifact ...>...</artifact>
+        if (trimmed.startsWith("<antArtifact") || trimmed.startsWith("<artifact")) {
+            flushPara()
+            val isAnt = trimmed.startsWith("<antArtifact")
+            val closeTag = if (isAnt) "</antArtifact>" else "</artifact>"
+            val idMatch = Regex("""identifier=["']([^"']+)["']""").find(trimmed)
+            val titleMatch = Regex("""title=["']([^"']+)["']""").find(trimmed)
+            val typeMatch = Regex("""type=["']([^"']+)["']""").find(trimmed)
+            val langMatch = Regex("""language=["']([^"']+)["']""").find(trimmed)
+            val id = idMatch?.groupValues?.get(1) ?: "artifact"
+            val title = titleMatch?.groupValues?.get(1) ?: id
+            val type = typeMatch?.groupValues?.get(1) ?: "text/plain"
+            val language = langMatch?.groupValues?.get(1) ?: ""
+
+            if (trimmed.contains(closeTag)) {
+                val inner = trimmed.substringAfter(">").substringBefore(closeTag)
+                blocks.add(MarkdownBlock.Artifact(
+                    identifier = id,
+                    title = title,
+                    type = type,
+                    language = language,
+                    content = inner
+                ))
+                val afterClose = trimmed.substringAfter(closeTag).trim()
+                if (afterClose.isNotEmpty()) {
+                    if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                    paraBuffer.append(afterClose)
+                }
+                i++
+                continue
+            } else {
+                val artBuffer = StringBuilder()
+                val afterOpen = trimmed.substringAfter(">").trim()
+                if (afterOpen.isNotEmpty()) artBuffer.append(afterOpen).append("\n")
+                i++
+                while (i < lines.size) {
+                    val curLine = lines[i]
+                    if (curLine.contains(closeTag)) {
+                        val beforeClose = curLine.substringBefore(closeTag)
+                        if (beforeClose.isNotEmpty()) artBuffer.append(beforeClose).append("\n")
+                        val afterClose = curLine.substringAfter(closeTag).trim()
+                        if (afterClose.isNotEmpty()) {
+                            if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                            paraBuffer.append(afterClose)
+                        }
+                        i++
+                        break
+                    } else {
+                        artBuffer.append(curLine).append("\n")
+                        i++
+                    }
+                }
+                blocks.add(MarkdownBlock.Artifact(
+                    identifier = id,
+                    title = title,
+                    type = type,
+                    language = language,
+                    content = artBuffer.toString().trimEnd()
+                ))
+                continue
+            }
+        }
 
         if (trimmed.startsWith("```")) {
             if (inCodeBlock) {
@@ -1682,12 +2095,28 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
                 val first = remainder.trim()
                 if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
                 i++
-                while (i < lines.size && !lines[i].trim().startsWith("$$")) {
-                    mathBuffer.append(lines[i]).append("\n")
-                    i++
+                while (i < lines.size) {
+                    val curLine = lines[i]
+                    val curTrimmed = curLine.trim()
+                    if (curTrimmed.contains("$$")) {
+                        val beforeEnd = curTrimmed.substringBefore("$$").trim()
+                        if (beforeEnd.isNotEmpty()) mathBuffer.append(beforeEnd).append("\n")
+                        val afterEnd = curTrimmed.substringAfter("$$").trim()
+                        if (afterEnd.isNotEmpty()) {
+                            if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                            paraBuffer.append(afterEnd)
+                        }
+                        i++
+                        break
+                    } else {
+                        mathBuffer.append(curLine).append("\n")
+                        i++
+                    }
                 }
-                blocks.add(MarkdownBlock.MathEquation(mathBuffer.toString().trimEnd()))
-                i++
+                val formula = mathBuffer.toString().trim()
+                if (formula.isNotEmpty()) {
+                    blocks.add(MarkdownBlock.MathEquation(formula))
+                }
                 continue
             }
         }
@@ -1715,7 +2144,7 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
             continue
         }
 
-        // Display Math Block \[ ... \]
+        // Display Math Block \[ ... \] multi-line
         if (trimmed.startsWith("\\[")) {
             flushPara()
             if (trimmed.length > 2 && trimmed.endsWith("\\]")) {
@@ -1730,16 +2159,39 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
                 val first = trimmed.removePrefix("\\[").trim()
                 if (first.isNotEmpty()) mathBuffer.append(first).append("\n")
                 i++
-                while (i < lines.size && !lines[i].trim().contains("\\]")) {
-                    mathBuffer.append(lines[i]).append("\n")
-                    i++
+                while (i < lines.size) {
+                    val curLine = lines[i]
+                    val curTrimmed = curLine.trim()
+                    if (curTrimmed.contains("\\]")) {
+                        val beforeEnd = curTrimmed.substringBefore("\\]").trim()
+                        if (beforeEnd.isNotEmpty()) mathBuffer.append(beforeEnd).append("\n")
+                        val afterEnd = curTrimmed.substringAfter("\\]").trim()
+                        if (afterEnd.isNotEmpty()) {
+                            if (paraBuffer.isNotEmpty()) paraBuffer.append("\n")
+                            paraBuffer.append(afterEnd)
+                        }
+                        i++
+                        break
+                    } else {
+                        mathBuffer.append(curLine).append("\n")
+                        i++
+                    }
                 }
-                if (i < lines.size) {
-                    val last = lines[i].trim().substringBefore("\\]").trim()
-                    if (last.isNotEmpty()) mathBuffer.append(last).append("\n")
-                    i++
+                val formula = mathBuffer.toString().trim()
+                if (formula.isNotEmpty()) {
+                    blocks.add(MarkdownBlock.MathEquation(formula))
                 }
-                blocks.add(MarkdownBlock.MathEquation(mathBuffer.toString().trimEnd()))
+                continue
+            }
+        }
+
+        // Standalone single-dollar math equation line: $ ... $
+        if (trimmed.startsWith("$") && trimmed.endsWith("$") && trimmed.length >= 3 && !trimmed.startsWith("$$")) {
+            val formula = trimmed.substring(1, trimmed.length - 1).trim()
+            if (formula.isNotEmpty()) {
+                flushPara()
+                blocks.add(MarkdownBlock.MathEquation(formula))
+                i++
                 continue
             }
         }
@@ -1747,7 +2199,8 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
         // LaTeX environment blocks \begin{...} ... \end{...}
         if (trimmed.startsWith("\\begin{")) {
             flushPara()
-            val env = trimmed.substringAfter("\\begin{").substringBefore("}")
+            val envMatch = Regex("""\\begin\{([a-zA-Z0-9*]+)\}""").find(trimmed)
+            val env = envMatch?.groupValues?.get(1) ?: trimmed.substringAfter("\\begin{").substringBefore("}").trim()
             val mathBuffer = StringBuilder(line).append("\n")
             i++
             while (i < lines.size && !lines[i].contains("\\end{$env}")) {
@@ -1758,7 +2211,10 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
                 mathBuffer.append(lines[i]).append("\n")
                 i++
             }
-            blocks.add(MarkdownBlock.MathEquation(mathBuffer.toString().trimEnd()))
+            val formula = mathBuffer.toString().trim()
+            if (formula.isNotEmpty()) {
+                blocks.add(MarkdownBlock.MathEquation(formula))
+            }
             continue
         }
 
@@ -1778,6 +2234,52 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
                 blocks.add(MarkdownBlock.Table(headers, rows))
                 continue
             }
+        }
+
+        // Group consecutive Blockquotes & Callouts
+        if (trimmed.startsWith(">")) {
+            flushPara()
+            val quoteBuffer = StringBuilder()
+            while (i < lines.size && lines[i].trim().startsWith(">")) {
+                val qLine = lines[i].trim().removePrefix(">").trim()
+                if (quoteBuffer.isNotEmpty()) quoteBuffer.append("\n")
+                quoteBuffer.append(qLine)
+                i++
+            }
+            val quoteText = quoteBuffer.toString().trim()
+            if (quoteText.isNotEmpty()) {
+                blocks.add(MarkdownBlock.Blockquote(quoteText))
+            }
+            continue
+        }
+
+        // Group consecutive Lists (both unordered and ordered)
+        val isBullet = trimmed.startsWith("- ") || trimmed.startsWith("* ")
+        val isOrdered = trimmed.matches(Regex("^\\d+\\.\\s+.*"))
+        if (isBullet || isOrdered) {
+            flushPara()
+            val listItems = mutableListOf<MarkdownBlock.ListItem>()
+            while (i < lines.size) {
+                val lTrim = lines[i].trim()
+                if (lTrim.startsWith("- ") || lTrim.startsWith("* ")) {
+                    val itemText = if (lTrim.startsWith("- ")) lTrim.removePrefix("- ") else lTrim.removePrefix("* ")
+                    listItems.add(MarkdownBlock.ListItem(isOrdered = false, index = 0, text = itemText.trim()))
+                    i++
+                } else if (lTrim.matches(Regex("^\\d+\\.\\s+.*"))) {
+                    val match = Regex("^(\\d+)\\.\\s+(.*)").find(lTrim)
+                    val num = match?.groupValues?.get(1)?.toIntOrNull() ?: listIndex
+                    val itemText = match?.groupValues?.get(2) ?: lTrim
+                    listItems.add(MarkdownBlock.ListItem(isOrdered = true, index = num, text = itemText.trim()))
+                    listIndex = num + 1
+                    i++
+                } else {
+                    break
+                }
+            }
+            if (listItems.isNotEmpty()) {
+                blocks.add(MarkdownBlock.ListBlock(listItems))
+            }
+            continue
         }
 
         when {
@@ -1801,30 +2303,9 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
                 flushPara()
                 blocks.add(MarkdownBlock.Heading(1, trimmed.removePrefix("# ").trim()))
             }
-            trimmed.startsWith("> ") -> {
-                flushPara()
-                blocks.add(MarkdownBlock.Blockquote(trimmed.removePrefix("> ").trim()))
-            }
             trimmed == "---" || trimmed == "***" -> {
                 flushPara()
                 blocks.add(MarkdownBlock.Divider)
-            }
-            trimmed.startsWith("- ") || trimmed.startsWith("* ") -> {
-                flushPara()
-                val itemText = if (trimmed.startsWith("- ")) trimmed.removePrefix("- ") else trimmed.removePrefix("* ")
-                blocks.add(MarkdownBlock.ListItem(isOrdered = false, index = 0, text = itemText.trim()))
-            }
-            trimmed.matches(Regex("^\\d+\\.\\s+.*")) -> {
-                flushPara()
-                val match = Regex("^(\\d+)\\.\\s+(.*)").find(trimmed)
-                if (match != null) {
-                    val num = match.groupValues[1].toIntOrNull() ?: listIndex
-                    val itemText = match.groupValues[2]
-                    blocks.add(MarkdownBlock.ListItem(isOrdered = true, index = num, text = itemText.trim()))
-                    listIndex = num + 1
-                } else {
-                    blocks.add(MarkdownBlock.Paragraph(trimmed))
-                }
             }
             isPureEquationLine(trimmed) -> {
                 flushPara()

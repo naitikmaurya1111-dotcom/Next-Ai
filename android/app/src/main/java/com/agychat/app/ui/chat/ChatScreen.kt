@@ -1533,8 +1533,17 @@ fun ChatScreen(
                                 onFeedback = { type ->
                                     viewModel.toggleFeedback(msg.id, type)
                                 },
-                                onOpenFile = { filePath ->
-                                    viewModel.fetchAndOpenFile(filePath)
+                                onOpenFile = { target ->
+                                    val trimmed = target.trim()
+                                    if ((trimmed.startsWith("http://") || trimmed.startsWith("https://")) && !trimmed.contains("/api/file")) {
+                                        try {
+                                            uriHandler.openUri(trimmed)
+                                        } catch (t: Throwable) {
+                                            viewModel.fetchAndOpenFile(trimmed)
+                                        }
+                                    } else {
+                                        viewModel.fetchAndOpenFile(trimmed)
+                                    }
                                 },
                                 onReply = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -2042,6 +2051,7 @@ fun ChatScreen(
         FileViewerBottomSheet(
             fileData = fileData,
             onClose = { viewModel.closeFileViewer() },
+            onRetry = { viewModel.fetchAndOpenFile(fileData.path) },
             onSaveToPhone = {
                 val hasPerm = com.agychat.app.data.local.StoragePermissions.hasWritePermission(context)
                 if (!hasPerm) {
@@ -2658,27 +2668,63 @@ fun MessageItem(
                         Spacer(Modifier.height(10.dp))
                     }
 
-                    // 2b. Generated Files Artifact Cards (Derivations, markdown notes, code files created by agent)
-                    val generatedFiles = remember(message.toolExecutions) {
-                        message.toolExecutions
-                            .filter { (it.toolName == "write_to_file" || it.toolName == "replace_file_content") && !it.targetFile.isNullOrBlank() }
-                            .mapNotNull { it.targetFile }
-                            .distinct()
+                    // 2b. Generated Files Artifact Cards (Derivations, markdown notes, code files, PDFs created or linked by agent)
+                    val generatedFiles = remember(message.toolExecutions, message.content) {
+                        val list = mutableListOf<String>()
+                        // 1. Tool executions (write_to_file, replace_file_content, generate_image, view_file)
+                        message.toolExecutions.forEach { t ->
+                            val tName = t.toolName.lowercase()
+                            if (tName.endsWith("write_to_file") || tName.endsWith("replace_file_content") ||
+                                tName.contains("file") || tName.endsWith("generate_image")) {
+                                t.targetFile?.takeIf { it.isNotBlank() }?.let { list.add(it) }
+                            }
+                        }
+                        // 2. Markdown links: [label](file:///path), [label](/content/path), [label](https://.../api/file), or [label](filename.ext)
+                        val linkRegex = Regex("""\[([^\]]+)\]\(((?:file://|/content/|/root/|/tmp/|https?://[^\s\)]+/api/file|[a-zA-Z0-9_\-./]+\.(?:pdf|md|txt|py|kt|java|json|csv|png|jpg|jpeg|webp|html|svg|sh))[^\s\)]*)\)""")
+                        for (m in linkRegex.findAll(message.content)) {
+                            val fPath = m.groupValues[2].trim()
+                            if (fPath.isNotBlank() && (!fPath.startsWith("http") || fPath.contains("/api/file"))) list.add(fPath)
+                        }
+                        // 3. Explicit file paths mentioned in text: e.g. /content/... .pdf or .md
+                        val pathRegex = Regex("""(?:file://|/content/|/root/|/tmp/)[a-zA-Z0-9_\-./]+\.(?:pdf|md|txt|py|kt|java|json|csv|png|jpg|jpeg|webp)""")
+                        for (m in pathRegex.findAll(message.content)) {
+                            list.add(m.value.trim())
+                        }
+                        list.distinct()
                     }
                     if (generatedFiles.isNotEmpty()) {
                         Column(
                             modifier = Modifier.padding(bottom = 10.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            generatedFiles.forEach { filePath ->
-                                val fileName = filePath.substringAfterLast("/").ifBlank { "file" }
+                            generatedFiles.forEach { rawFilePath ->
+                                val cleanPath = remember(rawFilePath) {
+                                    var p = rawFilePath.trim()
+                                    if (p.startsWith("[") && p.contains("](") && p.endsWith(")")) {
+                                        p = p.substringAfter("](").removeSuffix(")")
+                                    }
+                                    if (p.startsWith("file://")) p = p.removePrefix("file://")
+                                    if (p.contains("#")) p = p.substringBefore("#")
+                                    p.trim()
+                                }
+                                val fileName = remember(cleanPath) { cleanPath.substringAfterLast("/").ifBlank { "Artifact" } }
+                                val ext = remember(fileName) { fileName.substringAfterLast(".", "").lowercase() }
+                                val (icon, tint, typeBadge) = when {
+                                    ext == "pdf" -> Triple(Icons.Default.PictureAsPdf, Color(0xFFE53935), "PDF")
+                                    ext in setOf("png", "jpg", "jpeg", "webp") -> Triple(Icons.Default.Image, Color(0xFF1E88E5), "IMAGE")
+                                    ext in setOf("md", "txt") -> Triple(Icons.Default.Article, ClaudeTerracotta, "NOTES")
+                                    ext in setOf("py", "kt", "js", "ts", "java", "cpp", "c", "rs", "go") -> Triple(Icons.Default.Code, ChatGptBlue, ext.uppercase())
+                                    ext in setOf("json", "csv", "tsv", "sql") -> Triple(Icons.Default.TableChart, ChatGptEmerald, "DATA")
+                                    else -> Triple(Icons.Default.Description, ClaudeTerracotta, if (ext.isNotBlank()) ext.uppercase() else "DOC")
+                                }
+
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.4f)),
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, tint.copy(alpha = 0.35f)),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { onOpenFile(filePath) }
+                                        .clickable { onOpenFile(cleanPath) }
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
@@ -2691,39 +2737,57 @@ fun MessageItem(
                                         ) {
                                             Box(
                                                 modifier = Modifier
-                                                    .size(32.dp)
+                                                    .size(34.dp)
                                                     .clip(RoundedCornerShape(8.dp))
-                                                    .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                                                    .background(tint.copy(alpha = 0.14f)),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 Icon(
-                                                    Icons.Default.Description,
+                                                    imageVector = icon,
                                                     contentDescription = null,
-                                                    tint = ClaudeTerracotta,
-                                                    modifier = Modifier.size(18.dp)
+                                                    tint = tint,
+                                                    modifier = Modifier.size(19.dp)
                                                 )
                                             }
                                             Spacer(Modifier.width(10.dp))
                                             Column {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = fileName,
+                                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                                        color = MaterialTheme.colorScheme.onSurface,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = tint.copy(alpha = 0.12f)
+                                                    ) {
+                                                        Text(
+                                                            text = typeBadge,
+                                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                                fontFamily = FontFamily.Monospace,
+                                                                fontWeight = FontWeight.Bold,
+                                                                fontSize = 8.5.sp
+                                                            ),
+                                                            color = tint,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
                                                 Text(
-                                                    text = fileName,
-                                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = "Artifact created • Tap to view & save to phone",
+                                                    text = "Artifact • Tap to view & save to phone",
                                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                                 )
                                             }
                                         }
                                         Button(
-                                            onClick = { onOpenFile(filePath) },
+                                            onClick = { onOpenFile(cleanPath) },
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                             modifier = Modifier.height(30.dp),
-                                            colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                                            colors = ButtonDefaults.buttonColors(containerColor = tint)
                                         ) {
                                             Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(13.dp))
                                             Spacer(Modifier.width(4.dp))
@@ -5573,7 +5637,8 @@ fun FileViewerBottomSheet(
     onSaveToPhone: () -> Unit,
     onOpenExternal: () -> Unit,
     onShare: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onRetry: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -5826,23 +5891,50 @@ fun FileViewerBottomSheet(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(16.dp),
+                                .padding(24.dp),
                             verticalArrangement = Arrangement.Center,
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Icon(
-                                Icons.Default.ErrorOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(40.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
+                            Spacer(Modifier.height(14.dp))
+                            Text(
+                                text = "Unable to Load Artifact",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(6.dp))
                             Text(
                                 text = fileData.error,
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.error,
                                 textAlign = TextAlign.Center
                             )
+                            Spacer(Modifier.height(20.dp))
+                            Button(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onRetry()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Retry Fetch", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold))
+                            }
                         }
                     }
                     fileData.isPdf -> {
@@ -6410,18 +6502,34 @@ fun SessionArtifactsBottomSheet(
                                             }
                                         }
                                     }
-                                    val fileObj = remember(filePath) { java.io.File(filePath) }
-                                    val sizeStr = remember(fileObj) {
-                                        if (fileObj.exists() && fileObj.length() > 0) {
-                                            val kb = fileObj.length() / 1024.0
+                                    val context = LocalContext.current
+                                    val norm = remember(filePath) { com.agychat.app.data.local.LocalFileManager.normalizeFileId(filePath) }
+                                    val fn = remember(norm) { com.agychat.app.data.local.LocalFileManager.getFileName(norm) }
+                                    val safeDiskName = remember(norm, fn) { "${norm.hashCode().toString().replace("-", "n")}_$fn" }
+                                    val localCandidate = remember(safeDiskName, fn, filePath) {
+                                        val f1 = java.io.File(context.filesDir, "saved_files/$safeDiskName")
+                                        val f2 = java.io.File(context.filesDir, "saved_files/$fn")
+                                        val f3 = java.io.File(filePath)
+                                        when {
+                                            f1.exists() && f1.length() > 0 -> f1
+                                            f2.exists() && f2.length() > 0 -> f2
+                                            f3.exists() && f3.length() > 0 -> f3
+                                            else -> null
+                                        }
+                                    }
+                                    val isOfflineCached = localCandidate != null
+                                    val sizeStr = remember(localCandidate) {
+                                        if (localCandidate != null) {
+                                            val kb = localCandidate.length() / 1024.0
                                             String.format(java.util.Locale.US, "%.1f KB", kb)
                                         } else null
                                     }
-                                    val pathSubText = if (sizeStr != null) "$sizeStr • $filePath" else filePath
+                                    val statusPrefix = if (isOfflineCached) "💾 OFFLINE READY" else "☁️ ON COLAB"
+                                    val pathSubText = listOfNotNull(statusPrefix, sizeStr, filePath).joinToString(" • ")
                                     Text(
                                         text = pathSubText,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                        color = if (isOfflineCached) Color(0xFF10A37F) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )

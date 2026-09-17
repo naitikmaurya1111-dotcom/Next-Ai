@@ -904,6 +904,27 @@ class ChatViewModel @Inject constructor(
                     return@launch
                 }
 
+                // 2. Second check: Search active conversation messages for inline artifacts, tool outputs, or code blocks
+                val foundInConversation = findArtifactInMessages(cleanPath, filename)
+                if (foundInConversation != null) {
+                    val entity = localFileManager.cacheFile(currentConversationId, cleanPath, filename, foundInConversation)
+                    val diskFile = File(entity.localPath)
+                    withContext(Dispatchers.Main) {
+                        _activeFileViewer.value = FileViewerData(
+                            filename = entity.filename,
+                            path = entity.remotePath,
+                            size = entity.size,
+                            content = entity.content,
+                            localDiskFile = diskFile,
+                            isBinary = false,
+                            mimeType = entity.mimeType,
+                            isLoading = false,
+                            isOfflineCached = true
+                        )
+                    }
+                    return@launch
+                }
+
                 // Not in local cache
                 withContext(Dispatchers.Main) {
                     _activeFileViewer.value = FileViewerData(
@@ -1001,16 +1022,81 @@ class ChatViewModel @Inject constructor(
 
     private fun cleanFilePathOrUrl(raw: String): String {
         var s = raw.trim()
-        s = s.trim('(', '[', '{', '\'', '"', '<', '`')
+        if (s.startsWith("[") && s.contains("](") && s.endsWith(")")) {
+            s = s.substringAfter("](").removeSuffix(")")
+        }
+        if (s.contains("#")) {
+            s = s.substringBefore("#")
+        }
+        if (s.contains("?path=")) {
+            s = s.substringAfter("?path=").substringBefore("&")
+        } else if (s.contains("?")) {
+            s = s.substringBefore("?")
+        }
         if (s.startsWith("file://")) s = s.removePrefix("file://")
-        if (s.contains("?path=")) s = s.substringAfter("?path=").substringBefore("&")
         try {
             s = java.net.URLDecoder.decode(s, "UTF-8")
         } catch (_: Throwable) {}
         s = s.trim()
             .trimEnd('.', ',', ':', ';', ')', ']', '}', '\'', '"', '>', '`')
             .trimStart('(', '[', '{', '\'', '"', '<', '`')
+        if (!s.startsWith("/") && !s.startsWith("http://") && !s.startsWith("https://") && !s.startsWith("content://")) {
+            if (s.startsWith("content/") || s.startsWith("drive/") || s.startsWith("root/") || s.startsWith("tmp/")) {
+                s = "/$s"
+            }
+        }
         return s.trim()
+    }
+
+    private fun findArtifactInMessages(cleanPath: String, filename: String): String? {
+        val currentMessages = _messages.value
+        val targetFname = filename.lowercase()
+        val targetId = cleanPath.lowercase().removePrefix("/").removePrefix("content/").removePrefix("root/")
+
+        for (msg in currentMessages.asReversed()) {
+            // A. Check tool executions (write_to_file, replace_file_content, etc.)
+            for (tool in msg.toolExecutions) {
+                val tFile = tool.targetFile ?: continue
+                val tfName = tFile.substringAfterLast("/").lowercase()
+                if (tFile.equals(cleanPath, ignoreCase = true) ||
+                    tfName == targetFname ||
+                    tFile.endsWith(filename, ignoreCase = true) ||
+                    tfName.contains(targetId) ||
+                    targetId.contains(tfName)
+                ) {
+                    val out = tool.output?.trim()
+                    if (!out.isNullOrBlank() && !out.contains("File written") && !out.contains("Success") && out.length > 5) {
+                        return out
+                    }
+                }
+            }
+
+            // B. Check <antArtifact> or <artifact> tags in message content
+            val antRegex = Regex("""<(?:antArtifact|artifact)\s+([^>]+)>([\s\S]*?)</(?:antArtifact|artifact)>""")
+            for (m in antRegex.findAll(msg.content)) {
+                val tagAttrs = m.groupValues[1]
+                val body = m.groupValues[2].trim()
+                val id = Regex("""identifier=["']([^"']+)["']""").find(tagAttrs)?.groupValues?.get(1)?.lowercase() ?: ""
+                val title = Regex("""title=["']([^"']+)["']""").find(tagAttrs)?.groupValues?.get(1)?.lowercase() ?: ""
+                if (id == targetId || id == targetFname || title == targetId || title == targetFname ||
+                    targetId.contains(id) || (id.isNotBlank() && targetId.endsWith(id)) ||
+                    targetFname.contains(id) || (id.isNotBlank() && id.contains(targetFname))
+                ) {
+                    return body
+                }
+            }
+
+            // C. Check markdown code blocks matching filename or extension
+            val codeBlockRegex = Regex("""```([a-zA-Z0-9_-]+)?(?:\s+(?:file|filename)=["']?([^\s"']+)["']?)?\n([\s\S]*?)```""")
+            for (m in codeBlockRegex.findAll(msg.content)) {
+                val fenceFile = m.groupValues[2].trim().lowercase()
+                val fenceCode = m.groupValues[3].trim()
+                if (fenceFile.isNotBlank() && (fenceFile == targetFname || fenceFile.endsWith(targetFname))) {
+                    return fenceCode
+                }
+            }
+        }
+        return null
     }
 
     fun saveActiveFileToPhone(onResult: (Boolean, String) -> Unit) {
@@ -2907,7 +2993,7 @@ class ChatViewModel @Inject constructor(
 
                 _messages.value = resolvedMessages
 
-                // Extract all file references generated in this conversation from both tools and cached files
+                // Extract all file references generated in this conversation from tools, cached files, and inline artifacts
                 val toolFiles = resolvedMessages.flatMap { msg ->
                     msg.toolExecutions.mapNotNull { it.targetFile }
                 }.filter { it.isNotBlank() }
@@ -2916,7 +3002,25 @@ class ChatViewModel @Inject constructor(
                     fileDao.getFilesForConversationList(conversationId).map { it.remotePath }
                 } catch (_: Exception) { emptyList() }
 
-                val allFiles = (toolFiles + cachedFiles).distinct()
+                val inlineArtifacts = resolvedMessages.flatMap { msg ->
+                    val list = mutableListOf<String>()
+                    val antRegex = Regex("""<(?:antArtifact|artifact)\s+([^>]+)>""")
+                    for (m in antRegex.findAll(msg.content)) {
+                        val attrs = m.groupValues[1]
+                        val id = Regex("""identifier=["']([^"']+)["']""").find(attrs)?.groupValues?.get(1)
+                        val title = Regex("""title=["']([^"']+)["']""").find(attrs)?.groupValues?.get(1)
+                        val best = id ?: title
+                        if (!best.isNullOrBlank()) list.add(best)
+                    }
+                    val linkRegex = Regex("""\[([^\]]+)\]\(([^)]+\.(?:md|txt|py|kt|java|json|csv|pdf|html|svg|sh|png|jpg))\)""")
+                    for (m in linkRegex.findAll(msg.content)) {
+                        val fPath = m.groupValues[2].trim()
+                        if (fPath.isNotBlank() && !fPath.startsWith("http://") && !fPath.startsWith("https://")) list.add(fPath)
+                    }
+                    list
+                }
+
+                val allFiles = (toolFiles + cachedFiles + inlineArtifacts).distinct()
                 _sessionFiles.value = allFiles
             }
         }
