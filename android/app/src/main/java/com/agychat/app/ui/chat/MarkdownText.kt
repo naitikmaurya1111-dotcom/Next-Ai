@@ -1543,3 +1543,10 @@ fun parseMarkdownBlocks(raw: String, skipCache: Boolean = false): List<MarkdownB
     if (!skipCache) markdownBlockCache.put(raw, blocks)
     return blocks
 }
+
+// ─── Compat stubs for SettingsScreen — bitmap cache removed in v3.0.3 ─────────
+/** Returns 0 — KaTeX bitmap cache was removed; WebView renders live now. */
+fun getKaTeXCacheCount(): Int = 0
+
+/** No-op — KaTeX bitmap cache was removed; returns 0. */
+fun clearKaTeXCache(): Int = 0
