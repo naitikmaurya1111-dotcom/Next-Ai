@@ -183,20 +183,35 @@ fun formatLatexToUnicode(raw: String): String {
     val hats = mapOf("H" to "Ĥ","A" to "Â","B" to "B̂","p" to "p̂","x" to "x̂","y" to "ŷ","z" to "ẑ","\\rho" to "ρ̂","rho" to "ρ̂","\\psi" to "ψ̂","psi" to "ψ̂","\\phi" to "ϕ̂","phi" to "ϕ̂")
     for ((k, v) in hats) text = text.replace("\\hat{$k}", v).replace("\\hat $k", v)
 
-    // Fractions (simple cases → Unicode, complex → a⁄b)
+    // Fractions (simple cases → Unicode symbols, complex → clean a / b)
     val fracRx = Regex("""\\?frac\{([^{}]+)\}\{([^{}]+)\}""")
     repeat(12) {
         val m = fracRx.find(text) ?: return@repeat
         val num = m.groupValues[1].trim(); val den = m.groupValues[2].trim()
-        val rep = when { num=="1"&&den=="2" -> "½"; num=="1"&&den=="3" -> "⅓"; num=="2"&&den=="3" -> "⅔"
-            num=="1"&&den=="4" -> "¼"; num=="3"&&den=="4" -> "¾"; num=="1"&&den=="5" -> "⅕"
-            num=="2"&&den=="5" -> "⅖"; num=="3"&&den=="5" -> "⅗"; num=="4"&&den=="5" -> "⅘"
-            num=="1"&&den=="6" -> "⅙"; num=="5"&&den=="6" -> "⅚"; num=="1"&&den=="8" -> "⅛"
-            num=="3"&&den=="8" -> "⅜"; num=="5"&&den=="8" -> "⅝"; num=="7"&&den=="8" -> "⅞"
+        val rep = when {
+            num == "1" && den == "2" -> "½"
+            num == "1" && den == "3" -> "⅓"
+            num == "2" && den == "3" -> "⅔"
+            num == "1" && den == "4" -> "¼"
+            num == "3" && den == "4" -> "¾"
+            num == "1" && den == "5" -> "⅕"
+            num == "2" && den == "5" -> "⅖"
+            num == "3" && den == "5" -> "⅗"
+            num == "4" && den == "5" -> "⅘"
+            num == "1" && den == "6" -> "⅙"
+            num == "5" && den == "6" -> "⅚"
+            num == "1" && den == "8" -> "⅛"
+            num == "3" && den == "8" -> "⅜"
+            num == "5" && den == "8" -> "⅝"
+            num == "7" && den == "8" -> "⅞"
+            num == "d" && den == "dx" -> "d/dx"
+            num == "d" && den == "dt" -> "d/dt"
+            num == "u" && den == "v" -> "u/v"
+            num == "1" && den.startsWith("|") -> "1/$den"
             else -> {
-                val n = if (num.contains("[+\\-\\s]".toRegex())) "($num)" else num
-                val d = if (den.contains("[+\\-\\s\\\\]".toRegex())) "($den)" else den
-                "$n⁄$d"
+                val n = if (num.contains("[+\\-\\s]".toRegex()) && !num.startsWith("(") && !num.endsWith(")")) "($num)" else num
+                val d = if (den.contains("[+\\-\\s\\\\]".toRegex()) && !den.startsWith("(") && !den.endsWith(")")) "($den)" else den
+                "$n / $d"
             }
         }
         text = text.replaceRange(m.range, rep)
@@ -284,30 +299,70 @@ fun detectMathCategory(formula: String): String {
 
 // ─── Pure-equation-line heuristic ────────────────────────────────────────────
 fun isPureEquationLine(raw: String): Boolean {
-    val s = raw.trim()
-    if (s.isBlank() || s.startsWith("#") || s.startsWith("-") || s.startsWith("* ") ||
-        s.startsWith(">") || s.startsWith("|") || s.startsWith("```") ||
-        s.matches(Regex("""^\d+\.\s+.*""")) || s.contains("**") || s.contains("~~") ||
-        s.contains("](") || s.contains("][") || s.startsWith("![") || s.startsWith("<") ||
-        s.contains("$")
+    var s = raw.trim()
+    if (s.isBlank() || s.startsWith("#") || s.startsWith(">") || s.startsWith("|") || s.startsWith("```") ||
+        s.contains("](") || s.contains("][") || s.startsWith("![") || s.startsWith("<")
     ) return false
 
-    val englishWords = setOf("the","is","of","and","in","to","that","this","we","can","for","with","as","by","from","are","which","where","quantum","physics","system","systems","state","states","rather","than","classical","microscopic","action","scales","comparable","constant","pure","physical","space","spaces","represented","vector","vectors","potential","electric","dipole","field","charge","energy","force","surface","volume","point","distance","plane","line","axis","note","equation","equations","formula","formulas","consider","assume","given","when","if","then","since","so","thus","hence","therefore","because","work","expansion","process","spontaneous","equilibrium","temperature","pressure","enthalpy","entropy","reaction","forward","reverse","path")
-    val proseStarters = setOf("when","if","then","where","for","with","since","so","thus","hence","therefore","because","assuming","let","given","here","also","note","by","at","in","from","substituting","using","under","on","as","always","spontaneous","non")
+    // Strip enclosing single or double dollars or brackets if present
+    if (s.startsWith("$$") && s.endsWith("$$") && s.length >= 4) {
+        s = s.substring(2, s.length - 2).trim()
+    } else if (s.startsWith("$") && s.endsWith("$") && s.length >= 2) {
+        s = s.substring(1, s.length - 1).trim()
+    } else if (s.startsWith("\\[") && s.endsWith("\\]") && s.length >= 4) {
+        s = s.substring(2, s.length - 2).trim()
+    }
+
+    if (s.contains("**") || s.contains("~~")) return false
+    if (s.matches(Regex("""^\d+\.\s+.*""")) || s.startsWith("- ") || s.startsWith("* ")) return false
+
+    // If it's a currency like "$50" or "100 USD", not an equation
+    if (s.matches(Regex("""^\d+(?:[.,]\d+)?\s*(?:USD|EUR|GBP|INR|dollars?|cents?)?$"""))) return false
+
+    val englishWords = setOf(
+        "the","is","of","and","in","to","that","this","we","can","for","with","as","by",
+        "from","are","which","where","quantum","physics","system","systems","state","states",
+        "rather","than","classical","microscopic","action","scales","comparable","constant",
+        "pure","physical","space","spaces","represented","vector","vectors","potential",
+        "electric","dipole","field","charge","energy","force","surface","volume","point",
+        "distance","plane","line","axis","note","consider","assume","given","when","if","then",
+        "since","so","thus","hence","therefore","because","work","expansion","process",
+        "spontaneous","equilibrium","temperature","pressure","enthalpy","entropy","reaction",
+        "forward","reverse","path","rule","matrix","determinant","derivative"
+    )
+
+    val proseStarters = setOf(
+        "when","if","then","where","for","with","since","so","thus","hence","therefore",
+        "because","assuming","let","given","here","also","note","by","at","in","from",
+        "substituting","using","under","on","as","always"
+    )
 
     val words = s.split(Regex("\\s+")).map { it.lowercase().filter { ch -> ch.isLetter() } }.filter { it.isNotBlank() }
     val firstWord = words.firstOrNull() ?: ""
     if (proseStarters.contains(firstWord)) return false
+
     val matchedEng = words.count { it in englishWords }
     if (matchedEng >= 1 && words.size > 2) return false
-    if (words.size > 4) return false
+    if (words.size > 5) return false
 
-    val mathTokens = listOf("\\frac","frac{","\\int","int_","\\sum","sum_","\\prod","prod_","\\sqrt","sqrt{","\\partial","\\nabla","\\hbar","\\dagger","\\ket{","\\bra{","\\braket{","\\hat{","\\vec{","\\dot{","\\ddot{","\\bar{","\\tilde{","\\alpha","\\beta","\\gamma","\\delta","\\epsilon","\\varepsilon","\\theta","\\lambda","\\mu","\\nu","\\pi","\\rho","\\sigma","\\tau","\\phi","\\varphi","\\psi","\\omega","\\Delta","\\Theta","\\Lambda","\\Sigma","\\Phi","\\Psi","\\Omega","\\mathcal","\\mathbf","\\mathbb","\\mathrm","\\left","\\right","\\pm","\\times","\\cdot","\\infty","\\approx","\\equiv","\\neq","\\le","\\ge","\\in","\\to")
+    val mathTokens = listOf(
+        "\\frac","frac{","\\int","int_","\\sum","sum_","\\prod","prod_","\\sqrt","sqrt{",
+        "\\partial","\\nabla","\\hbar","\\dagger","\\ket{","\\bra{","\\braket{",
+        "\\hat{","\\vec{","\\dot{","\\ddot{","\\bar{","\\tilde{",
+        "\\alpha","\\beta","\\gamma","\\delta","\\epsilon","\\varepsilon","\\theta","\\lambda",
+        "\\mu","\\nu","\\pi","\\rho","\\sigma","\\tau","\\phi","\\varphi","\\psi","\\omega",
+        "\\Delta","\\Theta","\\Lambda","\\Sigma","\\Phi","\\Psi","\\Omega",
+        "\\mathcal","\\mathbf","\\mathbb","\\mathrm","\\operatorname","\\adj","\\det",
+        "\\left","\\right","\\pm","\\times","\\cdot","\\infty","\\approx","\\equiv","\\neq",
+        "\\le","\\ge","\\in","\\to","\\vmatrix","\\bmatrix","\\pmatrix"
+    )
     val hasMathToken    = mathTokens.any { s.contains(it) }
-    val hasMathRelation = s.contains("=") || s.contains("\\approx") || s.contains("\\sim") || s.contains("\\le") || s.contains("\\ge") || s.contains("\\in") || s.contains("\\to") || s.contains("<") || s.contains(">") || s.contains("+") || s.contains("-")
+    val hasMathRelation = s.contains("=") || s.contains("\\approx") || s.contains("\\sim") ||
+        s.contains("\\le") || s.contains("\\ge") || s.contains("\\in") || s.contains("\\to") ||
+        s.contains("\\neq") || s.contains("<") || s.contains(">") || s.contains("+") || s.contains("-")
 
-    if (hasMathToken && (hasMathRelation || s.startsWith("\\frac") || s.startsWith("frac{") || s.startsWith("\\int") || s.startsWith("\\sum"))) return true
-    if (s.contains("=") && (s.contains("\\") || s.contains("^") || s.contains("_") || s.contains("[") || s.contains("{")) && matchedEng == 0) return true
+    if (hasMathToken && (hasMathRelation || s.startsWith("\\frac") || s.startsWith("frac{") || s.startsWith("\\int") || s.startsWith("\\sum") || s.contains("\\vmatrix") || s.contains("\\bmatrix"))) return true
+    if (s.contains("=") && (s.contains("\\") || s.contains("^") || s.contains("_") || s.contains("[") || s.contains("{") || s.contains("|")) && matchedEng == 0) return true
     return false
 }
 
@@ -347,7 +402,7 @@ fun KaTeXMathView(
     val density = LocalDensity.current
 
     // Start at a sensible default height so the layout doesn't collapse
-    var heightDp by remember(formula) { mutableStateOf(if (isDisplayMode) 60.dp else 28.dp) }
+    var heightDp by remember(formula) { mutableStateOf(if (isDisplayMode) 52.dp else 28.dp) }
     var isReady  by remember { mutableStateOf(false) }
 
     val unicodeFallback = remember(formula) { formatLatexToUnicode(formula) }
@@ -373,25 +428,25 @@ fun KaTeXMathView(
         modifier = modifier
             .fillMaxWidth()
             .then(if (isDisplayMode) Modifier.height(heightDp) else Modifier.wrapContentHeight()),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.CenterStart
     ) {
         // ── Unicode fallback (shown while WebView loads) ─────────────────────
         if (!isReady) {
             Text(
                 text = unicodeFallback,
                 style = MaterialTheme.typography.bodyLarge.copy(
-                    fontFamily   = FontFamily.Serif,
-                    fontStyle    = FontStyle.Italic,
-                    fontWeight   = FontWeight.Medium,
-                    fontSize     = if (isDisplayMode) 17.sp else 15.sp,
+                    fontFamily    = FontFamily.Serif,
+                    fontStyle     = FontStyle.Italic,
+                    fontWeight    = FontWeight.Medium,
+                    fontSize      = if (isDisplayMode) 17.sp else 15.sp,
                     letterSpacing = 0.3.sp
                 ),
-                color     = if (isDark) Color(0xFFECECF1) else Color(0xFF1A1A1E),
-                textAlign = if (isDisplayMode) TextAlign.Center else TextAlign.Start,
+                color     = if (isDark) Color(0xFFECECF1) else Color(0xFF0D0D0D),
+                textAlign = TextAlign.Start,
                 modifier  = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(vertical = 2.dp)
             )
         }
 
@@ -413,7 +468,7 @@ fun KaTeXMathView(
                     val bridge = KaTeXBridge { hPx ->
                         post {
                             if (hPx > 0) {
-                                val newDp = with(density) { (hPx + 8).coerceIn(24, 1200).toDp() }
+                                val newDp = with(density) { (hPx + 6).coerceIn(24, 1200).toDp() }
                                 if (newDp != heightDp) heightDp = newDp
                                 isReady = true
                             }
@@ -453,7 +508,7 @@ fun KaTeXMathView(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Math Equation Block (display mode — the card with badge + copy)
+//  Math Equation Block (ChatGPT-style unboxed display math)
 // ═══════════════════════════════════════════════════════════════════════════════
 @Composable
 fun MathEquationBlockView(
@@ -461,140 +516,37 @@ fun MathEquationBlockView(
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     modifier: Modifier = Modifier
 ) {
-    val context  = LocalContext.current
-    val haptic   = LocalHapticFeedback.current
-    val isDark   = MaterialTheme.colorScheme.background.red < 0.5f
+    val context     = LocalContext.current
+    val haptic      = LocalHapticFeedback.current
+    val isDark      = MaterialTheme.colorScheme.background.red < 0.5f
     val normFormula = remember(formula) { normalizeLatexFormula(formula) }
-    val category    = remember(normFormula) { detectMathCategory(normFormula) }
-    var isCopied    by remember { mutableStateOf(false) }
-    var showRawTex  by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isCopied) { if (isCopied) { delay(2000); isCopied = false } }
-
-    val cardBg    = if (isDark) Color(0xFF1E1F24) else Color(0xFFF4F6FA)
-    val borderCol = if (isDark) Color(0xFF2E313A) else Color(0xFFDCE1EB)
-    val badgeTint = ClaudeTerracotta
-
+    // Pure unboxed equation container matching ChatGPT:
+    // No box, no card background, no border, no category badges, no "formula no." labels.
+    // Long-press anywhere on the equation directly copies clean LaTeX with haptic feedback & toast.
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        contentAlignment = Alignment.Center
+            .padding(top = 4.dp, bottom = 8.dp, start = 2.dp, end = 2.dp)
+            .pointerInput(normFormula) {
+                detectTapGestures(
+                    onLongPress = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normFormula))
+                        Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            },
+        contentAlignment = Alignment.CenterStart
     ) {
-        Surface(
-            shape    = RoundedCornerShape(14.dp),
-            color    = cardBg,
-            border   = androidx.compose.foundation.BorderStroke(0.8.dp, borderCol),
-            tonalElevation = 1.dp,
-            modifier = Modifier.fillMaxWidth().widthIn(max = 760.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                // Header: category badge + TeX/Copy actions
-                Row(
-                    modifier                 = Modifier.fillMaxWidth(),
-                    horizontalArrangement    = Arrangement.SpaceBetween,
-                    verticalAlignment        = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = badgeTint.copy(alpha = 0.12f)
-                    ) {
-                        Row(
-                            verticalAlignment       = Alignment.CenterVertically,
-                            horizontalArrangement   = Arrangement.spacedBy(4.dp),
-                            modifier                = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = when (category) {
-                                    "Matrix"   -> "⊞"; "Integral" -> "∫"; "Series"  -> "∑"
-                                    "Calculus" -> "∂"; "Vectors"  -> "→"; "Quantum" -> "Ψ"
-                                    "Limit"    -> "lim"; else      -> "ƒ"
-                                },
-                                fontSize   = 11.sp,
-                                color      = badgeTint,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text  = category.uppercase(),
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 9.sp, letterSpacing = 0.5.sp),
-                                color = badgeTint
-                            )
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        // TeX / Preview toggle
-                        Surface(
-                            onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); showRawTex = !showRawTex },
-                            shape   = RoundedCornerShape(6.dp),
-                            color   = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        ) {
-                            Text(
-                                text     = if (showRawTex) "Preview" else "TeX",
-                                style    = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp),
-                                color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                            )
-                        }
-                        // Copy
-                        Surface(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
-                                    .setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normFormula))
-                                isCopied = true
-                                Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(6.dp),
-                            color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        ) {
-                            Row(
-                                verticalAlignment     = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                modifier              = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            ) {
-                                Icon(
-                                    imageVector     = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                    contentDescription = if (isCopied) "Copied" else "Copy LaTeX",
-                                    tint            = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier        = Modifier.size(11.dp)
-                                )
-                                Text(
-                                    text  = if (isCopied) "Copied" else "Copy",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
-                                    color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                if (showRawTex) {
-                    SelectionContainer {
-                        Text(
-                            text     = normFormula,
-                            style    = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 19.sp),
-                            color    = if (isDark) Color(0xFFE2E2E8) else Color(0xFF1E1E24),
-                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp)
-                        )
-                    }
-                } else {
-                    DisableSelection {
-                        KaTeXMathView(
-                            formula       = normFormula,
-                            isDark        = isDark,
-                            isDisplayMode = true,
-                            modifier      = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
+        DisableSelection {
+            KaTeXMathView(
+                formula       = normFormula,
+                isDark        = isDark,
+                isDisplayMode = true,
+                modifier      = Modifier.fillMaxWidth()
+            )
         }
     }
 }

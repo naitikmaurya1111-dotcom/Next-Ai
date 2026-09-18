@@ -11,9 +11,18 @@
             -webkit-tap-highlight-color: transparent;
             margin: 0;
             padding: 0;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        *::-webkit-scrollbar {
+            display: none;
+            width: 0;
+            height: 0;
         }
         html {
             background: transparent !important;
+            margin: 0;
+            padding: 0;
         }
         body {
             background: transparent !important;
@@ -23,29 +32,48 @@
             overflow-x: auto;
             overflow-y: hidden;
             -webkit-overflow-scrolling: touch;
-            padding: 4px 6px;
+            padding: 2px 0px;
+            text-align: left;
         }
-        /* ── Display mode (block) ── */
+        /* ── Display mode (block) — Left-aligned ChatGPT aesthetic ── */
         #math-display {
-            display: block;
+            display: flex !important;
+            align-items: center;
+            justify-content: flex-start !important;
             width: 100%;
-            text-align: center;
+            text-align: left !important;
             overflow-x: auto;
             overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding: 2px 0;
         }
         #math-display .katex-display {
+            display: flex !important;
+            justify-content: flex-start !important;
+            text-align: left !important;
             margin: 0 !important;
+            padding: 2px 0 !important;
             overflow-x: auto;
             overflow-y: hidden;
+        }
+        .katex-display > .katex {
+            text-align: left !important;
+            display: inline-block !important;
         }
         /* ── Inline mode ── */
         #math-inline {
             display: inline;
+            text-align: left;
         }
-        /* ── Shared KaTeX sizing ── */
-        .katex { font-size: 1.12em !important; line-height: 1.3; }
-        .katex-display > .katex { text-align: center; }
-        .katex-html { overflow: visible !important; }
+        /* ── Shared KaTeX sizing (matches ChatGPT mobile) ── */
+        .katex {
+            font-size: 1.22em !important;
+            line-height: 1.35;
+            text-rendering: geometricPrecision;
+        }
+        .katex-html {
+            overflow: visible !important;
+        }
         /* ── Error styling ── */
         .katex-error {
             color: #E06C75 !important;
@@ -54,9 +82,9 @@
             white-space: pre-wrap;
             word-break: break-all;
         }
-        /* ── Theme classes ── */
+        /* ── Theme classes — crisp ChatGPT palette ── */
         body.dark  { color: #ECECF1; }
-        body.light { color: #1A1A1E; }
+        body.light { color: #0D0D0D; }
     </style>
 </head>
 <body class="dark">
@@ -69,8 +97,14 @@
         var RO = window.ResizeObserver;
 
         function reportHeight(force) {
-            var h = Math.ceil(document.body.scrollHeight);
-            if (h < 1) h = 1;
+            var el = document.getElementById('math-display');
+            var h = 0;
+            if (el && el.style.display !== 'none') {
+                var rect = el.getBoundingClientRect();
+                h = Math.ceil(Math.max(rect.height + 6, document.body.scrollHeight, 24));
+            } else {
+                h = Math.ceil(Math.max(document.body.scrollHeight, 20));
+            }
             if (force || Math.abs(h - lastH) >= 1) {
                 lastH = h;
                 if (window.AndroidBridge) {
@@ -93,61 +127,51 @@
             var displayEl = document.getElementById('math-display');
             var inlineEl  = document.getElementById('math-inline');
 
+            var katexOptions = {
+                throwOnError: false,
+                output: 'html',
+                trust: true,
+                strict: 'ignore',
+                macros: {
+                    "\\R": "\\mathbb{R}",
+                    "\\N": "\\mathbb{N}",
+                    "\\Z": "\\mathbb{Z}",
+                    "\\C": "\\mathbb{C}",
+                    "\\Q": "\\mathbb{Q}",
+                    "\\d": "\\mathrm{d}",
+                    "\\i": "\\mathrm{i}",
+                    "\\e": "\\mathrm{e}",
+                    "\\adj": "\\operatorname{adj}",
+                    "\\rank": "\\operatorname{rank}",
+                    "\\tr": "\\operatorname{tr}"
+                }
+            };
+
             if (isDisplay === true || isDisplay === 'true') {
-                inlineEl.style.display  = 'none';
-                displayEl.style.display = 'block';
+                inlineEl.style.display = 'none';
+                displayEl.style.display = 'flex';
+                katexOptions.displayMode = true;
                 try {
-                    katex.render(formula, displayEl, {
-                        displayMode:    true,
-                        throwOnError:   false,
-                        output:         'html',
-                        trust:          true,
-                        strict:         'ignore',
-                        macros: {
-                            "\\R":    "\\mathbb{R}",
-                            "\\N":    "\\mathbb{N}",
-                            "\\Z":    "\\mathbb{Z}",
-                            "\\C":    "\\mathbb{C}",
-                            "\\Q":    "\\mathbb{Q}",
-                            "\\d":    "\\mathrm{d}",
-                            "\\i":    "\\mathrm{i}",
-                            "\\e":    "\\mathrm{e}"
-                        }
-                    });
+                    katex.render(formula, displayEl, katexOptions);
                 } catch(err) {
                     displayEl.textContent = formula;
                 }
             } else {
                 displayEl.style.display = 'none';
-                inlineEl.style.display  = 'inline';
+                inlineEl.style.display = 'inline';
+                katexOptions.displayMode = false;
                 try {
-                    katex.render(formula, inlineEl, {
-                        displayMode:    false,
-                        throwOnError:   false,
-                        output:         'html',
-                        trust:          true,
-                        strict:         'ignore',
-                        macros: {
-                            "\\R":    "\\mathbb{R}",
-                            "\\N":    "\\mathbb{N}",
-                            "\\Z":    "\\mathbb{Z}",
-                            "\\C":    "\\mathbb{C}",
-                            "\\Q":    "\\mathbb{Q}",
-                            "\\d":    "\\mathrm{d}",
-                            "\\i":    "\\mathrm{i}",
-                            "\\e":    "\\mathrm{e}"
-                        }
-                    });
+                    katex.render(formula, inlineEl, katexOptions);
                 } catch(err) {
                     inlineEl.textContent = formula;
                 }
             }
 
-            // Report height on this frame and again after fonts settle
+            // Report height immediately and re-check after layout & font loading
             requestAnimationFrame(function() {
                 reportHeight(true);
-                setTimeout(function() { reportHeight(true); }, 80);
-                setTimeout(function() { reportHeight(true); }, 200);
+                setTimeout(function() { reportHeight(true); }, 50);
+                setTimeout(function() { reportHeight(true); }, 150);
             });
 
             if (document.fonts && document.fonts.ready) {
@@ -157,7 +181,7 @@
             setupResizeObserver(isDisplay ? displayEl : inlineEl);
         };
 
-        // Backwards compatibility with old renderMath(formula, isDark)
+        // Backwards compatibility
         window.renderMathCompat = function(formula, isDark) {
             window.renderMath(formula, true, isDark);
         };
