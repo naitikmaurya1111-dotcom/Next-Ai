@@ -2,185 +2,166 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=3.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <link rel="stylesheet" href="katex.min.css">
     <script src="katex.min.js"></script>
-    <script>
-        window.__isKaTeXReady = false;
-        window.__pendingRender = null;
-        window.renderMath = function(formula, isDark) {
-            if (!window.__isKaTeXReady || typeof katex === 'undefined' || !document.getElementById('math-container')) {
-                window.__pendingRender = { formula: formula, isDark: isDark };
-                return;
-            }
-            if (window._doRenderMath) {
-                window._doRenderMath(formula, isDark);
-            }
-        };
-    </script>
     <style>
         * {
             box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
-        }
-        html, body {
             margin: 0;
             padding: 0;
+        }
+        html {
             background: transparent !important;
+        }
+        body {
+            background: transparent !important;
+            font-family: "KaTeX_Main", "Times New Roman", serif;
+            display: block;
+            width: 100%;
             overflow-x: auto;
             overflow-y: hidden;
             -webkit-overflow-scrolling: touch;
-            scrollbar-width: none;
-            -ms-overflow-style: none;
-        }
-        ::-webkit-scrollbar {
-            display: none;
-            width: 0;
-            height: 0;
-        }
-        body {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            width: 100%;
-            min-height: 0;
             padding: 4px 6px;
-            font-family: "KaTeX_Main", "Times New Roman", Times, serif;
-            text-align: center;
-            white-space: nowrap !important;
         }
-        #math-wrapper {
-            display: inline-flex;
-            justify-content: center;
-            align-items: center;
-            min-width: 0;
+        /* ── Display mode (block) ── */
+        #math-display {
+            display: block;
+            width: 100%;
             text-align: center;
-            overflow: visible;
-            padding: 0;
-            white-space: nowrap !important;
+            overflow-x: auto;
+            overflow-y: hidden;
         }
-        #math-container {
-            display: inline-block;
-            text-align: center;
-            font-size: 1.22em;
-            max-width: none;
-            margin: 0 auto;
-            line-height: 1.35;
-            white-space: nowrap !important;
-        }
-        .katex-display {
+        #math-display .katex-display {
             margin: 0 !important;
-            padding: 2px 0 !important;
-            text-align: center;
-            overflow: visible;
-            white-space: nowrap !important;
+            overflow-x: auto;
+            overflow-y: hidden;
         }
-        .katex {
-            font-size: 1.2em;
-            line-height: 1.35;
-            text-rendering: geometricPrecision;
-            white-space: nowrap !important;
+        /* ── Inline mode ── */
+        #math-inline {
+            display: inline;
         }
-        .katex .katex-html {
-            overflow: visible !important;
-            white-space: nowrap !important;
-        }
-        body.dark {
-            color: #ECECF1;
-        }
-        body.light {
-            color: #0D0D0D;
-        }
+        /* ── Shared KaTeX sizing ── */
+        .katex { font-size: 1.12em !important; line-height: 1.3; }
+        .katex-display > .katex { text-align: center; }
+        .katex-html { overflow: visible !important; }
+        /* ── Error styling ── */
         .katex-error {
-            color: #EF5350 !important;
+            color: #E06C75 !important;
             font-family: monospace !important;
-            font-size: 0.9em;
-            white-space: nowrap !important;
-            word-break: normal !important;
+            font-size: 0.85em;
+            white-space: pre-wrap;
+            word-break: break-all;
         }
+        /* ── Theme classes ── */
+        body.dark  { color: #ECECF1; }
+        body.light { color: #1A1A1E; }
     </style>
 </head>
 <body class="dark">
-    <div id="math-wrapper">
-        <div id="math-container"></div>
-    </div>
+    <div id="math-display" style="display:none;"></div>
+    <span id="math-inline" style="display:none;"></span>
+
     <script>
-        var lastReportedHeight = 0;
-        var lastReportedWidth = 0;
+    (function() {
+        var lastH = 0;
+        var RO = window.ResizeObserver;
 
-        function reportSize(force) {
-            var container = document.getElementById('math-container');
-            if (!container) return;
-            var rect = container.getBoundingClientRect();
-            var h = Math.ceil(Math.max(rect.height + 6, 22));
-            var w = Math.ceil(Math.max(rect.width + 12, 24));
-
-            if (force || Math.abs(h - lastReportedHeight) >= 1 || Math.abs(w - lastReportedWidth) >= 2) {
-                lastReportedHeight = h;
-                lastReportedWidth = w;
+        function reportHeight(force) {
+            var h = Math.ceil(document.body.scrollHeight);
+            if (h < 1) h = 1;
+            if (force || Math.abs(h - lastH) >= 1) {
+                lastH = h;
                 if (window.AndroidBridge) {
-                    if (window.AndroidBridge.onRenderComplete) {
-                        window.AndroidBridge.onRenderComplete(w, h);
-                    } else if (window.AndroidBridge.onSize) {
-                        window.AndroidBridge.onSize(w, h);
-                    } else if (window.AndroidBridge.onHeight) {
-                        window.AndroidBridge.onHeight(h);
-                    }
+                    try { window.AndroidBridge.onHeight(h); } catch(e) {}
                 }
             }
         }
 
-        function _doRenderMath(formula, isDark) {
-            document.body.className = isDark ? 'dark' : 'light';
-            var container = document.getElementById('math-container');
-            if (!container) return;
-            try {
-                katex.render(formula, container, {
-                    displayMode: true,
-                    throwOnError: false,
-                    output: 'htmlAndMathml',
-                    trust: true,
-                    strict: false
-                });
-            } catch (err) {
-                container.innerText = formula;
+        function setupResizeObserver(el) {
+            if (RO) {
+                var ro = new RO(function() { reportHeight(false); });
+                ro.observe(el);
+                ro.observe(document.body);
+            }
+        }
+
+        window.renderMath = function(formula, isDisplay, isDark) {
+            document.body.className = (isDark === true || isDark === 'true') ? 'dark' : 'light';
+
+            var displayEl = document.getElementById('math-display');
+            var inlineEl  = document.getElementById('math-inline');
+
+            if (isDisplay === true || isDisplay === 'true') {
+                inlineEl.style.display  = 'none';
+                displayEl.style.display = 'block';
+                try {
+                    katex.render(formula, displayEl, {
+                        displayMode:    true,
+                        throwOnError:   false,
+                        output:         'html',
+                        trust:          true,
+                        strict:         'ignore',
+                        macros: {
+                            "\\R":    "\\mathbb{R}",
+                            "\\N":    "\\mathbb{N}",
+                            "\\Z":    "\\mathbb{Z}",
+                            "\\C":    "\\mathbb{C}",
+                            "\\Q":    "\\mathbb{Q}",
+                            "\\d":    "\\mathrm{d}",
+                            "\\i":    "\\mathrm{i}",
+                            "\\e":    "\\mathrm{e}"
+                        }
+                    });
+                } catch(err) {
+                    displayEl.textContent = formula;
+                }
+            } else {
+                displayEl.style.display = 'none';
+                inlineEl.style.display  = 'inline';
+                try {
+                    katex.render(formula, inlineEl, {
+                        displayMode:    false,
+                        throwOnError:   false,
+                        output:         'html',
+                        trust:          true,
+                        strict:         'ignore',
+                        macros: {
+                            "\\R":    "\\mathbb{R}",
+                            "\\N":    "\\mathbb{N}",
+                            "\\Z":    "\\mathbb{Z}",
+                            "\\C":    "\\mathbb{C}",
+                            "\\Q":    "\\mathbb{Q}",
+                            "\\d":    "\\mathrm{d}",
+                            "\\i":    "\\mathrm{i}",
+                            "\\e":    "\\mathrm{e}"
+                        }
+                    });
+                } catch(err) {
+                    inlineEl.textContent = formula;
+                }
             }
 
-            // Always force report size and notify Android on complete
-            reportSize(true);
-
-            // Re-check size when fonts finish loading
-            if (document.fonts && document.fonts.ready) {
-                document.fonts.ready.then(function() {
-                    reportSize(true);
-                });
-            }
-
-            // Animation frame checks for dynamic sizing
+            // Report height on this frame and again after fonts settle
             requestAnimationFrame(function() {
-                reportSize(true);
-                setTimeout(function() { reportSize(true); }, 50);
-                setTimeout(function() { reportSize(true); }, 180);
+                reportHeight(true);
+                setTimeout(function() { reportHeight(true); }, 80);
+                setTimeout(function() { reportHeight(true); }, 200);
             });
-        }
 
-        window._doRenderMath = _doRenderMath;
-        window.renderMath = _doRenderMath;
-        window.__isKaTeXReady = true;
+            if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(function() { reportHeight(true); });
+            }
 
-        if (window.__pendingRender) {
-            _doRenderMath(window.__pendingRender.formula, window.__pendingRender.isDark);
-            window.__pendingRender = null;
-        }
+            setupResizeObserver(isDisplay ? displayEl : inlineEl);
+        };
 
-        // Use ResizeObserver for automatic size tracking on any content change
-        if (window.ResizeObserver) {
-            var ro = new ResizeObserver(function() {
-                reportSize(false);
-            });
-            var target = document.getElementById('math-container');
-            if (target) ro.observe(target);
-        }
+        // Backwards compatibility with old renderMath(formula, isDark)
+        window.renderMathCompat = function(formula, isDark) {
+            window.renderMath(formula, true, isDark);
+        };
+    })();
     </script>
 </body>
 </html>
