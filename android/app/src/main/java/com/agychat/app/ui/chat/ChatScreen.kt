@@ -20,6 +20,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
 import androidx.compose.animation.*
@@ -3353,7 +3355,7 @@ fun ThinkingAccordionCard(
     LaunchedEffect(isActivelyThinking) {
         if (isActivelyThinking) {
             val startWallTime = System.currentTimeMillis() - thinkingDurationMs.coerceAtLeast(0L)
-            while (isActive) {
+            while (kotlinx.coroutines.isActive) {
                 val elapsed = (System.currentTimeMillis() - startWallTime) / 1000L
                 activeElapsedSeconds = elapsed.coerceAtLeast(1L).toInt()
                 kotlinx.coroutines.delay(500L)
