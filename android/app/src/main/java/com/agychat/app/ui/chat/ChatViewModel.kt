@@ -1827,6 +1827,7 @@ class ChatViewModel @Inject constructor(
     private val pendingThinkingChunks = StringBuilder()
     private var lastStreamUiUpdateTime = 0L
     private var streamBatchJob: Job? = null
+    private var streamingThinkingStartTime = 0L
 
     private fun flushStreamingBatchesLocked(now: Long) {
         val contentToAppend = pendingContentChunks.toString()
@@ -1855,9 +1856,23 @@ class ChatViewModel @Inject constructor(
             val cur = list[idx]
             val newContent = if (contentToAppend.isNotEmpty()) cur.content + contentToAppend else cur.content
             val newThinking = if (thinkingToAppend.isNotEmpty()) (cur.thinking ?: "") + thinkingToAppend else cur.thinking
+
+            val updatedThinkingDuration = if (streamingThinkingStartTime > 0L) {
+                if (contentToAppend.isNotEmpty() && cur.thinkingDurationMs == 0L) {
+                    (now - streamingThinkingStartTime).coerceAtLeast(800L)
+                } else if (cur.thinkingDurationMs > 0L) {
+                    cur.thinkingDurationMs
+                } else {
+                    now - streamingThinkingStartTime
+                }
+            } else {
+                cur.thinkingDurationMs
+            }
+
             targetMsg = cur.copy(
                 content = newContent,
                 thinking = newThinking,
+                thinkingDurationMs = updatedThinkingDuration,
                 isStreaming = true,
                 isThinking = thinkingToAppend.isNotEmpty() && contentToAppend.isEmpty()
             )
@@ -1870,11 +1885,15 @@ class ChatViewModel @Inject constructor(
                 pendingMemoryUpdates.clear()
                 copy
             }
+            if (thinkingToAppend.isNotEmpty() && streamingThinkingStartTime == 0L) {
+                streamingThinkingStartTime = now
+            }
             targetMsg = Message(
                 id = newId,
                 role = "assistant",
                 content = contentToAppend,
                 thinking = if (thinkingToAppend.isNotEmpty()) thinkingToAppend else null,
+                thinkingDurationMs = if (streamingThinkingStartTime > 0L) now - streamingThinkingStartTime else 0L,
                 memoryUpdates = initialUpdates,
                 timestamp = System.currentTimeMillis(),
                 isStreaming = true,
@@ -1915,6 +1934,9 @@ class ChatViewModel @Inject constructor(
         if (cleanChunk.isEmpty()) return
 
         synchronized(streamBatchLock) {
+            if (streamingThinkingStartTime == 0L) {
+                streamingThinkingStartTime = System.currentTimeMillis()
+            }
             pendingThinkingChunks.append(cleanChunk)
             val now = System.currentTimeMillis()
             if (now - lastStreamUiUpdateTime >= 35L) {
@@ -1950,6 +1972,7 @@ class ChatViewModel @Inject constructor(
             streamBatchJob?.cancel()
             streamBatchJob = null
             flushStreamingBatchesLocked(System.currentTimeMillis())
+            streamingThinkingStartTime = 0L
         }
         val id = streamingMessageId ?: return
         val list = _messages.value.toMutableList()
@@ -2025,7 +2048,8 @@ class ChatViewModel @Inject constructor(
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx >= 0) {
             val cur = list[idx]
-            list[idx] = cur.copy(isThinkingExpanded = !cur.isThinkingExpanded)
+            val currentlyExpanded = cur.isThinkingExpanded ?: (cur.isStreaming && cur.isThinking)
+            list[idx] = cur.copy(isThinkingExpanded = !currentlyExpanded)
             _messages.value = list
         }
     }
@@ -3013,6 +3037,7 @@ class ChatViewModel @Inject constructor(
                                 msg.copy(
                                     content = if (liveStreamingMsg.content.length > msg.content.length) liveStreamingMsg.content else msg.content,
                                     thinking = if ((liveStreamingMsg.thinking?.length ?: 0) > (msg.thinking?.length ?: 0)) liveStreamingMsg.thinking else msg.thinking,
+                                    thinkingDurationMs = if (liveStreamingMsg.thinkingDurationMs > 0L) liveStreamingMsg.thinkingDurationMs else msg.thinkingDurationMs,
                                     isStreaming = liveStreamingMsg.isStreaming || msg.isStreaming,
                                     isThinking = liveStreamingMsg.isThinking || msg.isThinking,
                                     isThinkingExpanded = liveStreamingMsg.isThinkingExpanded,

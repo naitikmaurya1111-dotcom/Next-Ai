@@ -50,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -413,7 +414,7 @@ fun ChatScreen(
     // Smooth jitter-free follow-scroll during streaming (only if user was already at bottom)
     val lastStreamingMsg = displayedMessages.lastOrNull()
     val isStreamingActive = lastStreamingMsg?.isStreaming == true
-    val streamContentLength = lastStreamingMsg?.content?.length ?: 0
+    val streamContentLength = (lastStreamingMsg?.content?.length ?: 0) + (lastStreamingMsg?.thinking?.length ?: 0)
 
     LaunchedEffect(streamContentLength) {
         if (isStreamingActive && isScrolledToBottom && !listState.isScrollInProgress && displayedMessages.isNotEmpty()) {
@@ -2672,8 +2673,11 @@ fun MessageItem(
                     if (!message.thinking.isNullOrBlank()) {
                         ThinkingAccordionCard(
                             thinkingText = message.thinking,
-                            isExpanded = message.isThinkingExpanded || (message.isStreaming && message.isThinking),
-                            onToggle = onToggleThinking
+                            isExpanded = message.isThinkingExpanded ?: (message.isStreaming && message.isThinking),
+                            isActivelyThinking = message.isStreaming && message.isThinking,
+                            thinkingDurationMs = message.thinkingDurationMs,
+                            onToggle = onToggleThinking,
+                            onOpenFile = onOpenFile
                         )
                         Spacer(Modifier.height(10.dp))
                     }
@@ -2870,25 +2874,49 @@ fun MessageItem(
 
                     // Initial streaming state before first token arrives
                     if (message.isStreaming && message.content.isBlank() && message.thinking.isNullOrBlank()) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(vertical = 6.dp)
+                        val isDarkWaiting = MaterialTheme.colorScheme.background.red < 0.5f
+                        val waitingBg = if (isDarkWaiting) Color(0xFF161522) else Color(0xFFF4F2FA)
+                        val waitingBorder = if (isDarkWaiting) Color(0xFF2E2B42) else Color(0xFFE3DFEE)
+                        val waitingAccent = if (isDarkWaiting) Color(0xFFA78BFA) else Color(0xFF6D28D9)
+
+                        val waitingTransition = rememberInfiniteTransition(label = "waitingPulse")
+                        val waitingPulseAlpha by waitingTransition.animateFloat(
+                            initialValue = 0.4f,
+                            targetValue = 1.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(800, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "waitingPulseAlpha"
+                        )
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = waitingBg,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, waitingBorder),
+                            modifier = Modifier.padding(vertical = 4.dp)
                         ) {
-                            if (showStreamingCursor) {
-                                StreamingCursorBlink()
-                            } else {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 1.5.dp,
-                                    color = ClaudeTerracotta
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(14.dp)
+                                        .alpha(waitingPulseAlpha),
+                                    tint = waitingAccent
                                 )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Thinking…",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
+                                    color = waitingAccent.copy(alpha = 0.9f)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                StreamingCursorBlink()
                             }
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                text = "Thinking…",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
                         }
                     }
 
@@ -3297,18 +3325,84 @@ fun MessageItem(
 fun ThinkingAccordionCard(
     thinkingText: String,
     isExpanded: Boolean,
-    onToggle: () -> Unit
+    isActivelyThinking: Boolean = false,
+    thinkingDurationMs: Long = 0L,
+    onToggle: () -> Unit,
+    onOpenFile: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-    val bgColor = if (isDark) ThinkingPurpleBgDark else ThinkingPurpleBgLight
-    val borderColor = if (isDark) ThinkingPurpleBorderDark else ThinkingPurpleBorderLight
-    val textColor = if (isDark) ThinkingPurpleTextDark else ThinkingPurpleTextLight
+
+    // Flagship AI color grading (ChatGPT o3, Claude 3.7, Antigravity Desktop)
+    val bgColor = if (isDark) Color(0xFF14131C) else Color(0xFFF7F6FC)
+    val baseBorderColor = if (isDark) Color(0xFF282638) else Color(0xFFE4E0F4)
+    val accentColor = if (isDark) Color(0xFFA78BFA) else Color(0xFF6D28D9)
+    val textPrimaryColor = if (isDark) Color(0xFFEDE9FE) else Color(0xFF332F4C)
+    val textSecondaryColor = if (isDark) Color(0xFFA5A0BD) else Color(0xFF6B6684)
+
+    var isCopied by remember { mutableStateOf(false) }
+    LaunchedEffect(isCopied) {
+        if (isCopied) {
+            kotlinx.coroutines.delay(1800)
+            isCopied = false
+        }
+    }
+
+    var activeElapsedSeconds by remember { mutableStateOf(1) }
+    LaunchedEffect(isActivelyThinking) {
+        if (isActivelyThinking) {
+            val startWallTime = System.currentTimeMillis() - thinkingDurationMs.coerceAtLeast(0L)
+            while (isActive) {
+                val elapsed = (System.currentTimeMillis() - startWallTime) / 1000L
+                activeElapsedSeconds = elapsed.coerceAtLeast(1L).toInt()
+                kotlinx.coroutines.delay(500L)
+            }
+        }
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "thinkingCardPulse")
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.45f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "sparklePulse"
+    )
+
+    val borderColor = if (isActivelyThinking) {
+        accentColor.copy(alpha = 0.35f + (0.35f * pulseAlpha))
+    } else {
+        baseBorderColor
+    }
 
     val wordCount = remember(thinkingText) {
         thinkingText.trim().split(Regex("\\s+")).count { it.isNotBlank() }
     }
-    val summaryLabel = if (wordCount > 0) "Thought process (~$wordCount words)" else "Thinking Process"
+
+    val summaryLabel = remember(isActivelyThinking, activeElapsedSeconds, thinkingDurationMs, wordCount) {
+        if (isActivelyThinking) {
+            "Thinking (${activeElapsedSeconds}s)…"
+        } else {
+            val durationSec = if (thinkingDurationMs > 0L) {
+                val s = thinkingDurationMs / 1000.0
+                String.format(Locale.US, "%.1fs", s)
+            } else {
+                val estimatedS = (wordCount / 65.0).coerceAtLeast(1.0)
+                String.format(Locale.US, "%.1fs", estimatedS)
+            }
+            if (wordCount > 0) "Thought for $durationSec (~$wordCount words)"
+            else "Thought for $durationSec"
+        }
+    }
+
+    val chevronRotation by animateFloatAsState(
+        targetValue = if (isExpanded) 180f else 0f,
+        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        label = "chevronRotation"
+    )
 
     Column(
         modifier = Modifier
@@ -3316,85 +3410,114 @@ fun ThinkingAccordionCard(
             .clip(RoundedCornerShape(14.dp))
             .background(bgColor)
             .border(1.dp, borderColor, RoundedCornerShape(14.dp))
-            .padding(12.dp)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onToggle),
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onToggle()
+                }),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
                 Icon(
-                    Icons.Default.AutoAwesome,
+                    imageVector = Icons.Default.AutoAwesome,
                     contentDescription = null,
-                    modifier = Modifier.size(15.dp),
-                    tint = textColor
+                    modifier = Modifier
+                        .size(15.dp)
+                        .then(
+                            if (isActivelyThinking) Modifier.alpha(pulseAlpha)
+                            else Modifier
+                        ),
+                    tint = accentColor
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = summaryLabel,
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = textColor
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.5.sp
+                    ),
+                    color = textPrimaryColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isExpanded) {
                     IconButton(
                         onClick = {
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("Thinking Chain", thinkingText))
+                            cm.setPrimaryClip(ClipData.newPlainText("Thinking Process", thinkingText))
+                            isCopied = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             Toast.makeText(context, "Copied thinking process", Toast.LENGTH_SHORT).show()
                         },
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(26.dp)
                     ) {
                         Icon(
-                            Icons.Default.ContentCopy,
+                            imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
                             contentDescription = "Copy thinking",
                             modifier = Modifier.size(13.dp),
-                            tint = textColor.copy(alpha = 0.7f)
+                            tint = if (isCopied) Color(0xFF10B981) else textSecondaryColor
                         )
                     }
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(2.dp))
                 }
+
                 Icon(
-                    if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = textColor
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand",
+                    modifier = Modifier
+                        .size(18.dp)
+                        .rotate(chevronRotation),
+                    tint = textSecondaryColor
                 )
             }
         }
 
         AnimatedVisibility(
             visible = isExpanded,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
+            exit = fadeOut(tween(140)) + shrinkVertically(tween(180))
         ) {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 10.dp)
             ) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .heightIn(min = 24.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(textColor.copy(alpha = 0.45f))
+                HorizontalDivider(
+                    color = if (isDark) Color(0xFF262438) else Color(0xFFEAE6F5),
+                    thickness = 0.8.dp,
+                    modifier = Modifier.padding(bottom = 10.dp)
                 )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = thinkingText,
-                    style = MaterialTheme.typography.bodySmall.copy(
-                        lineHeight = 19.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp
-                    ),
-                    color = textColor.copy(alpha = 0.9f),
-                    modifier = Modifier.weight(1f)
-                )
+
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Box(
+                        modifier = Modifier
+                            .width(3.dp)
+                            .heightIn(min = 28.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(accentColor.copy(alpha = 0.55f))
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Box(modifier = Modifier.weight(1f)) {
+                        MarkdownContent(
+                            text = thinkingText,
+                            textColor = if (isDark) Color(0xFFD4CFE6) else Color(0xFF4A4460),
+                            isStreaming = isActivelyThinking,
+                            onLinkClick = onOpenFile
+                        )
+                    }
+                }
             }
         }
     }
@@ -3485,10 +3608,17 @@ fun AgyTerminalExecutionCard(
                 }
             }
 
+            val terminalChevronRotation by animateFloatAsState(
+                targetValue = if (isExpanded) 180f else 0f,
+                animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+                label = "terminalChevronRotation"
+            )
             Icon(
-                if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                imageVector = Icons.Default.KeyboardArrowDown,
                 contentDescription = if (isExpanded) "Collapse" else "Expand",
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier
+                    .size(18.dp)
+                    .rotate(terminalChevronRotation),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
