@@ -812,4 +812,68 @@ class LocalFileManager @Inject constructor(
             Pair(false, "No app available to open this file type (${file.extension})")
         }
     }
+
+    /**
+     * Delete cached files from local disk and remove records from Room DB.
+     */
+    suspend fun deleteCachedFiles(pathsOrIds: List<String>): Int = withContext(Dispatchers.IO) {
+        var count = 0
+        val idsToDelete = mutableListOf<String>()
+        for (raw in pathsOrIds) {
+            try {
+                val norm = normalizeFileId(raw)
+                val fn = getFileName(norm)
+                val safeDiskName = "${norm.hashCode().toString().replace("-", "n")}_$fn"
+                File(savedFilesDir, safeDiskName).takeIf { it.exists() }?.delete()
+                File(savedFilesDir, fn).takeIf { it.exists() }?.delete()
+                File(savedFilesDir, norm).takeIf { it.exists() }?.delete()
+                idsToDelete.add(raw)
+                idsToDelete.add(norm)
+                idsToDelete.add(fn)
+                count++
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error deleting local file for $raw", t)
+            }
+        }
+        if (idsToDelete.isNotEmpty()) {
+            try {
+                fileDao.deleteFiles(idsToDelete.distinct())
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error deleting records from fileDao", t)
+            }
+        }
+        count
+    }
+
+    /**
+     * Batch export multiple files to the device's public Downloads directory.
+     */
+    suspend fun batchExportToDownloads(paths: List<String>): Pair<Int, String> = withContext(Dispatchers.IO) {
+        var successCount = 0
+        for (p in paths) {
+            try {
+                val norm = normalizeFileId(p)
+                val fn = getFileName(norm)
+                val candidate = getLocalFileOnDisk(p)
+                if (candidate != null && candidate.exists() && candidate.length() > 0) {
+                    val res = exportToPublicDownloads(candidate, fn)
+                    if (res.first) successCount++
+                } else {
+                    val entity = getCachedFile(p)
+                    if (entity != null && entity.content.isNotBlank()) {
+                        val res = exportToPublicDownloads(fn, entity.content)
+                        if (res.first) successCount++
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed to batch export $p", t)
+            }
+        }
+        val msg = if (successCount > 0) {
+            "Exported $successCount of ${paths.size} files to Downloads/NextAI"
+        } else {
+            "No files could be exported"
+        }
+        Pair(successCount, msg)
+    }
 }

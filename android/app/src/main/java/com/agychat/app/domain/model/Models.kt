@@ -36,7 +36,7 @@ data class Message(
     val thinkingDurationMs: Long = 0L,
     val toolExecution: String? = null,
     val toolExecutions: List<ToolExecutionItem> = emptyList(),
-    val isToolsExpanded: Boolean = true,
+    val isToolsExpanded: Boolean? = null,
     val timestamp: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false,
     val isThinking: Boolean = false,

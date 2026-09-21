@@ -29,6 +29,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -361,41 +362,75 @@ fun ChatScreen(
     }
 
     // Determine if user is currently at the bottom of the conversation list
-    val isScrolledToBottom by remember {
+    var isAutoFollowActive by remember { mutableStateOf(true) }
+
+    val isLastItemVisible by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val totalItems = layoutInfo.totalItemsCount
             if (totalItems == 0) return@derivedStateOf true
             val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
-            lastVisible.index >= totalItems - 1 && (lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset + 150)
+            lastVisible.index >= totalItems - 1
         }
     }
 
-    // Show "Scroll to Bottom" FAB only when user has scrolled up away from bottom
+    val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
+
+    // Detect user manual scroll gesture: only pause auto-follow when user physically drags upward
+    LaunchedEffect(isUserDragging, listState.isScrollInProgress) {
+        if (isUserDragging && listState.isScrollInProgress) {
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+            if (lastVisible != null && totalItems > 0) {
+                if (lastVisible.index < totalItems - 1) {
+                    isAutoFollowActive = false
+                } else if (lastVisible.index >= totalItems - 1 && (lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset + 80)) {
+                    isAutoFollowActive = true
+                    unreadNewMessagesCount = 0
+                }
+            }
+        } else if (!isUserDragging) {
+            // User finished physical drag: if settled back at bottom, resume auto-follow
+            val layoutInfo = listState.layoutInfo
+            val totalItems = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+            if (lastVisible != null && totalItems > 0 && lastVisible.index >= totalItems - 1 &&
+                (lastVisible.offset + lastVisible.size <= layoutInfo.viewportEndOffset + 80)
+            ) {
+                isAutoFollowActive = true
+                unreadNewMessagesCount = 0
+            }
+        }
+    }
+
+    // Show "Scroll to Bottom" FAB only when user has scrolled up away from bottom and auto-follow is paused
     val showScrollToBottom by remember {
         derivedStateOf {
-            !isScrolledToBottom && displayedMessages.size > 1
+            !isAutoFollowActive && displayedMessages.size > 1
         }
     }
 
     var unreadNewMessagesCount by remember { mutableStateOf(0) }
     var previousMessagesCount by remember { mutableStateOf(displayedMessages.size) }
 
-    LaunchedEffect(isScrolledToBottom) {
-        if (isScrolledToBottom) {
+    LaunchedEffect(isAutoFollowActive) {
+        if (isAutoFollowActive) {
             unreadNewMessagesCount = 0
         }
     }
 
-    // Smart auto-scroll: only scrolls to bottom if user was already at bottom, otherwise badges new messages
+    // Smart auto-scroll: pins to bottom when auto-follow is active, badges new messages when scrolled away
     LaunchedEffect(displayedMessages.size) {
         val countDiff = displayedMessages.size - previousMessagesCount
         previousMessagesCount = displayedMessages.size
 
         if (displayedMessages.isNotEmpty()) {
-            if (isScrolledToBottom) {
+            if (isAutoFollowActive) {
                 val count = listState.layoutInfo.totalItemsCount
-                listState.animateScrollToItem(if (count > 0) count - 1 else displayedMessages.size - 1)
+                if (count > 0) {
+                    listState.scrollToItem(count - 1, 100000)
+                }
                 unreadNewMessagesCount = 0
             } else if (countDiff > 0) {
                 unreadNewMessagesCount += countDiff
@@ -406,23 +441,28 @@ fun ChatScreen(
     // Anchor scroll to bottom when soft keyboard opens
     val imeBottom = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
     LaunchedEffect(imeBottom) {
-        if (imeBottom > 0 && isScrolledToBottom && displayedMessages.isNotEmpty()) {
+        if (imeBottom > 0 && isAutoFollowActive && displayedMessages.isNotEmpty()) {
             kotlinx.coroutines.delay(60)
             val count = listState.layoutInfo.totalItemsCount
             if (count > 0) {
-                listState.animateScrollToItem(count - 1)
+                listState.scrollToItem(count - 1, 100000)
             }
         }
     }
 
-    // Smooth jitter-free follow-scroll during streaming (only if user was already at bottom)
+    // Fluid follow-scroll during reasoning and streaming output (pinned to bottom like ChatGPT, Claude, and Gemini)
     val lastStreamingMsg = displayedMessages.lastOrNull()
     val isStreamingActive = lastStreamingMsg?.isStreaming == true
     val streamContentLength = (lastStreamingMsg?.content?.length ?: 0) + (lastStreamingMsg?.thinking?.length ?: 0)
 
-    LaunchedEffect(streamContentLength) {
-        if (isStreamingActive && isScrolledToBottom && !listState.isScrollInProgress && displayedMessages.isNotEmpty()) {
-            kotlinx.coroutines.delay(35)
+    LaunchedEffect(isStreamingActive) {
+        if (isStreamingActive) {
+            isAutoFollowActive = true
+        }
+    }
+
+    LaunchedEffect(streamContentLength, isStreamingActive) {
+        if (isStreamingActive && isAutoFollowActive && displayedMessages.isNotEmpty()) {
             val count = listState.layoutInfo.totalItemsCount
             if (count > 0) {
                 listState.scrollToItem(count - 1, 100000)
@@ -1429,6 +1469,7 @@ fun ChatScreen(
                                 viewModel.reconnect()
                                 return@ClaudeFloatingInputBar
                             }
+                            isAutoFollowActive = true
                             viewModel.sendMessage(inputText)
                             inputText = ""
                         },
@@ -1543,6 +1584,7 @@ fun ChatScreen(
                             plugins = pluginManager.plugins,
                             onPromptCardClick = { prompt ->
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                isAutoFollowActive = true
                                 viewModel.sendMessage(prompt)
                             },
                             selectedModelName = selectedModel.name,
@@ -1632,12 +1674,14 @@ fun ChatScreen(
                                     viewModel.setReplyToMessage(msg)
                                 },
                                 onSendSuggestion = { prompt ->
+                                    isAutoFollowActive = true
                                     viewModel.sendMessage(prompt)
                                 },
                                 onSwitchBranch = { branchGroupId, branchIndex ->
                                     viewModel.switchMessageBranch(branchGroupId, branchIndex)
                                 },
                                 onContinueGenerating = {
+                                    isAutoFollowActive = true
                                     viewModel.continueGenerating()
                                 }
                             )
@@ -1668,10 +1712,11 @@ fun ChatScreen(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 unreadNewMessagesCount = 0
+                                isAutoFollowActive = true
                                 scope.launch {
                                     val count = listState.layoutInfo.totalItemsCount
                                     if (count > 0) {
-                                        listState.animateScrollToItem(count - 1)
+                                        listState.animateScrollToItem(count - 1, 100000)
                                     }
                                 }
                             },
@@ -2230,6 +2275,27 @@ fun ChatScreen(
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("File Path", path))
                 Toast.makeText(context, "Copied file path to clipboard", Toast.LENGTH_SHORT).show()
+            },
+            onDeleteFiles = { paths ->
+                viewModel.deleteArtifactFiles(paths) { count ->
+                    val msg = if (count == 1) "Deleted 1 file" else "Deleted $count files"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDownloadFiles = { paths ->
+                val hasPerm = com.agychat.app.data.local.StoragePermissions.hasWritePermission(context)
+                if (!hasPerm) {
+                    pendingStorageAction = {
+                        viewModel.downloadArtifactFiles(paths) { _, _, msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    showStoragePermissionDialog = true
+                } else {
+                    viewModel.downloadArtifactFiles(paths) { _, _, msg ->
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         )
     }
@@ -2801,10 +2867,12 @@ fun MessageItem(
 
                     // 2. AGY Terminal Execution Card (bash commands, file edits, views, searches)
                     if (message.toolExecutions.isNotEmpty() || !message.toolExecution.isNullOrBlank()) {
+                        val anyRunning = message.toolExecutions.any { it.state == "ACTIVE" }
+                        val isToolsCardExpanded = message.isToolsExpanded ?: (anyRunning && message.isStreaming)
                         AgyTerminalExecutionCard(
                             toolItems = message.toolExecutions,
                             singleStatus = message.toolExecution,
-                            isExpanded = message.isToolsExpanded,
+                            isExpanded = isToolsCardExpanded,
                             onToggle = onToggleTools,
                             onOpenFile = onOpenFile
                         )
@@ -2814,26 +2882,37 @@ fun MessageItem(
                     // 2b. Generated Files Artifact Cards (Derivations, markdown notes, code files, PDFs created or linked by agent)
                     val generatedFiles = remember(message.toolExecutions, message.content) {
                         val list = mutableListOf<String>()
-                        // 1. Tool executions (write_to_file, replace_file_content, generate_image, view_file)
+                        // 1. Tool executions (strictly creation/modification tools)
                         message.toolExecutions.forEach { t ->
                             val tName = t.toolName.lowercase()
-                            if (tName.endsWith("write_to_file") || tName.endsWith("replace_file_content") ||
-                                tName.contains("file") || tName.endsWith("generate_image")) {
-                                t.targetFile?.takeIf { it.isNotBlank() }?.let { list.add(it) }
+                            val isCreation = tName in setOf("write_to_file", "replace_file_content", "create_file", "generate_image") ||
+                                (t.targetFile?.contains("/brain/") == true)
+                            if (isCreation) {
+                                t.targetFile?.takeIf { it.isNotBlank() }?.let { raw ->
+                                    val clean = com.agychat.app.data.local.LocalFileManager.normalizeFileId(raw)
+                                    val fn = com.agychat.app.data.local.LocalFileManager.getFileName(clean)
+                                    if (fn.contains('.') && fn.substringAfterLast('.').length in 1..8) list.add(clean)
+                                }
                             }
                         }
-                        // 2. Markdown links: [label](file:///path), [label](/content/path), [label](https://.../api/file), or [label](filename.ext)
+                        // 2. Markdown links: [label](file:///path), [label](/content/path)
                         val linkRegex = Regex("""\[([^\]]+)\]\(((?:file://|/content/|/root/|/tmp/|https?://[^\s\)]+/api/file|[a-zA-Z0-9_\-./]+\.(?:pdf|md|txt|py|kt|java|json|csv|png|jpg|jpeg|webp|html|svg|sh))[^\s\)]*)\)""")
                         for (m in linkRegex.findAll(message.content)) {
-                            val fPath = m.groupValues[2].trim()
-                            if (fPath.isNotBlank() && (!fPath.startsWith("http") || fPath.contains("/api/file"))) list.add(fPath)
+                            val raw = m.groupValues[2].trim()
+                            if (raw.isNotBlank() && (!raw.startsWith("http") || raw.contains("/api/file"))) {
+                                val clean = com.agychat.app.data.local.LocalFileManager.normalizeFileId(raw)
+                                val fn = com.agychat.app.data.local.LocalFileManager.getFileName(clean)
+                                if (fn.contains('.') && fn.substringAfterLast('.').length in 1..8) list.add(clean)
+                            }
                         }
-                        // 3. Explicit file paths mentioned in text: e.g. /content/... .pdf or .md
+                        // 3. Explicit file paths mentioned in text
                         val pathRegex = Regex("""(?:file://|/content/|/root/|/tmp/)[a-zA-Z0-9_\-./]+\.(?:pdf|md|txt|py|kt|java|json|csv|png|jpg|jpeg|webp)""")
                         for (m in pathRegex.findAll(message.content)) {
-                            list.add(m.value.trim())
+                            val clean = com.agychat.app.data.local.LocalFileManager.normalizeFileId(m.value.trim())
+                            val fn = com.agychat.app.data.local.LocalFileManager.getFileName(clean)
+                            if (fn.contains('.') && fn.substringAfterLast('.').length in 1..8) list.add(clean)
                         }
-                        list.distinct()
+                        list.distinctBy { com.agychat.app.data.local.LocalFileManager.normalizeFileId(it) }
                     }
                     if (generatedFiles.isNotEmpty()) {
                         Column(
@@ -6779,9 +6858,87 @@ fun SessionArtifactsBottomSheet(
     sessionFiles: List<String>,
     onClose: () -> Unit,
     onOpenFile: (String) -> Unit,
-    onCopyPath: (String) -> Unit
+    onCopyPath: (String) -> Unit,
+    onDeleteFiles: (List<String>) -> Unit = {},
+    onDownloadFiles: (List<String>) -> Unit = {}
 ) {
+    val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+
+    // Deduplicate and normalize session files
+    val normalizedFiles = remember(sessionFiles) {
+        sessionFiles.map { com.agychat.app.data.local.LocalFileManager.normalizeFileId(it) }
+            .filter { it.isNotBlank() && com.agychat.app.data.local.LocalFileManager.getFileName(it).contains('.') }
+            .distinct()
+    }
+
+    var isSelectionMode by remember { mutableStateOf(false) }
+    val selectedFiles = remember { mutableStateListOf<String>() }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("All") }
+    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+    var singleFileToDelete by remember { mutableStateOf<String?>(null) }
+
+    fun getCategoryForFile(filename: String): String {
+        val ext = filename.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "py", "kt", "kts", "js", "ts", "java", "cpp", "c", "rs", "go", "sh", "bash", "html", "css" -> "Code"
+            "md", "markdown", "txt", "pdf", "doc", "docx" -> "Docs"
+            "png", "jpg", "jpeg", "webp", "gif", "svg", "bmp" -> "Images"
+            "json", "csv", "tsv", "sql", "xml", "yaml", "yml" -> "Data"
+            else -> "Other"
+        }
+    }
+
+    val filteredFiles = remember(normalizedFiles, searchQuery, selectedCategory) {
+        normalizedFiles.filter { path ->
+            val fn = com.agychat.app.data.local.LocalFileManager.getFileName(path)
+            val matchesQuery = searchQuery.isBlank() || fn.contains(searchQuery, ignoreCase = true) || path.contains(searchQuery, ignoreCase = true)
+            val matchesCategory = when (selectedCategory) {
+                "All" -> true
+                else -> getCategoryForFile(fn) == selectedCategory
+            }
+            matchesQuery && matchesCategory
+        }
+    }
+
+    fun shareFile(filePath: String) {
+        try {
+            val norm = com.agychat.app.data.local.LocalFileManager.normalizeFileId(filePath)
+            val fn = com.agychat.app.data.local.LocalFileManager.getFileName(norm)
+            val safeDiskName = "${norm.hashCode().toString().replace("-", "n")}_$fn"
+            val f1 = java.io.File(context.filesDir, "saved_files/$safeDiskName")
+            val f2 = java.io.File(context.filesDir, "saved_files/$fn")
+            val f3 = java.io.File(filePath)
+            val target = when {
+                f1.exists() && f1.length() > 0 -> f1
+                f2.exists() && f2.length() > 0 -> f2
+                f3.exists() && f3.length() > 0 -> f3
+                else -> null
+            }
+            if (target != null) {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    target
+                )
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = com.agychat.app.data.local.LocalFileManager.detectMimeType(target.name)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "Share $fn"))
+            } else {
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, filePath)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "Share $fn"))
+            }
+        } catch (t: Throwable) {
+            Toast.makeText(context, "Share failed: ${t.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onClose,
@@ -6792,251 +6949,567 @@ fun SessionArtifactsBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.78f)
-                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .fillMaxHeight(0.88f)
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Header
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 720.dp)
             ) {
+                // Header Row
                 Row(
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(ClaudeTerracotta.copy(alpha = 0.15f)),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = null,
-                            tint = ClaudeTerracotta,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    Column {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(ClaudeTerracotta.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Text(
-                                text = "Session Artifacts",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = ClaudeTerracotta,
+                                modifier = Modifier.size(20.dp)
                             )
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = ClaudeTerracotta.copy(alpha = 0.15f)
+                        }
+                        Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Text(
-                                    text = "${sessionFiles.size} files",
-                                    style = MaterialTheme.typography.labelSmall,
+                                    text = "Artifacts & Files",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = ClaudeTerracotta.copy(alpha = 0.15f)
+                                ) {
+                                    Text(
+                                        text = "${normalizedFiles.size} total",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ClaudeTerracotta,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "Browse, preview, export, or remove files",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        if (normalizedFiles.isNotEmpty()) {
+                            TextButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (isSelectionMode) {
+                                        isSelectionMode = false
+                                        selectedFiles.clear()
+                                    } else {
+                                        isSelectionMode = true
+                                    }
+                                }
+                            ) {
+                                Text(
+                                    text = if (isSelectionMode) "Done" else "Select",
                                     color = ClaudeTerracotta,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    fontWeight = FontWeight.Bold
                                 )
                             }
                         }
-                        Text(
-                            text = "Files & notes generated by Next AI in this chat",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                    }
-                }
-                IconButton(onClick = onClose) {
-                    Icon(Icons.Default.Close, contentDescription = "Close")
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            if (sessionFiles.isEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(vertical = 36.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = null,
-                            modifier = Modifier.size(28.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = "No Artifacts Yet",
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "When you ask Next AI to create scripts, derivations, notes, or code files, they will appear here for instant preview and download.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(sessionFiles) { filePath ->
-                        val fileName = filePath.substringAfterLast('/')
-                        val ext = fileName.substringAfterLast('.', "").lowercase()
-                        val (icon, tint) = when (ext) {
-                            "md", "txt" -> Icons.Default.Article to ClaudeTerracotta
-                            "py", "kt", "js", "ts", "java", "cpp", "c", "rs", "go" -> Icons.Default.Code to ChatGptBlue
-                            "json", "csv", "tsv", "sql", "xml", "yaml", "yml" -> Icons.Default.TableChart to ChatGptEmerald
-                            "sh", "bash" -> Icons.Default.Terminal to ChatGptEmerald
-                            else -> Icons.Default.Description to ClaudeTerracotta
+                        IconButton(onClick = onClose) {
+                            Icon(Icons.Default.Close, contentDescription = "Close")
                         }
+                    }
+                }
+
+                // Batch Operations Action Bar (visible during selection mode)
+                AnimatedVisibility(visible = isSelectionMode) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            border = androidx.compose.foundation.BorderStroke(
-                                0.8.dp,
-                                MaterialTheme.colorScheme.outlineVariant
-                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.3f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(tint.copy(alpha = 0.12f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = icon,
-                                        contentDescription = null,
-                                        tint = tint,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = fileName,
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (ext.isNotBlank()) {
-                                            Spacer(Modifier.width(6.dp))
-                                            Surface(
-                                                shape = RoundedCornerShape(4.dp),
-                                                color = tint.copy(alpha = 0.12f)
-                                            ) {
-                                                Text(
-                                                    text = ext.uppercase(),
-                                                    style = MaterialTheme.typography.labelSmall.copy(
-                                                        fontFamily = FontFamily.Monospace,
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 8.5.sp
-                                                    ),
-                                                    color = tint,
-                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                    val context = LocalContext.current
-                                    val norm = remember(filePath) { com.agychat.app.data.local.LocalFileManager.normalizeFileId(filePath) }
-                                    val fn = remember(norm) { com.agychat.app.data.local.LocalFileManager.getFileName(norm) }
-                                    val safeDiskName = remember(norm, fn) { "${norm.hashCode().toString().replace("-", "n")}_$fn" }
-                                    val localCandidate = remember(safeDiskName, fn, filePath) {
-                                        val f1 = java.io.File(context.filesDir, "saved_files/$safeDiskName")
-                                        val f2 = java.io.File(context.filesDir, "saved_files/$fn")
-                                        val f3 = java.io.File(filePath)
-                                        when {
-                                            f1.exists() && f1.length() > 0 -> f1
-                                            f2.exists() && f2.length() > 0 -> f2
-                                            f3.exists() && f3.length() > 0 -> f3
-                                            else -> null
-                                        }
-                                    }
-                                    val isOfflineCached = localCandidate != null
-                                    val sizeStr = remember(localCandidate) {
-                                        if (localCandidate != null) {
-                                            val kb = localCandidate.length() / 1024.0
-                                            String.format(java.util.Locale.US, "%.1f KB", kb)
-                                        } else null
-                                    }
-                                    val statusPrefix = if (isOfflineCached) "💾 OFFLINE READY" else "☁️ ON COLAB"
-                                    val pathSubText = listOfNotNull(statusPrefix, sizeStr, filePath).joinToString(" • ")
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        text = pathSubText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (isOfflineCached) Color(0xFF10A37F) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        text = "${selectedFiles.size} selected",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                        color = ClaudeTerracotta
                                     )
+                                    TextButton(
+                                        onClick = {
+                                            if (selectedFiles.size == filteredFiles.size) {
+                                                selectedFiles.clear()
+                                            } else {
+                                                selectedFiles.clear()
+                                                selectedFiles.addAll(filteredFiles)
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = if (selectedFiles.size == filteredFiles.size && filteredFiles.isNotEmpty()) "Deselect All" else "Select All",
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold)
+                                        )
+                                    }
                                 }
-                                Spacer(Modifier.width(8.dp))
-                                IconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onCopyPath(filePath)
-                                    },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.ContentCopy,
-                                        contentDescription = "Copy Path",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                Button(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onOpenFile(filePath)
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                    modifier = Modifier.height(32.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Visibility,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Open & View", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Button(
+                                        onClick = {
+                                            if (selectedFiles.isNotEmpty()) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onDownloadFiles(selectedFiles.toList())
+                                            }
+                                        },
+                                        enabled = selectedFiles.isNotEmpty(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Download", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            if (selectedFiles.isNotEmpty()) {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                showDeleteConfirmDialog = true
+                                            }
+                                        },
+                                        enabled = selectedFiles.isNotEmpty(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("Delete", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                    }
                                 }
                             }
                         }
                     }
-                    item {
-                        Spacer(Modifier.height(16.dp))
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Search Bar & Filter Chips
+                if (normalizedFiles.isNotEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = androidx.compose.foundation.BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            androidx.compose.foundation.text.BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                                decorationBox = { innerTextField ->
+                                    if (searchQuery.isEmpty()) {
+                                        Text(
+                                            text = "Search artifacts by name or path...",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                    innerTextField()
+                                }
+                            )
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // Category Chips
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val categories = listOf("All", "Code", "Docs", "Images", "Data")
+                        categories.forEach { cat ->
+                            val isSelected = selectedCategory == cat
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    selectedCategory = cat
+                                }
+                            ) {
+                                Text(
+                                    text = cat,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal),
+                                    color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Content List
+                if (filteredFiles.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(vertical = 36.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(56.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Description,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = if (searchQuery.isNotBlank() || selectedCategory != "All") "No Matching Artifacts" else "No Artifacts Yet",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = if (searchQuery.isNotBlank() || selectedCategory != "All") "Try adjusting your search terms or filter selection." else "Files, derivations, notes, and code created by Next AI will appear here for preview and export.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(filteredFiles, key = { it }) { filePath ->
+                            val fileName = com.agychat.app.data.local.LocalFileManager.getFileName(filePath)
+                            val ext = fileName.substringAfterLast('.', "").lowercase()
+                            val (icon, tint) = when (ext) {
+                                "md", "txt" -> Icons.Default.Article to ClaudeTerracotta
+                                "py", "kt", "js", "ts", "java", "cpp", "c", "rs", "go" -> Icons.Default.Code to ChatGptBlue
+                                "json", "csv", "tsv", "sql", "xml", "yaml", "yml" -> Icons.Default.TableChart to ChatGptEmerald
+                                "sh", "bash" -> Icons.Default.Terminal to ChatGptEmerald
+                                "png", "jpg", "jpeg", "webp", "gif", "svg" -> Icons.Default.Image to Color(0xFFF59E0B)
+                                "pdf" -> Icons.Default.PictureAsPdf to Color(0xFFE53935)
+                                else -> Icons.Default.Description to ClaudeTerracotta
+                            }
+
+                            val norm = remember(filePath) { com.agychat.app.data.local.LocalFileManager.normalizeFileId(filePath) }
+                            val fn = remember(norm) { com.agychat.app.data.local.LocalFileManager.getFileName(norm) }
+                            val safeDiskName = remember(norm, fn) { "${norm.hashCode().toString().replace("-", "n")}_$fn" }
+                            val localCandidate = remember(safeDiskName, fn, filePath) {
+                                val f1 = java.io.File(context.filesDir, "saved_files/$safeDiskName")
+                                val f2 = java.io.File(context.filesDir, "saved_files/$fn")
+                                val f3 = java.io.File(filePath)
+                                when {
+                                    f1.exists() && f1.length() > 0 -> f1
+                                    f2.exists() && f2.length() > 0 -> f2
+                                    f3.exists() && f3.length() > 0 -> f3
+                                    else -> null
+                                }
+                            }
+                            val isOfflineCached = localCandidate != null
+                            val sizeStr = remember(localCandidate) {
+                                if (localCandidate != null) {
+                                    val kb = localCandidate.length() / 1024.0
+                                    String.format(java.util.Locale.US, "%.1f KB", kb)
+                                } else null
+                            }
+                            val isSelected = selectedFiles.contains(filePath)
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    if (isSelected) 1.2.dp else 0.8.dp,
+                                    if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        if (isSelectionMode) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            if (isSelected) selectedFiles.remove(filePath) else selectedFiles.add(filePath)
+                                        } else {
+                                            onOpenFile(filePath)
+                                        }
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isSelectionMode) {
+                                        Checkbox(
+                                            checked = isSelected,
+                                            onCheckedChange = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                if (isSelected) selectedFiles.remove(filePath) else selectedFiles.add(filePath)
+                                            },
+                                            colors = CheckboxDefaults.colors(checkedColor = ClaudeTerracotta)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(tint.copy(alpha = 0.12f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = icon,
+                                            contentDescription = null,
+                                            tint = tint,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Spacer(Modifier.width(10.dp))
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = fileName,
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (ext.isNotBlank()) {
+                                                Spacer(Modifier.width(6.dp))
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = tint.copy(alpha = 0.12f)
+                                                ) {
+                                                    Text(
+                                                        text = ext.uppercase(),
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontFamily = FontFamily.Monospace,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 8.5.sp
+                                                        ),
+                                                        color = tint,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        val statusPrefix = if (isOfflineCached) "OFFLINE READY" else "ON COLAB"
+                                        val pathSubText = listOfNotNull(statusPrefix, sizeStr, filePath).joinToString(" • ")
+                                        Text(
+                                            text = pathSubText,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (isOfflineCached) Color(0xFF10A37F) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+
+                                    if (!isSelectionMode) {
+                                        Spacer(Modifier.width(4.dp))
+
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onDownloadFiles(listOf(filePath))
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Download,
+                                                contentDescription = "Download to phone",
+                                                modifier = Modifier.size(16.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                shareFile(filePath)
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Share,
+                                                contentDescription = "Share",
+                                                modifier = Modifier.size(15.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                singleFileToDelete = filePath
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.DeleteOutline,
+                                                contentDescription = "Delete",
+                                                modifier = Modifier.size(16.dp),
+                                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f)
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onCopyPath(filePath)
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "Copy Path",
+                                                modifier = Modifier.size(15.dp),
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+
+                                        Button(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onOpenFile(filePath)
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp),
+                                            modifier = Modifier.height(30.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Visibility,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(12.dp)
+                                            )
+                                            Spacer(Modifier.width(3.dp))
+                                            Text("View", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            Spacer(Modifier.height(16.dp))
+                        }
                     }
                 }
             }
         }
+    }
+
+    // Batch Delete Confirmation Dialog
+    if (showDeleteConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmDialog = false },
+            title = { Text("Delete ${selectedFiles.size} Artifacts?") },
+            text = { Text("Are you sure you want to delete ${selectedFiles.size} selected artifact(s)? Local files and cached data will be removed from your session.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteFiles(selectedFiles.toList())
+                        selectedFiles.clear()
+                        isSelectionMode = false
+                        showDeleteConfirmDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Single File Delete Confirmation Dialog
+    if (singleFileToDelete != null) {
+        val fName = com.agychat.app.data.local.LocalFileManager.getFileName(singleFileToDelete!!)
+        AlertDialog(
+            onDismissRequest = { singleFileToDelete = null },
+            title = { Text("Delete Artifact?") },
+            text = { Text("Are you sure you want to delete \"$fName\" from session artifacts?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteFiles(listOf(singleFileToDelete!!))
+                        singleFileToDelete = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { singleFileToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

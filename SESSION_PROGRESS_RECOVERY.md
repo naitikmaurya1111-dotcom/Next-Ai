@@ -1,9 +1,8 @@
-# 🧠 Next AI & Antigravity Session Progress Recovery
-> **Last Synced**: `2026-09-21 17:09:08 UTC`  
+# Next AI & Antigravity Session Progress Recovery
+> **Last Synced**: `2026-09-21 18:06:00 UTC`  
 > **Conversation ID**: `380d3ab0-d585-42f9-90ce-bf063023bd97`  
-> **Git Head SHA**: `481ff36` (`docs: finalize session recovery briefing for commit fbdfe54 (v1.0.76)`)  
-> **Active App Version**: `v1.0.76`  
-> **Latest APK Download**: [v1.0.76 Releases](https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases)  
+> **Active App Version**: `v3.4.6` (versionCode: 28, Release: `v1.0.78`)  
+> **Latest APK Download**: [v1.0.78 Releases](https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases)  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -31,14 +30,20 @@ You are pair programming on **Next AI**, an advanced Android Chat App inspired b
   - Two-part custom instructions sheet with tone presets (`Direct & Concise`, `Technical`, `Educational`, `Warm`).
 - **Slash Commands & Plugins** (all 8 cards implemented):
   `/goal`, `/plan`, `/boost`, `/schedule`, `/browser`, `/learn`, `/grill-me`, `/teamwork-preview`.
+- **Artifacts & Files Management (ChatGPT/Claude Desktop Standard)**:
+  - Dedicated Artifacts & Files modal sheet with multi-select, select all/deselect all, batch download to `Downloads/NextAI`, batch delete with confirmation dialogs, real-time search, category filters (`All`, `Code`, `Docs`, `Images`, `Data`, `Other`), and quick actions.
+  - Normalized path deduplication prevents repeated file instances and filters read-only tools.
+- **Fluid Follow-Scroll & Auto-Collapse Engine**:
+  - Touch-drag aware auto-scroll pins to bottom of streaming and reasoning responses, with scroll-to-bottom FAB appearing when scrolled away.
+  - Automatic collapse of thinking accordion and tool execution cards upon generation completion.
 - **Latest Build & Release**:
-  - Release Tag: `v1.0.76`
-  - Git Commit: `481ff36`
+  - Release Tag: `v1.0.78`
+  - Version: `3.4.6` (`versionCode = 28`)
   - GitHub Actions Workflow: Configured with automated APK build artifacts
 
 ---
 
-## 🌉 Colab Bridge Server
+## Colab Bridge Server
 - Location: `/content/Next-Ai/colab`
 - Server: FastAPI WebSocket on port 8000 + Cloudflare Tunnel
 - Start Command: `bash /content/Next-Ai/colab/start_bridge.sh`
@@ -46,7 +51,7 @@ You are pair programming on **Next AI**, an advanced Android Chat App inspired b
 
 ---
 
-## 🚀 How To Resume
+## How To Resume
 1. Restore Antigravity CLI state: `python3 /content/drive/MyDrive/NextAI_CLI_Chat_History/restore_cli.py`
 2. Check Colab Bridge: `curl -s http://127.0.0.1:8000/health || bash /content/Next-Ai/colab/start_bridge.sh`
-3. Greet user with latest Git commit (`481ff36`), app release (`v1.0.76`), and continue pair programming!
+3. Greet user with latest Git commit, app release (`v1.0.78`), and continue pair programming!

@@ -29,6 +29,9 @@ interface FileDao {
     @Query("DELETE FROM local_files WHERE id = :id")
     suspend fun deleteFile(id: String)
 
+    @Query("DELETE FROM local_files WHERE id IN (:ids) OR remotePath IN (:ids) OR filename IN (:ids)")
+    suspend fun deleteFiles(ids: List<String>)
+
     @Query("DELETE FROM local_files WHERE conversationId = :conversationId")
     suspend fun deleteFilesForConversation(conversationId: String)
 

@@ -1163,6 +1163,12 @@ class ChatViewModel @Inject constructor(
         return s.trim()
     }
 
+    private fun hasFileExtension(path: String): Boolean {
+        val fn = path.substringAfterLast('/')
+        return fn.contains('.') && fn.substringAfterLast('.').length in 1..8 &&
+            !fn.endsWith('.') && !fn.contains(' ')
+    }
+
     private fun findArtifactInMessages(cleanPath: String, filename: String): String? {
         val currentMessages = _messages.value
         val targetFname = filename.lowercase()
@@ -1808,9 +1814,15 @@ class ChatViewModel @Inject constructor(
             else -> null
         }
 
-        if (!targetFile.isNullOrBlank() && (toolName == "write_to_file" || toolName == "replace_file_content" || toolName.contains("file"))) {
-            if (!_sessionFiles.value.contains(targetFile)) {
-                _sessionFiles.value = _sessionFiles.value + targetFile
+        val isArtifactCreationTool = toolName in setOf("write_to_file", "replace_file_content", "create_file", "generate_image") ||
+            (targetFile != null && targetFile.contains("/brain/"))
+        if (!targetFile.isNullOrBlank() && isArtifactCreationTool) {
+            val cleanTarget = cleanFilePathOrUrl(targetFile)
+            if (cleanTarget.isNotBlank() && hasFileExtension(cleanTarget)) {
+                val currentNorm = _sessionFiles.value.map { cleanFilePathOrUrl(it) }
+                if (!currentNorm.contains(cleanTarget)) {
+                    _sessionFiles.value = (_sessionFiles.value + cleanTarget).distinctBy { cleanFilePathOrUrl(it) }
+                }
             }
             val writtenContent = paramsObj?.optString("CodeContent")?.takeIf { it.isNotBlank() }
                 ?: paramsObj?.optString("content")?.takeIf { it.isNotBlank() }
@@ -1818,15 +1830,16 @@ class ChatViewModel @Inject constructor(
             if (!writtenContent.isNullOrBlank()) {
                 viewModelScope.launch(Dispatchers.IO) {
                     try {
-                        localFileManager.cacheFile(currentConversationId, targetFile, null, writtenContent)
+                        localFileManager.cacheFile(currentConversationId, cleanTarget, null, writtenContent)
                     } catch (_: Throwable) {}
                 }
-            } else if ((toolName == "view_file" || toolName == "read_file") && output.isNotBlank()) {
-                viewModelScope.launch(Dispatchers.IO) {
-                    try {
-                        localFileManager.cacheFile(currentConversationId, targetFile, null, output)
-                    } catch (_: Throwable) {}
-                }
+            }
+        } else if (!targetFile.isNullOrBlank() && (toolName == "view_file" || toolName == "read_file") && output.isNotBlank()) {
+            val cleanTarget = cleanFilePathOrUrl(targetFile)
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    localFileManager.cacheFile(currentConversationId, cleanTarget, null, output)
+                } catch (_: Throwable) {}
             }
         }
         if (toolName == "generate_image") {
@@ -1835,8 +1848,9 @@ class ChatViewModel @Inject constructor(
             val imgPath = imgRegex.find(output)?.value ?: imgName?.let { "/tmp/$it.png" }
             if (!imgPath.isNullOrBlank()) {
                 val cleanImg = cleanFilePathOrUrl(imgPath)
-                if (!_sessionFiles.value.contains(cleanImg)) {
-                    _sessionFiles.value = _sessionFiles.value + cleanImg
+                val currentNorm = _sessionFiles.value.map { cleanFilePathOrUrl(it) }
+                if (!currentNorm.contains(cleanImg)) {
+                    _sessionFiles.value = (_sessionFiles.value + cleanImg).distinctBy { cleanFilePathOrUrl(it) }
                 }
                 viewModelScope.launch(Dispatchers.IO) {
                     try {
@@ -2138,12 +2152,17 @@ class ChatViewModel @Inject constructor(
             }
 
             // Background pre-cache any referenced files or artifacts in the message for instant offline availability
-            val fileRegex = Regex("""(?:file://|/content/|/root/|/tmp/)[^\s\)\]'"]+""")
-            val matches = fileRegex.findAll(resolvedContent).map { cleanFilePathOrUrl(it.value) }.filter { it.isNotBlank() }.toSet()
+            val fileRegex = Regex("""(?:file://|/content/|/root/|/tmp/)[a-zA-Z0-9_\-./]+\.(?:md|txt|py|kt|java|json|csv|pdf|png|jpg|jpeg|webp|html|svg|sh|cpp|c|rs|go)""")
+            val matches = fileRegex.findAll(resolvedContent)
+                .map { cleanFilePathOrUrl(it.value) }
+                .filter { it.isNotBlank() && hasFileExtension(it) }
+                .toSet()
             if (matches.isNotEmpty()) {
-                val currentSet = _sessionFiles.value.toMutableSet()
-                currentSet.addAll(matches)
-                _sessionFiles.value = currentSet.toList()
+                val existingNorm = _sessionFiles.value.map { cleanFilePathOrUrl(it) }.toSet()
+                val newUnique = matches.filter { it !in existingNorm }
+                if (newUnique.isNotEmpty()) {
+                    _sessionFiles.value = (_sessionFiles.value + newUnique).distinctBy { cleanFilePathOrUrl(it) }
+                }
 
                 viewModelScope.launch(Dispatchers.IO) {
                     for (fPath in matches) {
@@ -2189,7 +2208,9 @@ class ChatViewModel @Inject constructor(
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx >= 0) {
             val cur = list[idx]
-            list[idx] = cur.copy(isToolsExpanded = !cur.isToolsExpanded)
+            val anyRunning = cur.toolExecutions.any { it.state == "ACTIVE" }
+            val currentExpanded = cur.isToolsExpanded ?: anyRunning
+            list[idx] = cur.copy(isToolsExpanded = !currentExpanded)
             _messages.value = list
         }
     }
@@ -3193,11 +3214,17 @@ class ChatViewModel @Inject constructor(
 
                 // Extract all file references generated in this conversation from tools, cached files, and inline artifacts
                 val toolFiles = resolvedMessages.flatMap { msg ->
-                    msg.toolExecutions.mapNotNull { it.targetFile }
-                }.filter { it.isNotBlank() }
+                    msg.toolExecutions.filter { t ->
+                        val tName = t.toolName.lowercase()
+                        tName in setOf("write_to_file", "replace_file_content", "create_file", "generate_image") ||
+                            (t.targetFile?.contains("/brain/") == true)
+                    }.mapNotNull { it.targetFile }
+                }.map { cleanFilePathOrUrl(it) }.filter { it.isNotBlank() && hasFileExtension(it) }
 
                 val cachedFiles = try {
-                    fileDao.getFilesForConversationList(conversationId).map { it.remotePath }
+                    fileDao.getFilesForConversationList(conversationId)
+                        .map { cleanFilePathOrUrl(it.remotePath) }
+                        .filter { it.isNotBlank() && hasFileExtension(it) }
                 } catch (_: Exception) { emptyList() }
 
                 val inlineArtifacts = resolvedMessages.flatMap { msg ->
@@ -3208,18 +3235,57 @@ class ChatViewModel @Inject constructor(
                         val id = Regex("""identifier=["']([^"']+)["']""").find(attrs)?.groupValues?.get(1)
                         val title = Regex("""title=["']([^"']+)["']""").find(attrs)?.groupValues?.get(1)
                         val best = id ?: title
-                        if (!best.isNullOrBlank()) list.add(best)
+                        if (!best.isNullOrBlank()) {
+                            val clean = cleanFilePathOrUrl(best)
+                            if (hasFileExtension(clean)) list.add(clean)
+                        }
                     }
-                    val linkRegex = Regex("""\[([^\]]+)\]\(([^)]+\.(?:md|txt|py|kt|java|json|csv|pdf|html|svg|sh|png|jpg))\)""")
+                    val linkRegex = Regex("""\[([^\]]+)\]\(([^)]+\.(?:md|txt|py|kt|java|json|csv|pdf|html|svg|sh|png|jpg|jpeg|webp|cpp|c|rs|go))\)""")
                     for (m in linkRegex.findAll(msg.content)) {
-                        val fPath = m.groupValues[2].trim()
-                        if (fPath.isNotBlank() && !fPath.startsWith("http://") && !fPath.startsWith("https://")) list.add(fPath)
+                        val fPath = cleanFilePathOrUrl(m.groupValues[2].trim())
+                        if (fPath.isNotBlank() && !fPath.startsWith("http://") && !fPath.startsWith("https://") && hasFileExtension(fPath)) {
+                            list.add(fPath)
+                        }
                     }
                     list
                 }
 
-                val allFiles = (toolFiles + cachedFiles + inlineArtifacts).distinct()
+                val allFiles = (toolFiles + cachedFiles + inlineArtifacts).distinctBy { cleanFilePathOrUrl(it) }
                 _sessionFiles.value = allFiles
+            }
+        }
+    }
+
+    /**
+     * Batch delete artifacts from local storage, Room DB, and active session files list.
+     */
+    fun deleteArtifactFiles(paths: List<String>, onComplete: ((deletedCount: Int) -> Unit)? = null) {
+        if (paths.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val normalizedToDelete = paths.map { cleanFilePathOrUrl(it) }.toSet()
+            val deletedCount = localFileManager.deleteCachedFiles(paths)
+            val updated = _sessionFiles.value.filter {
+                cleanFilePathOrUrl(it) !in normalizedToDelete
+            }
+            _sessionFiles.value = updated
+            withContext(Dispatchers.Main) {
+                onComplete?.invoke(deletedCount)
+            }
+        }
+    }
+
+    /**
+     * Batch download/export selected artifact files to the device's public Downloads directory.
+     */
+    fun downloadArtifactFiles(paths: List<String>, onComplete: (successCount: Int, total: Int, message: String) -> Unit) {
+        if (paths.isEmpty()) {
+            onComplete(0, 0, "No files selected")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = localFileManager.batchExportToDownloads(paths)
+            withContext(Dispatchers.Main) {
+                onComplete(result.first, paths.size, result.second)
             }
         }
     }
