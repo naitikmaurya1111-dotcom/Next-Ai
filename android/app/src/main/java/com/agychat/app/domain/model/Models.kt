@@ -53,7 +53,9 @@ data class Message(
     val modelName: String? = null,
     val parentMessageId: String? = null,
     val branchIndex: Int = 0,
-    val totalBranches: Int = 1
+    val totalBranches: Int = 1,
+    val tokensPerSecond: Double? = null,
+    val durationSeconds: Double? = null
 ) {
     val isUser: Boolean get() = role == "user"
     val isAssistant: Boolean get() = role == "assistant"

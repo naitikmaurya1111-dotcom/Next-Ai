@@ -778,6 +778,7 @@ async def run_agy_command(
 
         accumulated_text = ""
         sanitizer = MemoryStreamingSanitizer()
+        stream_start_time = time.time()
 
         while True:
             if process.stdout is None:
@@ -873,7 +874,17 @@ async def run_agy_command(
                         yield _make_event("chunk", final_chunk)
 
                     _, cleaned_done = extract_and_strip_memory_tags(sanitize_text(final_response))
-                    yield _make_event("done", cleaned_done.strip())
+                    elapsed_sec = max(0.05, time.time() - stream_start_time)
+                    tokens_est = max(1, int(len(accumulated_text or cleaned_done) / 3.8))
+                    tokens_per_sec = round(tokens_est / elapsed_sec, 1)
+
+                    yield _make_event(
+                        "done",
+                        cleaned_done.strip(),
+                        tokens_per_second=tokens_per_sec,
+                        duration_sec=round(elapsed_sec, 2),
+                        token_count=tokens_est
+                    )
 
             except json.JSONDecodeError:
                 # Filter out raw terminal escapes, telemetry, or unparsed logs from corrupting the response
@@ -890,7 +901,16 @@ async def run_agy_command(
             if not accumulated_text:
                 yield _make_event("error", f"AGY CLI error ({process.returncode}): {stderr_cleaned}")
             else:
-                yield _make_event("done", sanitize_text(accumulated_text).strip())
+                elapsed_sec = max(0.05, time.time() - stream_start_time)
+                tokens_est = max(1, int(len(accumulated_text) / 3.8))
+                tokens_per_sec = round(tokens_est / elapsed_sec, 1)
+                yield _make_event(
+                    "done",
+                    sanitize_text(accumulated_text).strip(),
+                    tokens_per_second=tokens_per_sec,
+                    duration_sec=round(elapsed_sec, 2),
+                    token_count=tokens_est
+                )
         else:
             if not accumulated_text:
                 yield _make_event("done", "")

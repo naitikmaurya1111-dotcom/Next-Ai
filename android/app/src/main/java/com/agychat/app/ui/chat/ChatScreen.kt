@@ -3090,6 +3090,41 @@ fun MessageItem(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
                                     )
                                 }
+                                if (message.tokensPerSecond != null && message.tokensPerSecond > 0.0) {
+                                    val speedStr = String.format(java.util.Locale.US, "%.1f", message.tokensPerSecond)
+                                    val durStr = if (message.durationSeconds != null && message.durationSeconds > 0.0)
+                                        " · ${String.format(java.util.Locale.US, "%.1fs", message.durationSeconds)}" else ""
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            0.5.dp,
+                                            ClaudeTerracotta.copy(alpha = 0.3f)
+                                        ),
+                                        modifier = Modifier.padding(start = 4.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Bolt,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(10.dp),
+                                                tint = ClaudeTerracotta
+                                            )
+                                            Text(
+                                                text = "$speedStr t/s$durStr",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontSize = 9.5.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                ),
+                                                color = ClaudeTerracotta
+                                            )
+                                        }
+                                    }
+                                }
                             }
 
                             // Action pills row (scrollable)
@@ -3326,24 +3361,24 @@ fun MessageItem(
                                 val hasSteps = cLower.contains("1.") || cLower.contains("step 1") || cLower.contains("first,")
 
                                 if (hasCode) {
-                                    list.add("🐞 Check for bugs" to "Review the code above for potential edge cases, security issues, or bugs.")
-                                    list.add("⚡ Optimize" to "How can this code be optimized for maximum speed and memory efficiency?")
-                                    list.add("🧪 Add tests" to "Write comprehensive unit tests with edge cases for this implementation.")
-                                    list.add("📄 Save to file" to "Please save this code to an appropriate file using the write_to_file tool.")
+                                    list.add("Check for bugs" to "Review the code above for potential edge cases, security issues, or bugs.")
+                                    list.add("Optimize code" to "How can this code be optimized for maximum speed and memory efficiency?")
+                                    list.add("Add unit tests" to "Write comprehensive unit tests with edge cases for this implementation.")
+                                    list.add("Save to workspace file" to "Please save this code to an appropriate file using the write_to_file tool.")
                                 } else if (hasError) {
-                                    list.add("🔧 How to fix" to "What are the exact step-by-step instructions to fix this error?")
-                                    list.add("🔍 Root cause" to "Can you explain the deep root cause of why this error happens?")
-                                    list.add("🛡️ Prevent this" to "How can we prevent this issue from happening again in the future?")
+                                    list.add("How to fix" to "What are the exact step-by-step instructions to fix this error?")
+                                    list.add("Root cause analysis" to "Can you explain the deep root cause of why this error happens?")
+                                    list.add("Prevent regression" to "How can we prevent this issue from happening again in the future?")
                                 } else if (hasSteps || isExplanation) {
-                                    list.add("🔍 Deep dive" to "Can you explain the technical internals in deeper detail?")
-                                    list.add("⚡ Key takeaways" to "Summarize the key takeaways and actionable points in bullet format.")
-                                    list.add("🧪 Concrete examples" to "Can you provide concrete practical examples illustrating this?")
-                                    list.add("📄 Document this" to "Please generate a formatted markdown documentation artifact summarizing this.")
+                                    list.add("Technical deep dive" to "Can you explain the technical internals in deeper detail?")
+                                    list.add("Key takeaways" to "Summarize the key takeaways and actionable points in bullet format.")
+                                    list.add("Concrete examples" to "Can you provide concrete practical examples illustrating this?")
+                                    list.add("Generate markdown doc" to "Please generate a formatted markdown documentation artifact summarizing this.")
                                 } else {
-                                    list.add("🔍 Explain in detail" to "Please explain this step-by-step in detail.")
-                                    list.add("⚡ Key takeaways" to "What are the key takeaways from this?")
-                                    list.add("🧪 Give examples" to "Can you provide concrete practical examples for this?")
-                                    list.add("📄 Save artifact" to "Please create a formatted artifact of this summary.")
+                                    list.add("Explain in detail" to "Please explain this step-by-step in detail.")
+                                    list.add("Key takeaways" to "What are the key takeaways from this?")
+                                    list.add("Practical examples" to "Can you provide concrete practical examples for this?")
+                                    list.add("Save summary artifact" to "Please create a formatted artifact of this summary.")
                                 }
                                 list.take(4)
                             }
@@ -4794,7 +4829,7 @@ fun EmptyChatGreeting(
             in 17..21 -> "Good evening"
             else -> "Good night"
         }
-        if (userName.isNotBlank()) "$timeGreeting, $userName 👋" else "What can I help with?"
+        if (userName.isNotBlank()) "$timeGreeting, $userName" else "What can I help with?"
     }
 
     val greetingSubtitle = remember(userOccupation) {
@@ -4807,34 +4842,34 @@ fun EmptyChatGreeting(
         val isDeep = depthLevel.equals("Expert", ignoreCase = true) || depthLevel.equals("Research", ignoreCase = true)
         when {
             occLower.contains("android") || occLower.contains("mobile") -> listOf(
-                Triple("📱 Jetpack Compose Architecture", "Review state hoisting, recomposition & UI performance", "Analyze our Jetpack Compose UI architecture, state hoisting patterns, and recomposition performance"),
-                Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
-                Triple("🌐 Android & Kotlin Docs", "Search latest AndroidX releases and official guidance", "/browser search latest Android Jetpack libraries and Kotlin releases"),
-                Triple("🎯 Autonomous Test Suite", "Run agentic loop until unit & UI tests are created", "/goal write comprehensive unit tests with edge cases")
+                Triple("Compose Architecture", "Review state hoisting, recomposition & UI performance", "Analyze our Jetpack Compose UI architecture, state hoisting patterns, and recomposition performance"),
+                Triple("Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
+                Triple("Android & Kotlin Docs", "Search latest AndroidX releases and official guidance", "/browser search latest Android Jetpack libraries and Kotlin releases"),
+                Triple("Autonomous Test Suite", "Run agentic loop until unit & UI tests are created", "/goal write comprehensive unit tests with edge cases")
             )
             occLower.contains("data") || occLower.contains("ml") || occLower.contains("ai") -> listOf(
-                Triple("🐍 Data Pipeline Optimization", "Vectorize operations and profile memory usage", "Review data processing pipeline and suggest vectorized high-performance optimizations"),
-                Triple("📊 Model Evaluation & Benchmarks", "Design metrics framework with precision & recall", "Design an automated evaluation benchmark framework with comprehensive evaluation metrics"),
-                Triple("🌐 AI Research Papers", "Search latest open-weights LLMs and arxiv papers", "/browser search latest open-weights LLMs and benchmark comparisons"),
-                Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features")
+                Triple("Data Pipeline Optimization", "Vectorize operations and profile memory usage", "Review data processing pipeline and suggest vectorized high-performance optimizations"),
+                Triple("Model Evaluation & Benchmarks", "Design metrics framework with precision & recall", "Design an automated evaluation benchmark framework with comprehensive evaluation metrics"),
+                Triple("AI Research Papers", "Search latest open-weights LLMs and arxiv papers", "/browser search latest open-weights LLMs and benchmark comparisons"),
+                Triple("Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features")
             )
             occLower.contains("student") || occLower.contains("learner") -> listOf(
-                Triple("🎓 Socratic Concept Tutor", "Break down complex topics using intuitive analogies", "Explain distributed consensus and Raft algorithm using intuitive everyday analogies"),
-                Triple("💻 Step-by-Step Code Walkthrough", "Analyze algorithms with time and space complexity", "Walk through this algorithm step-by-step with Big-O time and space complexity"),
-                Triple("🌐 Learning Resources & Guides", "Find top-rated tutorials and documentation", "/browser search best practical guides and documentation for beginners"),
-                Triple("📋 Structured Study Roadmap", "Build a 4-week structured curriculum", "/plan create 4-week structured study roadmap")
+                Triple("Socratic Concept Tutor", "Break down complex topics using intuitive analogies", "Explain distributed consensus and Raft algorithm using intuitive everyday analogies"),
+                Triple("Code Walkthrough", "Analyze algorithms with time and space complexity", "Walk through this algorithm step-by-step with Big-O time and space complexity"),
+                Triple("Learning Resources & Guides", "Find top-rated tutorials and documentation", "/browser search best practical guides and documentation for beginners"),
+                Triple("Structured Study Roadmap", "Build a 4-week structured curriculum", "/plan create 4-week structured study roadmap")
             )
             isDeep -> listOf(
-                Triple("🧠 Deep Architectural Analysis", "Holistic system review, edge cases & performance bottlenecks", "/boost analyze system architecture, concurrency invariants and bottlenecks"),
-                Triple("🎯 Autonomous Goal Execution", "Continuous agent loop until objective is verified and complete", "/goal implement comprehensive automated verification and tests"),
-                Triple("🌐 Real-time Internet Synthesis", "Live search for newest documentation, release notes & papers", "/browser search latest advances and official documentation"),
-                Triple("📋 Strategic Multi-step Plan", "Break down complex initiatives into verified milestones", "/plan design milestone-driven implementation roadmap")
+                Triple("Deep Architectural Analysis", "Holistic system review, edge cases & performance bottlenecks", "/boost analyze system architecture, concurrency invariants and bottlenecks"),
+                Triple("Autonomous Goal Execution", "Continuous agent loop until objective is verified and complete", "/goal implement comprehensive automated verification and tests"),
+                Triple("Real-time Internet Synthesis", "Live search for newest documentation, release notes & papers", "/browser search latest advances and official documentation"),
+                Triple("Strategic Multi-step Plan", "Break down complex initiatives into verified milestones", "/plan design milestone-driven implementation roadmap")
             )
             else -> listOf(
-                Triple("🌐 Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
-                Triple("💻 Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
-                Triple("📋 Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
-                Triple("🎯 Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
+                Triple("Real-time Web Search", "Search latest docs, news and live internet facts", "/browser search latest AI news"),
+                Triple("Write & Debug Code", "Analyze codebase architecture, find bugs and optimize", "/boost inspect code architecture and suggest improvements"),
+                Triple("Phased Roadmap", "Design step-by-step implementation milestones", "/plan create phased roadmap for new features"),
+                Triple("Autonomous Goal", "Continuous agent loop until objective is fully solved", "/goal review test coverage and implement missing tests")
             )
         }
     }
@@ -5100,9 +5135,32 @@ fun HistoryDrawerContent(
     onOpenCustomInstructions: () -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val filteredConversations = remember(conversations, searchQuery) {
-        if (searchQuery.isBlank()) conversations
-        else conversations.filter { it.title.contains(searchQuery, ignoreCase = true) }
+    var selectedDrawerFilter by remember { mutableStateOf("all") }
+
+    val now = System.currentTimeMillis()
+    val cal = remember(now) {
+        Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+    }
+    val todayStart = cal.timeInMillis
+    val yesterdayStart = todayStart - 86_400_000L
+    val sevenDaysAgo = todayStart - (7 * 86_400_000L)
+    val thirtyDaysAgo = todayStart - (30 * 86_400_000L)
+
+    val filteredConversations = remember(conversations, searchQuery, selectedDrawerFilter, sevenDaysAgo) {
+        conversations.filter { conv ->
+            val matchesSearch = searchQuery.isBlank() || conv.title.contains(searchQuery, ignoreCase = true)
+            val matchesFilter = when (selectedDrawerFilter) {
+                "pinned" -> conv.isPinned
+                "recent" -> conv.updatedAt >= sevenDaysAgo
+                else -> true
+            }
+            matchesSearch && matchesFilter
+        }
     }
 
     ModalDrawerSheet(
@@ -5198,22 +5256,65 @@ fun HistoryDrawerContent(
                 )
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
-            // Date grouping (Pinned, Today, Yesterday, Previous 7 Days, Previous 30 Days, Older)
-            val now = System.currentTimeMillis()
-            val cal = remember(now) {
-                Calendar.getInstance().apply {
-                    set(Calendar.HOUR_OF_DAY, 0)
-                    set(Calendar.MINUTE, 0)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
+            // Quick Filter Chips Row (All, Pinned, Recent)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    onClick = { selectedDrawerFilter = "all" },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selectedDrawerFilter == "all") ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, if (selectedDrawerFilter == "all") ClaudeTerracotta.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "All (${conversations.size})",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = if (selectedDrawerFilter == "all") FontWeight.Bold else FontWeight.Medium),
+                        color = if (selectedDrawerFilter == "all") ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+                val pinnedCount = remember(conversations) { conversations.count { it.isPinned } }
+                Surface(
+                    onClick = { selectedDrawerFilter = "pinned" },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selectedDrawerFilter == "pinned") Color(0xFFFFB300).copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, if (selectedDrawerFilter == "pinned") Color(0xFFFFB300).copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(Icons.Default.PushPin, contentDescription = null, modifier = Modifier.size(11.dp), tint = if (selectedDrawerFilter == "pinned") Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            text = "Pinned ($pinnedCount)",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = if (selectedDrawerFilter == "pinned") FontWeight.Bold else FontWeight.Medium),
+                            color = if (selectedDrawerFilter == "pinned") Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    onClick = { selectedDrawerFilter = "recent" },
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (selectedDrawerFilter == "recent") ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    border = androidx.compose.foundation.BorderStroke(0.6.dp, if (selectedDrawerFilter == "recent") ClaudeTerracotta.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "Recent",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = if (selectedDrawerFilter == "recent") FontWeight.Bold else FontWeight.Medium),
+                        color = if (selectedDrawerFilter == "recent") ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
-            val todayStart = cal.timeInMillis
-            val yesterdayStart = todayStart - 86_400_000L
-            val sevenDaysAgo = todayStart - (7 * 86_400_000L)
-            val thirtyDaysAgo = todayStart - (30 * 86_400_000L)
+
+            Spacer(Modifier.height(8.dp))
 
             val pinnedList = filteredConversations.filter { it.isPinned }
             val unpinnedList = filteredConversations.filter { !it.isPinned }

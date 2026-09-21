@@ -1653,12 +1653,14 @@ class ChatViewModel @Inject constructor(
                     appendContentChunk(content)
                 }
                 "done" -> {
+                    val tokensPerSec = json.optDouble("tokens_per_second", 0.0).takeIf { it > 0.0 }
+                    val durationSec = json.optDouble("duration_sec", 0.0).takeIf { it > 0.0 }
                     if (isGenerationCancelled) {
                         isGenerationCancelled = false
                         _isLoading.value = false
                         _currentStatus.value = null
                     } else {
-                        finalizeStreamingMessage(content)
+                        finalizeStreamingMessage(content, tokensPerSec, durationSec)
                         _isLoading.value = false
                         _currentStatus.value = null
                     }
@@ -2070,7 +2072,11 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun finalizeStreamingMessage(finalContent: String? = null) {
+    private fun finalizeStreamingMessage(
+        finalContent: String? = null,
+        tokensPerSec: Double? = null,
+        durationSec: Double? = null
+    ) {
         synchronized(streamBatchLock) {
             streamBatchJob?.cancel()
             streamBatchJob = null
@@ -2086,7 +2092,9 @@ class ChatViewModel @Inject constructor(
             val finalized = cur.copy(
                 content = resolvedContent,
                 isStreaming = false,
-                isThinking = false
+                isThinking = false,
+                tokensPerSecond = tokensPerSec ?: cur.tokensPerSecond,
+                durationSeconds = durationSec ?: cur.durationSeconds
             )
             list[idx] = finalized
             _messages.value = list
@@ -2786,7 +2794,10 @@ class ChatViewModel @Inject constructor(
                 arr.toString()
             } else null
 
-            val toolExecutionsJson = if (message.toolExecutions.isNotEmpty()) {
+            val toolExecutionsJson = if (message.toolExecutions.isNotEmpty() || message.tokensPerSecond != null || message.durationSeconds != null) {
+                val envelope = org.json.JSONObject()
+                if (message.tokensPerSecond != null) envelope.put("tokensPerSecond", message.tokensPerSecond)
+                if (message.durationSeconds != null) envelope.put("durationSeconds", message.durationSeconds)
                 val arr = org.json.JSONArray()
                 message.toolExecutions.forEach { t ->
                     arr.put(JSONObject().apply {
@@ -2800,7 +2811,8 @@ class ChatViewModel @Inject constructor(
                         put("durationSeconds", t.durationSeconds)
                     })
                 }
-                arr.toString()
+                envelope.put("tools", arr)
+                envelope.toString()
             } else null
 
             val memoryUpdatesJson = if (message.memoryUpdates.isNotEmpty()) {
@@ -3223,9 +3235,21 @@ class ChatViewModel @Inject constructor(
             emptyList()
         }
 
+        var extractedTokensPerSec: Double? = null
+        var extractedDurationSec: Double? = null
+
         val parsedToolExecutions = if (!entity.toolExecutionsJson.isNullOrBlank()) {
             try {
-                val arr = org.json.JSONArray(entity.toolExecutionsJson)
+                val trimmed = entity.toolExecutionsJson.trim()
+                val arr: org.json.JSONArray
+                if (trimmed.startsWith("{")) {
+                    val envelope = org.json.JSONObject(trimmed)
+                    extractedTokensPerSec = if (envelope.has("tokensPerSecond")) envelope.optDouble("tokensPerSecond", 0.0).takeIf { it > 0.0 } else null
+                    extractedDurationSec = if (envelope.has("durationSeconds")) envelope.optDouble("durationSeconds", 0.0).takeIf { it > 0.0 } else null
+                    arr = envelope.optJSONArray("tools") ?: org.json.JSONArray()
+                } else {
+                    arr = org.json.JSONArray(trimmed)
+                }
                 val list = mutableListOf<ToolExecutionItem>()
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
@@ -3281,7 +3305,9 @@ class ChatViewModel @Inject constructor(
             memoryUpdates = parsedMemoryUpdates,
             parentMessageId = entity.parentMessageId,
             branchIndex = activeBranchIndex,
-            totalBranches = totalBranches
+            totalBranches = totalBranches,
+            tokensPerSecond = extractedTokensPerSec,
+            durationSeconds = extractedDurationSec
         )
     }
 
