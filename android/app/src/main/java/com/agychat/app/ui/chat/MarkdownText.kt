@@ -120,6 +120,68 @@ fun normalizeLatexFormula(raw: String): String {
     return s.trim()
 }
 
+// ─── Balanced Brace & Math Extraction Helpers ─────────────────────────────────
+fun findMatchingBrace(text: CharSequence, openIdx: Int): Int {
+    var depth = 0
+    for (i in openIdx until text.length) {
+        if (text[i] == '{') depth++
+        else if (text[i] == '}') {
+            depth--
+            if (depth == 0) return i
+        }
+    }
+    return -1
+}
+
+fun extractBraceArg(text: String, startIndex: Int): Pair<String, Int>? {
+    val openIdx = text.indexOf('{', startIndex)
+    if (openIdx == -1) return null
+    val closeIdx = findMatchingBrace(text, openIdx)
+    if (closeIdx == -1) return null
+    return Pair(text.substring(openIdx + 1, closeIdx), closeIdx + 1)
+}
+
+// ─── Math Tokens for Native Stacked Fractions ─────────────────────────────────
+sealed class MathToken {
+    data class Text(val text: String) : MathToken()
+    data class Fraction(val numerator: String, val denominator: String) : MathToken()
+}
+
+fun tokenizeMathFormula(formula: String): List<MathToken> {
+    val tokens = mutableListOf<MathToken>()
+    var curr = 0
+    val fracRegex = Regex("""\\?(?:d|t|c)?frac\s*\{""")
+    while (curr < formula.length) {
+        val m = fracRegex.find(formula, curr)
+        if (m == null) {
+            val tail = formula.substring(curr)
+            if (tail.isNotEmpty()) tokens.add(MathToken.Text(tail))
+            break
+        }
+        val startIdx = m.range.first
+        if (startIdx > curr) {
+            tokens.add(MathToken.Text(formula.substring(curr, startIdx)))
+        }
+        val numArg = extractBraceArg(formula, startIdx)
+        if (numArg == null) {
+            tokens.add(MathToken.Text(formula.substring(startIdx, m.range.last + 1)))
+            curr = m.range.last + 1
+            continue
+        }
+        val (num, nextIdx) = numArg
+        val denArg = extractBraceArg(formula, nextIdx)
+        if (denArg == null) {
+            tokens.add(MathToken.Text(formula.substring(startIdx, nextIdx)))
+            curr = nextIdx
+            continue
+        }
+        val (den, endIdx) = denArg
+        tokens.add(MathToken.Fraction(num, den))
+        curr = endIdx
+    }
+    return tokens
+}
+
 // ─── High-quality Unicode fallback for inline math ───────────────────────────
 /**
  * Converts LaTeX notation into clean Unicode. Used as the immediate fallback
@@ -152,42 +214,103 @@ fun formatLatexToUnicode(raw: String): String {
     text = text.replace(Regex("""\\begin\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
     text = text.replace(Regex("""\\end\{(?:equation\*?|align\*?|aligned|gather\*?|split)\}"""), "")
 
-    // Quantum bra/ket
-    text = text.replace(Regex("""\\braket\{([^{}]+)\}\{([^{}]+)\}""")) { "⟨${it.groupValues[1]}|${it.groupValues[2]}⟩" }
-    text = text.replace(Regex("""\\ket\{([^{}]+)\}""")) { "|${it.groupValues[1]}⟩" }
-    text = text.replace(Regex("""\\bra\{([^{}]+)\}""")) { "⟨${it.groupValues[1]}|" }
+    // Quantum bra/ket with balanced braces
     text = text.replace("\\langle", "⟨").replace("\\rangle", "⟩")
+    var qIter = 0
+    while (qIter++ < 10) {
+        val m = Regex("""\\(?:braket|bra|ket)\s*\{""").find(text) ?: break
+        val startIdx = m.range.first
+        val isBraket = text.startsWith("\\braket", startIdx)
+        val isBra    = text.startsWith("\\bra", startIdx)
+        val isKet    = text.startsWith("\\ket", startIdx)
+        val firstArg = extractBraceArg(text, startIdx) ?: break
+        if (isBraket) {
+            val secondArg = extractBraceArg(text, firstArg.second)
+            if (secondArg != null) {
+                text = text.substring(0, startIdx) + "⟨${firstArg.first}|${secondArg.first}⟩" + text.substring(secondArg.second)
+            } else {
+                text = text.substring(0, startIdx) + "⟨${firstArg.first}⟩" + text.substring(firstArg.second)
+            }
+        } else if (isBra) {
+            text = text.substring(0, startIdx) + "⟨${firstArg.first}|" + text.substring(firstArg.second)
+        } else if (isKet) {
+            text = text.substring(0, startIdx) + "|${firstArg.first}⟩" + text.substring(firstArg.second)
+        }
+    }
 
-    // Accents
-    text = text.replace(Regex("""\\vec\{([^{}]+)\}"""))   { "${it.groupValues[1]}⃗" }
-    text = text.replace(Regex("""\\dot\{([^{}]+)\}"""))   { "${it.groupValues[1]}̇" }
-    text = text.replace(Regex("""\\ddot\{([^{}]+)\}"""))  { "${it.groupValues[1]}̈" }
-    text = text.replace(Regex("""\\bar\{([^{}]+)\}"""))   { "${it.groupValues[1]}̄" }
-    text = text.replace(Regex("""\\tilde\{([^{}]+)\}""")) { "${it.groupValues[1]}̃" }
+    // Accents with balanced braces
+    val accentTags = listOf(
+        "\\vec" to "⃗", "\\dot" to "̇", "\\ddot" to "̈",
+        "\\bar" to "̄", "\\tilde" to "̃", "\\hat" to "̂"
+    )
+    for ((tag, mark) in accentTags) {
+        var aIter = 0
+        while (aIter++ < 15) {
+            val idx = text.indexOf(tag)
+            if (idx == -1) break
+            val arg = extractBraceArg(text, idx)
+            if (arg != null) {
+                text = text.substring(0, idx) + "${arg.first}$mark" + text.substring(arg.second)
+            } else {
+                val after = text.substring(idx + tag.length).trimStart()
+                if (after.isNotEmpty() && after.first().isLetter()) {
+                    val ch = after.first()
+                    text = text.substring(0, idx) + "$ch$mark" + after.substring(1)
+                } else {
+                    text = text.replaceFirst(tag, "")
+                }
+            }
+        }
+    }
 
-    text = text.replace("\\left", "").replace("\\right", "")
+    // Text & Math decorators with balanced braces
+    val decoratorRegex = Regex("""\\(?:text|mathrm|operatorname\*?|mathbf|boldsymbol|bm|mathit|mathsf|textbf)\s*\{""")
+    var decIter = 0
+    while (decIter++ < 25) {
+        val m = decoratorRegex.find(text) ?: break
+        val startIdx = m.range.first
+        val arg = extractBraceArg(text, startIdx) ?: break
+        val isBold = text.startsWith("\\mathbf", startIdx) || text.startsWith("\\boldsymbol", startIdx) || text.startsWith("\\bm", startIdx)
+        val inner = if (isBold) {
+            val boldMap = mapOf(
+                'E' to "𝐄", 'B' to "𝐁", 'F' to "𝐅", 'v' to "𝐯", 'p' to "𝐩",
+                'r' to "𝐫", 'J' to "𝐉", 'A' to "𝐀", 'S' to "𝐒", 'k' to "𝐤",
+                'l' to "𝐥", 'n' to "𝐧", 'I' to "𝐈", 'q' to "𝐪", 'a' to "𝐚",
+                'b' to "𝐛", 'c' to "𝐜", 'd' to "𝐝", 'e' to "𝐞", 'm' to "𝐦",
+                'H' to "𝐇", 'M' to "𝐌", 'C' to "𝐂", 'P' to "𝐏", 'T' to "𝐓",
+                'Q' to "𝐐", 'R' to "𝐑", 'u' to "𝐮", 'w' to "𝐰", 'x' to "𝐱",
+                'y' to "𝐲", 'z' to "𝐳"
+            )
+            arg.first.map { boldMap[it] ?: it.toString() }.joinToString("")
+        } else {
+            arg.first
+        }
+        text = text.substring(0, startIdx) + inner + text.substring(arg.second)
+    }
 
-    // Text decorators
-    text = text.replace(Regex("""\\text\{([^}]+)\}"""))       { it.groupValues[1] }
-    text = text.replace(Regex("""\\mathrm\{([^}]+)\}"""))     { it.groupValues[1] }
-    text = text.replace(Regex("""\\mathbf\{([^}]+)\}"""))     { it.groupValues[1] }
-    text = text.replace(Regex("""\\boldsymbol\{([^}]+)\}""")) { it.groupValues[1] }
+    // Roots with balanced braces
+    val sqrtRegex = Regex("""\\?sqrt(?:\[([0-9]+)\])?\s*\{""")
+    var sIter = 0
+    while (sIter++ < 15) {
+        val m = sqrtRegex.find(text) ?: break
+        val startIdx = m.range.first
+        val degree = m.groupValues[1]
+        val arg = extractBraceArg(text, startIdx) ?: break
+        val prefix = when (degree) { "3" -> "∛"; "4" -> "∜"; else -> "√" }
+        text = text.substring(0, startIdx) + "$prefix(${arg.first})" + text.substring(arg.second)
+    }
 
-    // Blackboard bold
-    val bbMap = mapOf("R" to "ℝ", "C" to "ℂ", "N" to "ℕ", "Z" to "ℤ", "Q" to "ℚ", "H" to "ℍ")
-    for ((k, v) in bbMap) text = text.replace("\\mathbb{$k}", v).replace("\\mathbb $k", v)
+    // Fractions with balanced braces (nested fractions handled cleanly)
+    val fracRegex = Regex("""\\?(?:d|t|c)?frac\s*\{""")
+    var fIter = 0
+    while (fIter++ < 25) {
+        val m = fracRegex.find(text) ?: break
+        val startIdx = m.range.first
+        val numArg = extractBraceArg(text, startIdx) ?: break
+        val denArg = extractBraceArg(text, numArg.second) ?: break
+        val num = numArg.first.trim()
+        val den = denArg.first.trim()
 
-    val calMap = mapOf("H" to "ℋ","E" to "ℰ","L" to "ℒ","M" to "ℳ","F" to "ℱ","O" to "𝒪","P" to "𝒫","D" to "𝒟","C" to "𝒞","N" to "𝒩","B" to "ℬ","A" to "𝒜")
-    for ((k, v) in calMap) text = text.replace("\\mathcal{$k}", v).replace("\\mathcal $k", v)
-
-    val hats = mapOf("H" to "Ĥ","A" to "Â","B" to "B̂","p" to "p̂","x" to "x̂","y" to "ŷ","z" to "ẑ","\\rho" to "ρ̂","rho" to "ρ̂","\\psi" to "ψ̂","psi" to "ψ̂","\\phi" to "ϕ̂","phi" to "ϕ̂")
-    for ((k, v) in hats) text = text.replace("\\hat{$k}", v).replace("\\hat $k", v)
-
-    // Fractions (simple cases → Unicode symbols, complex → clean a / b)
-    val fracRx = Regex("""\\?frac\{([^{}]+)\}\{([^{}]+)\}""")
-    repeat(12) {
-        val m = fracRx.find(text) ?: return@repeat
-        val num = m.groupValues[1].trim(); val den = m.groupValues[2].trim()
         val rep = when {
             num == "1" && den == "2" -> "½"
             num == "1" && den == "3" -> "⅓"
@@ -206,25 +329,33 @@ fun formatLatexToUnicode(raw: String): String {
             num == "7" && den == "8" -> "⅞"
             num == "d" && den == "dx" -> "d/dx"
             num == "d" && den == "dt" -> "d/dt"
-            num == "u" && den == "v" -> "u/v"
-            num == "1" && den.startsWith("|") -> "1/$den"
+            num == "u" && den == "v"  -> "u/v"
+            num.length == 1 && den.length == 1 && num.first().isLetterOrDigit() && den.first().isLetterOrDigit() -> "$num/$den"
             else -> {
-                val n = if (num.contains("[+\\-\\s]".toRegex()) && !num.startsWith("(") && !num.endsWith(")")) "($num)" else num
-                val d = if (den.contains("[+\\-\\s\\\\]".toRegex()) && !den.startsWith("(") && !den.endsWith(")")) "($den)" else den
+                val n = if (num.contains(Regex("[+\\-\\s]")) && !num.startsWith("(") && !num.endsWith(")")) "($num)" else num
+                val d = if (den.contains(Regex("[+\\-\\s\\\\]")) && !den.startsWith("(") && !den.endsWith(")")) "($den)" else den
                 "$n / $d"
             }
         }
-        text = text.replaceRange(m.range, rep)
+        text = text.substring(0, startIdx) + rep + text.substring(denArg.second)
     }
+    // Clean up any remaining bare \frac or frac
+    text = text.replace(Regex("""\\?(?:d|t|c)?frac\b"""), "")
 
-    // Roots
-    text = text.replace(Regex("""\\?sqrt\[3\]\{([^{}]+)\}""")) { "∛(${it.groupValues[1]})" }
-    text = text.replace(Regex("""\\?sqrt\[4\]\{([^{}]+)\}""")) { "∜(${it.groupValues[1]})" }
-    text = text.replace(Regex("""\\?sqrt\{([^{}]+)\}"""))      { "√(${it.groupValues[1]})" }
+    // Blackboard bold
+    val bbMap = mapOf("R" to "ℝ", "C" to "ℂ", "N" to "ℕ", "Z" to "ℤ", "Q" to "ℚ", "H" to "ℍ")
+    for ((k, v) in bbMap) text = text.replace("\\mathbb{$k}", v).replace("\\mathbb $k", v)
+
+    val calMap = mapOf("H" to "ℋ","E" to "ℰ","L" to "ℒ","M" to "ℳ","F" to "ℱ","O" to "𝒪","P" to "𝒫","D" to "𝒟","C" to "𝒞","N" to "𝒩","B" to "ℬ","A" to "𝒜")
+    for ((k, v) in calMap) text = text.replace("\\mathcal{$k}", v).replace("\\mathcal $k", v)
+
+    val hats = mapOf("H" to "Ĥ","A" to "Â","B" to "B̂","p" to "p̂","x" to "x̂","y" to "ŷ","z" to "ẑ","\\rho" to "ρ̂","rho" to "ρ̂","\\psi" to "ψ̂","psi" to "ψ̂","\\phi" to "ϕ̂","phi" to "ϕ̂")
+    for ((k, v) in hats) text = text.replace("\\hat{$k}", v).replace("\\hat $k", v)
 
     // Greek letters and math symbols
     val symbols = listOf(
         "\\varepsilon_0" to "ε₀","\\epsilon_0" to "ε₀",
+        "\\mu_0" to "μ₀","\\Phi_0" to "Φ₀","\\nu_0" to "ν₀","\\lambda_0" to "λ₀",
         "\\vec{\\tau}" to "τ⃗","\\vec{\\mu}" to "μ⃗","\\vec{p}" to "p⃗","\\vec{r}" to "r⃗",
         "\\vec{E}" to "E⃗","\\vec{B}" to "B⃗","\\vec{F}" to "F⃗","\\vec{v}" to "v⃗","\\vec{A}" to "A⃗",
         "\\hat{r}" to "r̂","\\hat{p}" to "p̂","\\hat{n}" to "n̂","\\hat{i}" to "î","\\hat{j}" to "ĵ","\\hat{k}" to "k̂",
@@ -251,25 +382,43 @@ fun formatLatexToUnicode(raw: String): String {
         "\\ldots" to "…","\\cdots" to "⋯","\\dots" to "…",
         "\\cos" to "cos","\\sin" to "sin","\\tan" to "tan","\\det" to "det",
         "\\gcd" to "gcd","\\lim" to "lim","\\ln" to "ln","\\log" to "log","\\exp" to "exp",
-        "\\{" to "{","\\}" to "}","\\," to " ","\\;" to " ","\\quad" to " ","\\qquad" to "  "
+        "\\{" to "{","\\}" to "}","\\," to " ","\\;" to " ","\\:" to " ","\\!" to "",
+        "\\quad" to " ","\\qquad" to "  "
     )
     for ((k, v) in symbols) text = text.replace(k, v)
 
-    // Superscripts
+    // Superscripts with balanced braces
     val supsMap = mapOf('0' to '⁰','1' to '¹','2' to '²','3' to '³','4' to '⁴','5' to '⁵','6' to '⁶','7' to '⁷','8' to '⁸','9' to '⁹','+' to '⁺','-' to '⁻','=' to '⁼','(' to '⁽',')' to '⁾','a' to 'ᵃ','b' to 'ᵇ','c' to 'ᶜ','d' to 'ᵈ','e' to 'ᵉ','f' to 'ᶠ','g' to 'ᵍ','h' to 'ʰ','i' to 'ⁱ','j' to 'ʲ','k' to 'ᵏ','l' to 'ˡ','m' to 'ᵐ','n' to 'ⁿ','o' to 'ᵒ','p' to 'ᵖ','r' to 'ʳ','s' to 'ˢ','t' to 'ᵗ','u' to 'ᵘ','v' to 'ᵛ','w' to 'ʷ','x' to 'ˣ','y' to 'ʸ','z' to 'ᶻ','†' to '†')
-    text = text.replace(Regex("""\^\{([^{}]+)\}|\^([0-9a-zA-Z+\-†])""")) { m ->
-        val c = m.groupValues[1].ifEmpty { m.groupValues[2] }
-        c.map { supsMap[it] ?: it }.joinToString("")
+    var supIter = 0
+    while (supIter++ < 15) {
+        val idx = text.indexOf("^{")
+        if (idx == -1) break
+        val arg = extractBraceArg(text, idx + 1) ?: break
+        val converted = arg.first.map { supsMap[it] ?: it }.joinToString("")
+        text = text.substring(0, idx) + converted + text.substring(arg.second)
+    }
+    text = text.replace(Regex("""\^([0-9a-zA-Z+\-†])""")) { m ->
+        val c = m.groupValues[1].firstOrNull() ?: ' '
+        (supsMap[c] ?: c).toString()
     }
 
-    // Subscripts
-    val subsMap = mapOf('0' to '₀','1' to '₁','2' to '₂','3' to '₃','4' to '₄','5' to '₅','6' to '₆','7' to '₇','8' to '₈','9' to '₉','+' to '₊','-' to '₋','=' to '₌','(' to '₍',')' to '₎','a' to 'ₐ','e' to 'ₑ','h' to 'ₕ','i' to 'ᵢ','j' to 'ⱼ','k' to 'ₖ','l' to 'ₗ','m' to 'ₘ','n' to 'ₙ','o' to 'ₒ','p' to 'ₚ','r' to 'ᵣ','s' to 'ₛ','t' to 'ₜ','u' to 'ᵤ','v' to 'ᵥ','x' to 'ₓ')
-    text = text.replace(Regex("""_\{([^{}]+)\}|_([0-9a-zA-Z+\-])""")) { m ->
-        val c = m.groupValues[1].ifEmpty { m.groupValues[2] }
-        c.map { subsMap[it] ?: it }.joinToString("")
+    // Subscripts with balanced braces
+    val subsMap = mapOf('0' to '₀','1' to '₁','2' to '₂','3' to '₃','4' to '₄','5' to '₅','6' to '₆','7' to '₇','8' to '₈','9' to '₉','+' to '₊','-' to '₋','=' to '₌','(' to '₍',')' to '₎','a' to 'ₐ','e' to 'ₑ','h' to 'ₕ','i' to 'ᵢ','j' to 'ⱼ','k' to 'ₖ','l' to 'ₗ','m' to 'ₘ','n' to 'ₙ','o' to 'ₒ','p' to 'ₚ','r' to 'ᵣ','s' to 'ₛ','t' to 'ₜ','u' to 'ᵤ','v' to 'ᵥ','x' to 'ₓ','c' to '꜀')
+    var subIter = 0
+    while (subIter++ < 15) {
+        val idx = text.indexOf("_{")
+        if (idx == -1) break
+        val arg = extractBraceArg(text, idx + 1) ?: break
+        val converted = arg.first.map { subsMap[it] ?: it }.joinToString("")
+        text = text.substring(0, idx) + converted + text.substring(arg.second)
+    }
+    text = text.replace(Regex("""_([0-9a-zA-Z+\-])""")) { m ->
+        val c = m.groupValues[1].firstOrNull() ?: ' '
+        (subsMap[c] ?: c).toString()
     }
 
     // Clean remaining delimiters and stray backslashes
+    text = text.replace("\\left", "").replace("\\right", "")
     text = text.replace("\$\$", "").replace("\$", "")
     text = text.replace("\\[", "").replace("\\]", "")
     text = text.replace("\\(", "").replace("\\)", "")
@@ -383,14 +532,122 @@ class KaTeXBridge(private val onHeight: (Int) -> Unit) {
     fun onSize(w: Double, h: Double) { onHeight(h.toInt()) }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Native Compose Stacked Fraction & Math Views (Textbook vinculum layout)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
- * Renders a LaTeX formula using KaTeX in a WebView.
- *
- * - No bitmap snapshot; the WebView is the live rendering surface.
- * - Height is measured by JS (document.body.scrollHeight) and reported via AndroidBridge.
- * - Inline/display mode selected by [isDisplayMode].
- * - Falls back to a Unicode text preview while the WebView initialises.
+ * Renders a stacked mathematical fraction with a crisp horizontal division bar
+ * (vinculum), centering the numerator above and denominator below.
  */
+@Composable
+fun StackedFractionView(
+    numerator: String,
+    denominator: String,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val formattedNum = remember(numerator) { formatLatexToUnicode(numerator) }
+    val formattedDen = remember(denominator) { formatLatexToUnicode(denominator) }
+
+    Column(
+        modifier = modifier
+            .padding(horizontal = 4.dp, vertical = 2.dp)
+            .width(IntrinsicSize.Max),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Numerator
+        Text(
+            text = formattedNum,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontFamily = FontFamily.Serif,
+                fontStyle = FontStyle.Italic,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.5.sp,
+                lineHeight = 18.sp
+            ),
+            color = textColor,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(bottom = 1.dp)
+        )
+        // Solid horizontal fraction line (vinculum) "------"
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp, horizontal = 1.dp)
+                .height(1.8.dp)
+                .clip(RoundedCornerShape(1.dp))
+                .background(textColor.copy(alpha = 0.85f))
+        )
+        // Denominator
+        Text(
+            text = formattedDen,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontFamily = FontFamily.Serif,
+                fontStyle = FontStyle.Italic,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.5.sp,
+                lineHeight = 18.sp
+            ),
+            color = textColor,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 1.dp)
+        )
+    }
+}
+
+/**
+ * Native Compose mathematical equation view:
+ * Tokenizes LaTeX formulas into text terms and stacked fractions,
+ * aligning math operators with the fraction line for an authentic textbook appearance.
+ */
+@Composable
+fun NativeMathEquationView(
+    formula: String,
+    textColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val tokens = remember(formula) { tokenizeMathFormula(formula) }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Start
+    ) {
+        tokens.forEach { token ->
+            when (token) {
+                is MathToken.Text -> {
+                    val formatted = remember(token.text) { formatLatexToUnicode(token.text) }
+                    if (formatted.isNotBlank()) {
+                        Text(
+                            text = formatted,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontFamily = FontFamily.Serif,
+                                fontStyle = FontStyle.Italic,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 17.sp,
+                                letterSpacing = 0.2.sp
+                            ),
+                            color = textColor
+                        )
+                    }
+                }
+                is MathToken.Fraction -> {
+                    StackedFractionView(
+                        numerator = token.numerator,
+                        denominator = token.denominator,
+                        textColor = textColor
+                    )
+                }
+            }
+        }
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun KaTeXMathView(
@@ -404,8 +661,6 @@ fun KaTeXMathView(
     // Start at a sensible default height so the layout doesn't collapse
     var heightDp by remember(formula) { mutableStateOf(if (isDisplayMode) 52.dp else 28.dp) }
     var isReady  by remember { mutableStateOf(false) }
-
-    val unicodeFallback = remember(formula) { formatLatexToUnicode(formula) }
 
     // Track the WebView instance and page-loaded state
     var webViewRef     by remember { mutableStateOf<WebView?>(null) }
@@ -430,23 +685,12 @@ fun KaTeXMathView(
             .then(if (isDisplayMode) Modifier.height(heightDp) else Modifier.wrapContentHeight()),
         contentAlignment = Alignment.CenterStart
     ) {
-        // ── Unicode fallback (shown while WebView loads) ─────────────────────
+        // ── Native Compose math fallback (shown with stacked fractions while WebView loads) ──
         if (!isReady) {
-            Text(
-                text = unicodeFallback,
-                style = MaterialTheme.typography.bodyLarge.copy(
-                    fontFamily    = FontFamily.Serif,
-                    fontStyle     = FontStyle.Italic,
-                    fontWeight    = FontWeight.Medium,
-                    fontSize      = if (isDisplayMode) 17.sp else 15.sp,
-                    letterSpacing = 0.3.sp
-                ),
-                color     = if (isDark) Color(0xFFECECF1) else Color(0xFF0D0D0D),
-                textAlign = TextAlign.Start,
-                modifier  = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(vertical = 2.dp)
+            NativeMathEquationView(
+                formula   = formula,
+                textColor = if (isDark) Color(0xFFECECF1) else Color(0xFF0D0D0D),
+                modifier  = Modifier.fillMaxWidth()
             )
         }
 
@@ -459,6 +703,8 @@ fun KaTeXMathView(
                     settings.domStorageEnabled = true
                     settings.allowFileAccess  = true
                     settings.allowContentAccess = true
+                    settings.allowFileAccessFromFileURLs = true
+                    settings.allowUniversalAccessFromFileURLs = true
                     settings.useWideViewPort  = false
                     settings.loadWithOverviewMode = false
                     isHorizontalScrollBarEnabled = false
@@ -480,6 +726,8 @@ fun KaTeXMathView(
                         override fun onPageFinished(view: WebView?, url: String?) {
                             super.onPageFinished(view, url)
                             pageFinished = true
+                            val safe = JSONObject.quote(formula)
+                            view?.evaluateJavascript("window.renderMath($safe, $isDisplayMode, $isDark);", null)
                         }
                     }
 
@@ -518,7 +766,6 @@ fun MathEquationBlockView(
 ) {
     val context     = LocalContext.current
     val haptic      = LocalHapticFeedback.current
-    val isDark      = MaterialTheme.colorScheme.background.red < 0.5f
     val normFormula = remember(formula) { normalizeLatexFormula(formula) }
 
     // Pure unboxed equation container matching ChatGPT:
@@ -541,11 +788,10 @@ fun MathEquationBlockView(
         contentAlignment = Alignment.CenterStart
     ) {
         DisableSelection {
-            KaTeXMathView(
-                formula       = normFormula,
-                isDark        = isDark,
-                isDisplayMode = true,
-                modifier      = Modifier.fillMaxWidth()
+            NativeMathEquationView(
+                formula   = normFormula,
+                textColor = textColor,
+                modifier  = Modifier.fillMaxWidth()
             )
         }
     }

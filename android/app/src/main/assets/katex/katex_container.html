@@ -105,11 +105,11 @@
             } else {
                 h = Math.ceil(Math.max(document.body.scrollHeight, 20));
             }
-            if (force || Math.abs(h - lastH) >= 1) {
-                lastH = h;
-                if (window.AndroidBridge) {
-                    try { window.AndroidBridge.onHeight(h); } catch(e) {}
-                }
+            if (window.AndroidBridge) {
+                try {
+                    window.AndroidBridge.onHeight(h);
+                    lastH = h;
+                } catch(e) {}
             }
         }
 
@@ -143,7 +143,19 @@
                     "\\e": "\\mathrm{e}",
                     "\\adj": "\\operatorname{adj}",
                     "\\rank": "\\operatorname{rank}",
-                    "\\tr": "\\operatorname{tr}"
+                    "\\tr": "\\operatorname{tr}",
+                    "\\boldsymbol": "\\mathbf",
+                    "\\bm": "\\mathbf",
+                    "\\oint": "\\int",
+                    "\\unit": "\\mathrm",
+                    "\\degree": "^{\\circ}",
+                    "\\AA": "\\text{\\AA}",
+                    "\\angstrom": "\\text{\\AA}",
+                    "\\micro": "\\mu",
+                    "\\hbar": "\\hslash",
+                    "\\dfrac": "\\frac",
+                    "\\tfrac": "\\frac",
+                    "\\cfrac": "\\frac"
                 }
             };
 
