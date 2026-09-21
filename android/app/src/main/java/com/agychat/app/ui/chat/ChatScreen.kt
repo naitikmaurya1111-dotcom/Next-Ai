@@ -2292,18 +2292,35 @@ fun MessageItem(
                 horizontalAlignment = Alignment.End
             ) {
                 Box(
-                        modifier = Modifier
-                            .widthIn(min = 48.dp, max = 560.dp)
-                            .clip(RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .border(
-                                width = if (isSearchMatch) 2.dp else 0.8.dp,
-                                color = if (isSearchMatch) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-                                shape = RoundedCornerShape(20.dp, 20.dp, 4.dp, 20.dp)
+                    modifier = Modifier
+                        .widthIn(min = 48.dp, max = 580.dp)
+                        .clip(RoundedCornerShape(22.dp, 22.dp, 5.dp, 22.dp))
+                        .background(
+                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                colors = if (MaterialTheme.colorScheme.background.red < 0.5f)
+                                    listOf(Color(0xFF2A2A2E), Color(0xFF242428))
+                                else
+                                    listOf(Color(0xFFF2F2F5), Color(0xFFECECF0))
                             )
-                            .padding(horizontal = 16.dp, vertical = 11.dp)
-                    ) {
-                        Column {
+                        )
+                        .then(
+                            if (isSearchMatch)
+                                Modifier.border(2.dp, ClaudeTerracotta, RoundedCornerShape(22.dp, 22.dp, 5.dp, 22.dp))
+                            else
+                                Modifier.border(
+                                    width = 1.dp,
+                                    brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                                        colors = if (MaterialTheme.colorScheme.background.red < 0.5f)
+                                            listOf(Color(0xFF3E3E44), Color(0xFF2E2E34))
+                                        else
+                                            listOf(Color(0xFFDDDDE4), Color(0xFFD0D0D8))
+                                    ),
+                                    shape = RoundedCornerShape(22.dp, 22.dp, 5.dp, 22.dp)
+                                )
+                        )
+                        .padding(horizontal = 18.dp, vertical = 13.dp)
+                ) {
+                    Column {
                             if (!message.replyToContent.isNullOrBlank()) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
@@ -2621,25 +2638,52 @@ fun MessageItem(
             }
         }
         "assistant" -> {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Start
-            ) {
-                // Next AI Continuum Avatar
-                NextAiLogo(
-                    size = 30.dp,
-                    showBackground = true
-                )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Header: Avatar + Model name inline
+                Row(
+                    modifier = Modifier.padding(bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Next AI Continuum Avatar
+                    NextAiLogo(
+                        size = 28.dp,
+                        showBackground = true
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Next AI",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.5.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)
+                    )
+                    if (message.isStreaming) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(ClaudeTerracotta.copy(alpha = 0.15f))
+                                .border(0.5.dp, ClaudeTerracotta.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "generating",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
+                                color = ClaudeTerracotta
+                            )
+                        }
+                    }
+                }
 
-                Spacer(Modifier.width(12.dp))
-
+                // Main content column — no visible bubble, canvas-style like ChatGPT
                 Column(
                     modifier = Modifier
-                        .weight(1f)
+                        .fillMaxWidth()
                         .then(
                             if (isSearchMatch) Modifier
-                                .border(1.5.dp, ClaudeTerracotta.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-                                .padding(6.dp)
+                                .border(1.5.dp, ClaudeTerracotta.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                                .padding(8.dp)
                             else Modifier
                         )
                 ) {
@@ -2876,201 +2920,239 @@ fun MessageItem(
                     // Initial streaming state before first token arrives
                     if (message.isStreaming && message.content.isBlank() && message.thinking.isNullOrBlank()) {
                         val isDarkWaiting = MaterialTheme.colorScheme.background.red < 0.5f
-                        val waitingBg = if (isDarkWaiting) Color(0xFF161522) else Color(0xFFF4F2FA)
-                        val waitingBorder = if (isDarkWaiting) Color(0xFF2E2B42) else Color(0xFFE3DFEE)
-                        val waitingAccent = if (isDarkWaiting) Color(0xFFA78BFA) else Color(0xFF6D28D9)
+                        val dotAccent = if (isDarkWaiting) Color(0xFFA78BFA) else Color(0xFF7C3AED)
 
-                        val waitingTransition = rememberInfiniteTransition(label = "waitingPulse")
-                        val waitingPulseAlpha by waitingTransition.animateFloat(
-                            initialValue = 0.4f,
-                            targetValue = 1.0f,
+                        val dotTransition = rememberInfiniteTransition(label = "typingDots")
+                        val dot1Scale by dotTransition.animateFloat(
+                            initialValue = 0.4f, targetValue = 1f,
                             animationSpec = infiniteRepeatable(
-                                animation = tween(800, easing = FastOutSlowInEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "waitingPulseAlpha"
+                                animation = keyframes {
+                                    durationMillis = 1200
+                                    0.4f at 0 with FastOutSlowInEasing
+                                    1f at 200 with FastOutSlowInEasing
+                                    0.4f at 500
+                                    0.4f at 1200
+                                }
+                            ), label = "dot1"
+                        )
+                        val dot2Scale by dotTransition.animateFloat(
+                            initialValue = 0.4f, targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = keyframes {
+                                    durationMillis = 1200
+                                    0.4f at 150 with FastOutSlowInEasing
+                                    1f at 350 with FastOutSlowInEasing
+                                    0.4f at 650
+                                    0.4f at 1200
+                                }
+                            ), label = "dot2"
+                        )
+                        val dot3Scale by dotTransition.animateFloat(
+                            initialValue = 0.4f, targetValue = 1f,
+                            animationSpec = infiniteRepeatable(
+                                animation = keyframes {
+                                    durationMillis = 1200
+                                    0.4f at 300 with FastOutSlowInEasing
+                                    1f at 500 with FastOutSlowInEasing
+                                    0.4f at 800
+                                    0.4f at 1200
+                                }
+                            ), label = "dot3"
                         )
 
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = waitingBg,
-                            border = androidx.compose.foundation.BorderStroke(1.dp, waitingBorder),
-                            modifier = Modifier.padding(vertical = 4.dp)
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(
+                                    if (isDarkWaiting) Color(0xFF1E1B2E) else Color(0xFFF5F3FF)
+                                )
+                                .border(
+                                    0.8.dp,
+                                    if (isDarkWaiting) Color(0xFF3D3560) else Color(0xFFDDD8F8),
+                                    RoundedCornerShape(20.dp)
+                                )
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = null,
+                            listOf(dot1Scale, dot2Scale, dot3Scale).forEach { scale ->
+                                Box(
                                     modifier = Modifier
-                                        .size(14.dp)
-                                        .alpha(waitingPulseAlpha),
-                                    tint = waitingAccent
+                                        .size(8.dp)
+                                        .graphicsLayer { scaleX = scale; scaleY = scale }
+                                        .clip(CircleShape)
+                                        .background(dotAccent.copy(alpha = 0.5f + 0.5f * scale))
                                 )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "Thinking…",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
-                                    color = waitingAccent.copy(alpha = 0.9f)
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                StreamingCursorBlink()
                             }
                         }
                     }
 
+
                     // 4. Subtle Action Bar below assistant message (ChatGPT & Gemini style)
                     if (!message.isStreaming) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp)
-                                .horizontalScroll(rememberScrollState()),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val wordCount = remember(message.content) {
-                                if (message.content.isBlank()) 0
-                                else message.content.trim().split(Regex("\\s+")).count { it.isNotBlank() }
-                            }
-                            val estTokens = (wordCount * 1.33).toInt()
+                        val wordCount = remember(message.content) {
+                            if (message.content.isBlank()) 0
+                            else message.content.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+                        }
+                        val estTokens = (wordCount * 1.33).toInt()
+                        val isDarkAction = MaterialTheme.colorScheme.background.red < 0.5f
+                        val pillBg = if (isDarkAction) Color(0xFF1E1E22) else Color(0xFFF4F4F6)
+                        val pillBorder = if (isDarkAction) Color(0xFF2E2E34) else Color(0xFFE2E2E8)
+                        val iconTint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
 
-                            // Timestamp inline
-                            Text(
-                                text = formatRelativeTime(message.timestamp),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                            if (wordCount > 0) {
-                                Spacer(Modifier.width(4.dp))
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            // Meta row: timestamp + word/token count
+                            Row(
+                                modifier = Modifier.padding(top = 6.dp, bottom = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
                                 Text(
-                                    text = "• $wordCount w (~$estTokens t)",
+                                    text = formatRelativeTime(message.timestamp),
                                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
                                 )
+                                if (wordCount > 0) {
+                                    Text(
+                                        text = "· $wordCount w · ~$estTokens tk",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                    )
+                                }
                             }
-                            Spacer(Modifier.width(6.dp))
 
-                            // Pin / Star
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onTogglePin()
-                                },
-                                modifier = Modifier.size(28.dp)
+                            // Action pills row (scrollable)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.PushPin,
-                                    contentDescription = if (message.isPinned) "Unpin message" else "Pin message",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Copy with checkmark animation
-                            IconButton(
-                                onClick = {
-                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    cm.setPrimaryClip(ClipData.newPlainText("Response", message.content))
-                                    isCopied = true
-                                    Toast.makeText(context, "Copied response to clipboard", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                    contentDescription = "Copy message",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = if (isCopied) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Read Aloud / Stop (TTS)
-                            IconButton(
-                                onClick = onToggleSpeak,
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    if (isSpeaking) Icons.Default.Stop else Icons.Default.VolumeUp,
-                                    contentDescription = if (isSpeaking) "Stop reading" else "Read aloud",
-                                    modifier = Modifier.size(16.dp),
-                                    tint = if (isSpeaking) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Share
-                            IconButton(
-                                onClick = {
-                                    val intent = Intent().apply {
-                                        action = Intent.ACTION_SEND
-                                        putExtra(Intent.EXTRA_TEXT, message.content)
-                                        type = "text/plain"
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Share response"))
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Share,
-                                    contentDescription = "Share",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Thumbs Up (Feedback)
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onFeedback("like")
-                                    Toast.makeText(context, if (message.feedback == "like") "Feedback removed" else "Thanks for the feedback!", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ThumbUp,
-                                    contentDescription = "Good response",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = if (message.feedback == "like") ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Thumbs Down (Feedback)
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onFeedback("dislike")
-                                    Toast.makeText(context, if (message.feedback == "dislike") "Feedback removed" else "Feedback recorded", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.ThumbDown,
-                                    contentDescription = "Bad response",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = if (message.feedback == "dislike") ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Assistant Branch Navigator: < 1 / 2 >
-                            if (message.totalBranches > 1) {
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                    border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                                    modifier = Modifier.padding(end = 4.dp)
+                                // ── Pill 1: Core actions (Copy, Pin, Speak, Share) ──
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(pillBg)
+                                        .border(0.6.dp, pillBorder, RoundedCornerShape(14.dp))
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    // Copy
+                                    IconButton(
+                                        onClick = {
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            cm.setPrimaryClip(ClipData.newPlainText("Response", message.content))
+                                            isCopied = true
+                                            Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                            contentDescription = "Copy",
+                                            modifier = Modifier.size(15.dp),
+                                            tint = if (isCopied) Color(0xFF4CAF50) else iconTint
+                                        )
+                                    }
+                                    // Pin
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onTogglePin()
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PushPin,
+                                            contentDescription = if (message.isPinned) "Unpin" else "Pin",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = if (message.isPinned) Color(0xFFFFB300) else iconTint
+                                        )
+                                    }
+                                    // Speak
+                                    IconButton(
+                                        onClick = onToggleSpeak,
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            if (isSpeaking) Icons.Default.Stop else Icons.Default.VolumeUp,
+                                            contentDescription = if (isSpeaking) "Stop" else "Read aloud",
+                                            modifier = Modifier.size(15.dp),
+                                            tint = if (isSpeaking) ClaudeTerracotta else iconTint
+                                        )
+                                    }
+                                    // Share
+                                    IconButton(
+                                        onClick = {
+                                            val intent = Intent().apply {
+                                                action = Intent.ACTION_SEND
+                                                putExtra(Intent.EXTRA_TEXT, message.content)
+                                                type = "text/plain"
+                                            }
+                                            context.startActivity(Intent.createChooser(intent, "Share response"))
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Share,
+                                            contentDescription = "Share",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = iconTint
+                                        )
+                                    }
+                                }
+
+                                // ── Pill 2: Feedback thumbs ──
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(pillBg)
+                                        .border(0.6.dp, pillBorder, RoundedCornerShape(14.dp))
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onFeedback("like")
+                                            Toast.makeText(context, if (message.feedback == "like") "Removed" else "Thanks!", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ThumbUp,
+                                            contentDescription = "Good response",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = if (message.feedback == "like") ClaudeTerracotta else iconTint
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onFeedback("dislike")
+                                            Toast.makeText(context, if (message.feedback == "dislike") "Removed" else "Noted", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ThumbDown,
+                                            contentDescription = "Bad response",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = if (message.feedback == "dislike") Color(0xFFEF5350) else iconTint
+                                        )
+                                    }
+                                }
+
+                                // ── Branch navigator (if applicable) ──
+                                if (message.totalBranches > 1) {
                                     Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(1.dp),
-                                        modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(pillBg)
+                                            .border(0.6.dp, pillBorder, RoundedCornerShape(14.dp))
+                                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         IconButton(
                                             onClick = {
@@ -3080,22 +3162,16 @@ fun MessageItem(
                                                 }
                                             },
                                             enabled = message.branchIndex > 0,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(26.dp)
                                         ) {
-                                            Icon(
-                                                Icons.Default.ChevronLeft,
-                                                contentDescription = "Previous response",
-                                                modifier = Modifier.size(14.dp),
-                                                tint = if (message.branchIndex > 0) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                                            )
+                                            Icon(Icons.Default.ChevronLeft, contentDescription = "Prev", modifier = Modifier.size(14.dp),
+                                                tint = if (message.branchIndex > 0) ClaudeTerracotta else iconTint.copy(alpha = 0.3f))
                                         }
-
                                         Text(
                                             text = "${message.branchIndex + 1}/${message.totalBranches}",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.Bold),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.5.sp),
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-
                                         IconButton(
                                             onClick = {
                                                 if (message.branchIndex < message.totalBranches - 1) {
@@ -3104,98 +3180,69 @@ fun MessageItem(
                                                 }
                                             },
                                             enabled = message.branchIndex < message.totalBranches - 1,
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(26.dp)
                                         ) {
-                                            Icon(
-                                                Icons.Default.ChevronRight,
-                                                contentDescription = "Next response",
-                                                modifier = Modifier.size(14.dp),
-                                                tint = if (message.branchIndex < message.totalBranches - 1) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                                            )
+                                            Icon(Icons.Default.ChevronRight, contentDescription = "Next", modifier = Modifier.size(14.dp),
+                                                tint = if (message.branchIndex < message.totalBranches - 1) ClaudeTerracotta else iconTint.copy(alpha = 0.3f))
                                         }
                                     }
                                 }
-                                Spacer(Modifier.width(2.dp))
-                            }
 
-                            // Continue generating button
-                            if (isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
-                                Surface(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onContinueGenerating()
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                                    border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-                                ) {
+                                // ── Continue generating pill ──
+                                if (isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(ClaudeTerracotta.copy(alpha = 0.10f))
+                                            .border(0.7.dp, ClaudeTerracotta.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                                            .clickable {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onContinueGenerating()
+                                            }
+                                            .padding(horizontal = 10.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = "Continue generating",
-                                            modifier = Modifier.size(13.dp),
-                                            tint = ClaudeTerracotta
-                                        )
-                                        Text(
-                                            text = "Continue",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null,
+                                            modifier = Modifier.size(13.dp), tint = ClaudeTerracotta)
+                                        Text("Continue", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+                                            color = ClaudeTerracotta)
                                     }
                                 }
-                                Spacer(Modifier.width(4.dp))
-                            }
 
-                            // Regenerate / Retry (if last assistant response)
-                            if (isLastAssistant) {
-                                IconButton(
-                                    onClick = onRetry,
-                                    modifier = Modifier.size(28.dp)
+                                // ── Pill 3: Utility actions (Retry, Reply, Delete) ──
+                                Row(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(pillBg)
+                                        .border(0.6.dp, pillBorder, RoundedCornerShape(14.dp))
+                                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Default.Refresh,
-                                        contentDescription = "Regenerate response",
-                                        modifier = Modifier.size(15.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                    )
+                                    if (isLastAssistant) {
+                                        IconButton(onClick = onRetry, modifier = Modifier.size(30.dp)) {
+                                            Icon(Icons.Default.Refresh, contentDescription = "Regenerate",
+                                                modifier = Modifier.size(14.dp), tint = iconTint)
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onReply()
+                                        },
+                                        modifier = Modifier.size(30.dp)
+                                    ) {
+                                        Icon(Icons.Default.Reply, contentDescription = "Reply",
+                                            modifier = Modifier.size(14.dp), tint = iconTint)
+                                    }
+                                    IconButton(onClick = onDeleteMessage, modifier = Modifier.size(30.dp)) {
+                                        Icon(Icons.Default.DeleteOutline, contentDescription = "Delete",
+                                            modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+                                    }
                                 }
-                                Spacer(Modifier.width(2.dp))
-                            }
-
-                            // Reply / Quote
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onReply()
-                                },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Reply,
-                                    contentDescription = "Reply to message",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                            Spacer(Modifier.width(2.dp))
-
-                            // Delete message
-                            IconButton(
-                                onClick = onDeleteMessage,
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.DeleteOutline,
-                                    contentDescription = "Delete message",
-                                    modifier = Modifier.size(15.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                )
                             }
                         }
+
 
                         // 5. Contextual Quick Follow-Up Suggestion Chips
                         if (showFollowupSuggestions && isLastAssistant && !message.isStreaming && message.content.isNotBlank()) {
@@ -3231,24 +3278,37 @@ fun MessageItem(
                             }
 
                             LazyRow(
-                                modifier = Modifier.padding(top = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                modifier = Modifier.padding(top = 10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 items(suggestions) { (label, prompt) ->
-                                    Surface(
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            onSendSuggestion(prompt)
-                                        },
-                                        shape = RoundedCornerShape(16.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                                        border = androidx.compose.foundation.BorderStroke(0.7.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+                                    val isDarkChip = MaterialTheme.colorScheme.background.red < 0.5f
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(
+                                                if (isDarkChip) Color(0xFF1C1C20) else Color(0xFFF6F6F9)
+                                            )
+                                            .border(
+                                                0.8.dp,
+                                                ClaudeTerracotta.copy(alpha = 0.28f),
+                                                RoundedCornerShape(20.dp)
+                                            )
+                                            .clickable {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                onSendSuggestion(prompt)
+                                            }
+                                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         Text(
                                             text = label,
-                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Medium,
+                                                fontSize = 12.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
                                         )
                                     }
                                 }
