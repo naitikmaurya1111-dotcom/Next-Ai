@@ -1,8 +1,8 @@
 # 🧠 Next AI & Antigravity Session Resume Context
-> **Last Synced**: `2026-09-21 10:26:36 UTC`  
-> **Conversation ID**: `44819c53-abeb-436f-9217-15e9ae5372f1`  
-> **Git Head SHA**: `6559f7e`  
-> **Active App Version**: `v3.4.2` (versionCode 24)  
+> **Last Synced**: `2026-09-21 10:32:17 UTC`  
+> **Conversation ID**: `380d3ab0-d585-42f9-90ce-bf063023bd97`  
+> **Git Head SHA**: `e643b32`  
+> **Active App Version**: `v3.4.2` (Release Tag: `v1.0.74`, versionCode 24)  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -56,14 +56,14 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
 - **Location**: `/content/Next-Ai/colab`
 - **Stack**: FastAPI + Uvicorn (Port 8000) + Cloudflare Tunnel (`cloudflared`)
 - **Execution**: Runs `/root/.local/bin/agy -p "<message>" --output-format stream-json --dangerously-skip-permissions`
-- **Session Continuity**: Retains `--conversation 44819c53-abeb-436f-9217-15e9ae5372f1` across turns.
+- **Session Continuity**: Retains `--conversation 380d3ab0-d585-42f9-90ce-bf063023bd97` across turns.
 - **Launcher**: `/content/Next-Ai/colab/start_bridge.sh`
 
 ---
 
 ## 📂 Restored Antigravity State
 - **Conversation DBs**: `/root/.gemini/antigravity-cli/conversations/`
-- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/44819c53-abeb-436f-9217-15e9ae5372f1/`
+- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/380d3ab0-d585-42f9-90ce-bf063023bd97/`
 - **History & Summaries**: `/root/.gemini/antigravity-cli/conversation_summaries.db`, `history.jsonl`
 
 ---
