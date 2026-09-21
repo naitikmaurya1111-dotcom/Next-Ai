@@ -75,6 +75,7 @@ fun sanitizeMarkdownInput(raw: String): String {
         .replace(Regex("//#\\][^\r\n]*"), "")
         .replace(Regex("\\[\\?[0-9;]*[a-zA-Z]"), "")
         .replace(Regex("[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]"), "")
+        .replace(Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE), "\n")
 }
 
 // ─── LaTeX normaliser ─────────────────────────────────────────────────────────
@@ -258,6 +259,10 @@ fun formatLatexToUnicode(raw: String): String {
     text = text.replace(Regex("""\\(?:left|right)(?![a-zA-Z])"""), "")
     text = text.replace(Regex("""\\(?:big|Big|bigg|Bigg)[lrm]?(?![a-zA-Z])"""), "")
 
+    // Degree symbols: 0^\circ -> 0°, 180^\circ -> 180°, \degree -> °
+    text = text.replace(Regex("""\^(?:\\circ|\{?\\circ\}?|°)"""), "°")
+    text = text.replace("\\degree", "°").replace("\\circ", "°")
+
     // Matrix environments
     text = text.replace(Regex("""\\begin\{(?:bmatrix)\}([\s\S]*?)\\end\{(?:bmatrix)\}""")) {
         val inner = it.groupValues[1].replace("&", "   ").replace("\\\\", " ┃ ").trim()
@@ -436,7 +441,8 @@ fun formatLatexToUnicode(raw: String): String {
         "\\varphi" to "φ","\\chi" to "χ","\\psi" to "ψ","\\omega" to "ω",
         "\\Gamma" to "Γ","\\Delta" to "Δ","\\Theta" to "Θ","\\Lambda" to "Λ","\\Xi" to "Ξ",
         "\\Pi" to "Π","\\Sigma" to "Σ","\\Upsilon" to "Υ","\\Phi" to "Φ","\\Psi" to "Ψ","\\Omega" to "Ω",
-        "\\pm" to "±","\\mp" to "∓","\\times" to "×","\\cdot" to "·","\\div" to "÷",
+        "\\parallel" to "∥","\\nparallel" to "∦","\\perp" to "⊥",
+        "\\pm" to "±","\\mp" to "∓","\\times" to "×","\\div" to "÷",
         "\\approx" to "≈","\\equiv" to "≡","\\neq" to "≠","\\ne" to "≠",
         "\\leq" to "≤","\\le" to "≤","\\geq" to "≥","\\ge" to "≥","\\ll" to "≪","\\gg" to "≫",
         "\\sim" to "∼","\\simeq" to "≃","\\cong" to "≅","\\propto" to "∝",
@@ -460,6 +466,8 @@ fun formatLatexToUnicode(raw: String): String {
             text = text.replace(k, v)
         }
     }
+    // Handle \cdot ensuring proper spacing even when followed by units like \cdotm/A
+    text = text.replace(Regex("""\\cdot\s*"""), " · ")
 
     // Superscripts with balanced braces
     val supsMap = mapOf('0' to '⁰','1' to '¹','2' to '²','3' to '³','4' to '⁴','5' to '⁵','6' to '⁶','7' to '⁷','8' to '⁸','9' to '⁹','+' to '⁺','-' to '⁻','=' to '⁼','(' to '⁽',')' to '⁾','a' to 'ᵃ','b' to 'ᵇ','c' to 'ᶜ','d' to 'ᵈ','e' to 'ᵉ','f' to 'ᶠ','g' to 'ᵍ','h' to 'ʰ','i' to 'ⁱ','j' to 'ʲ','k' to 'ᵏ','l' to 'ˡ','m' to 'ᵐ','n' to 'ⁿ','o' to 'ᵒ','p' to 'ᵖ','r' to 'ʳ','s' to 'ˢ','t' to 'ᵗ','u' to 'ᵘ','v' to 'ᵛ','w' to 'ʷ','x' to 'ˣ','y' to 'ʸ','z' to 'ᶻ','†' to '†')
@@ -509,10 +517,16 @@ fun formatLatexSymbols(raw: String): String {
     if (raw.isBlank()) return ""
     var text = raw
 
+    // Strip invisible LaTeX null delimiters and sizing prefixes
     text = text.replace(Regex("""\\(?:left|right)\."""), "")
     text = text.replace(Regex("""\\(?:left|right)(?![a-zA-Z])"""), "")
     text = text.replace(Regex("""\\(?:big|Big|bigg|Bigg)[lrm]?(?![a-zA-Z])"""), "")
 
+    // Degree symbols: 0^\circ -> 0°, 180^\circ -> 180°, \degree -> °
+    text = text.replace(Regex("""\^(?:\\circ|\{?\\circ\}?|°)"""), "°")
+    text = text.replace("\\degree", "°").replace("\\circ", "°")
+
+    // Text & Math font decorators
     text = text.replace(Regex("""\\(?:text|mathrm|operatorname\*?|mathbf|boldsymbol|bm|mathit|mathsf|textbf)\s*\{([^}]*)\}""")) { it.groupValues[1] }
     text = text.replace(Regex("""\\(?:mathcal|mathscr)\s*\{([^}]*)\}""")) { m ->
         val k = m.groupValues[1].trim()
@@ -522,23 +536,83 @@ fun formatLatexSymbols(raw: String): String {
     val bbMap = mapOf("R" to "ℝ", "C" to "ℂ", "N" to "ℕ", "Z" to "ℤ", "Q" to "ℚ", "H" to "ℍ")
     for ((k, v) in bbMap) text = text.replace("\\mathbb{$k}", v).replace("\\mathbb $k", v)
 
+    // Hats and accent marks
+    val hats = mapOf(
+        "\\hat{r}" to "r̂", "\\hat{p}" to "p̂", "\\hat{n}" to "n̂", "\\hat{i}" to "î", "\\hat{j}" to "ĵ", "\\hat{k}" to "k̂",
+        "\\hat{x}" to "x̂", "\\hat{y}" to "ŷ", "\\hat{z}" to "ẑ", "\\hat r" to "r̂", "\\hat p" to "p̂", "\\hat n" to "n̂",
+        "\\hat i" to "î", "\\hat j" to "ĵ", "\\hat k" to "k̂"
+    )
+    for ((k, v) in hats) text = text.replace(k, v)
+
+    // General \hat{...}
+    var hIter = 0
+    while (hIter++ < 15) {
+        val idx = text.indexOf("\\hat{")
+        if (idx == -1) break
+        val arg = extractBraceArg(text, idx) ?: break
+        val baseClean = formatLatexSymbols(arg.first)
+        text = text.substring(0, idx) + "${baseClean}̂" + text.substring(arg.second)
+    }
+
+    // Roots: \sqrt{...} and \sqrt[n]{...} with balanced braces
+    val sqrtRegex = Regex("""\\?sqrt(?:\[([0-9]+)\])?\s*\{""")
+    var sIter = 0
+    while (sIter++ < 15) {
+        val m = sqrtRegex.find(text) ?: break
+        val startIdx = m.range.first
+        val deg = m.groupValues[1]
+        val arg = extractBraceArg(text, startIdx) ?: break
+        val prefix = when (deg) { "3" -> "∛"; "4" -> "∜"; else -> "√" }
+        val inner = formatLatexSymbols(arg.first)
+        text = text.substring(0, startIdx) + "$prefix($inner)" + text.substring(arg.second)
+    }
+
+    // Fractions: \frac{num}{den} with balanced braces
+    val fracRegex = Regex("""\\?(?:d|t|c)?frac\s*\{""")
+    var fIter = 0
+    while (fIter++ < 25) {
+        val m = fracRegex.find(text) ?: break
+        val startIdx = m.range.first
+        val numArg = extractBraceArg(text, startIdx) ?: break
+        val denArg = extractBraceArg(text, numArg.second) ?: break
+        val num = formatLatexSymbols(numArg.first.trim())
+        val den = formatLatexSymbols(denArg.first.trim())
+
+        val rep = when {
+            num == "1" && den == "2" -> "½"
+            num == "1" && den == "3" -> "⅓"
+            num == "2" && den == "3" -> "⅔"
+            num == "1" && den == "4" -> "¼"
+            num == "3" && den == "4" -> "¾"
+            num == "1" && den == "5" -> "⅕"
+            num == "2" && den == "5" -> "⅖"
+            num == "3" && den == "5" -> "⅗"
+            num == "4" && den == "5" -> "⅘"
+            num == "1" && den == "6" -> "⅙"
+            num == "5" && den == "6" -> "⅚"
+            num == "1" && den == "8" -> "⅛"
+            num == "3" && den == "8" -> "⅜"
+            num == "5" && den == "8" -> "⅝"
+            num == "7" && den == "8" -> "⅞"
+            num.length == 1 && den.length == 1 && num.first().isLetterOrDigit() && den.first().isLetterOrDigit() -> "$num/$den"
+            else -> {
+                val n = if (num.contains(Regex("[+\\-\\s]")) && !num.startsWith("(") && !num.endsWith(")")) "($num)" else num
+                val d = if (den.contains(Regex("[+\\-\\s\\\\]")) && !den.startsWith("(") && !den.endsWith(")")) "($den)" else den
+                "$n / $d"
+            }
+        }
+        text = text.substring(0, startIdx) + rep + text.substring(denArg.second)
+    }
+    text = text.replace(Regex("""\\?(?:d|t|c)?frac\b"""), "")
+
     val symbolPairs = listOf(
-        "\\varepsilon_0" to "ε₀", "\\epsilon_0" to "ε₀",
-        "\\mu_0" to "μ₀", "\\Phi_0" to "Φ₀", "\\nu_0" to "ν₀", "\\lambda_0" to "λ₀",
-        "\\rightarrow" to "→", "\\leftarrow" to "←", "\\leftrightarrow" to "⇔",
+        "\\parallel" to "∥", "\\nparallel" to "∦", "\\perp" to "⊥",
+        "\\to" to "→", "\\rightarrow" to "→", "\\leftarrow" to "←", "\\leftrightarrow" to "⇔",
         "\\Rightarrow" to "⇒", "\\Leftarrow" to "⇐", "\\Leftrightarrow" to "⇔",
         "\\implies" to "⇒", "\\iff" to "⇔",
-        "\\hbar" to "ℏ", "\\dagger" to "†", "\\partial" to "∂", "\\nabla" to "∇", "\\infty" to "∞",
-        "\\sum" to "∑", "\\prod" to "∏", "\\int" to "∫", "\\iint" to "∬", "\\iiint" to "∭", "\\oint" to "∮",
-        "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ", "\\epsilon" to "ε",
-        "\\varepsilon" to "ε", "\\zeta" to "ζ", "\\eta" to "η", "\\theta" to "θ", "\\vartheta" to "ϑ",
-        "\\iota" to "ι", "\\kappa" to "κ", "\\lambda" to "λ", "\\mu" to "μ", "\\nu" to "ν",
-        "\\xi" to "ξ", "\\pi" to "π", "\\varpi" to "ϖ", "\\rho" to "ρ", "\\varrho" to "ϱ",
-        "\\sigma" to "σ", "\\varsigma" to "ς", "\\tau" to "τ", "\\upsilon" to "υ", "\\phi" to "ϕ",
-        "\\varphi" to "φ", "\\chi" to "χ", "\\psi" to "ψ", "\\omega" to "ω",
-        "\\Gamma" to "Γ", "\\Delta" to "Δ", "\\Theta" to "Θ", "\\Lambda" to "Λ", "\\Xi" to "Ξ",
-        "\\Pi" to "Π", "\\Sigma" to "Σ", "\\Upsilon" to "Υ", "\\Phi" to "Φ", "\\Psi" to "Ψ", "\\Omega" to "Ω",
-        "\\pm" to "±", "\\mp" to "∓", "\\times" to "×", "\\cdot" to "·", "\\div" to "÷",
+        "\\varepsilon_0" to "ε₀", "\\epsilon_0" to "ε₀",
+        "\\mu_0" to "μ₀", "\\Phi_0" to "Φ₀", "\\nu_0" to "ν₀", "\\lambda_0" to "λ₀",
+        "\\pm" to "±", "\\mp" to "∓", "\\times" to "×", "\\div" to "÷",
         "\\approx" to "≈", "\\equiv" to "≡", "\\neq" to "≠", "\\ne" to "≠",
         "\\leq" to "≤", "\\le" to "≤", "\\geq" to "≥", "\\ge" to "≥",
         "\\ll" to "≪", "\\gg" to "≫",
@@ -549,6 +623,16 @@ fun formatLatexSymbols(raw: String): String {
         "\\forall" to "∀", "\\exists" to "∃", "\\nexists" to "∄",
         "\\circ" to "°", "\\degree" to "°", "\\prime" to "′",
         "\\ldots" to "…", "\\cdots" to "⋯", "\\dots" to "…",
+        "\\hbar" to "ℏ", "\\dagger" to "†", "\\partial" to "∂", "\\nabla" to "∇", "\\infty" to "∞",
+        "\\sum" to "∑", "\\prod" to "∏", "\\int" to "∫", "\\iint" to "∬", "\\iiint" to "∭", "\\oint" to "∮",
+        "\\alpha" to "α", "\\beta" to "β", "\\gamma" to "γ", "\\delta" to "δ", "\\epsilon" to "ε",
+        "\\varepsilon" to "ε", "\\zeta" to "ζ", "\\eta" to "η", "\\theta" to "θ", "\\vartheta" to "ϑ",
+        "\\iota" to "ι", "\\kappa" to "κ", "\\lambda" to "λ", "\\mu" to "μ", "\\nu" to "ν",
+        "\\xi" to "ξ", "\\pi" to "π", "\\varpi" to "ϖ", "\\rho" to "ρ", "\\varrho" to "ϱ",
+        "\\sigma" to "σ", "\\varsigma" to "ς", "\\tau" to "τ", "\\upsilon" to "υ", "\\phi" to "ϕ",
+        "\\varphi" to "φ", "\\chi" to "χ", "\\psi" to "ψ", "\\omega" to "ω",
+        "\\Gamma" to "Γ", "\\Delta" to "Δ", "\\Theta" to "Θ", "\\Lambda" to "Λ", "\\Xi" to "Ξ",
+        "\\Pi" to "Π", "\\Sigma" to "Σ", "\\Upsilon" to "Υ", "\\Phi" to "Φ", "\\Psi" to "Ψ", "\\Omega" to "Ω",
         "\\cos" to "cos", "\\sin" to "sin", "\\tan" to "tan", "\\det" to "det",
         "\\gcd" to "gcd", "\\lim" to "lim", "\\ln" to "ln", "\\log" to "log", "\\exp" to "exp",
         "\\{" to "{", "\\}" to "}", "\\," to "\u2009", "\\;" to " ", "\\:" to " ", "\\!" to "",
@@ -561,9 +645,13 @@ fun formatLatexSymbols(raw: String): String {
             text = text.replace(tag, rep)
         }
     }
+    // Handle \cdot ensuring proper spacing even when followed by units like \cdotm/A
+    text = text.replace(Regex("""\\cdot\s*"""), " · ")
+
+    // Clean any remaining command backslashes without corrupting mathematical letters
     text = text.replace(Regex("""\\+([a-zA-Z]+)""")) { it.groupValues[1] }
     text = text.replace("\\", "")
-    return text
+    return text.trim()
 }
 
 // ─── Native Rich AnnotatedString Math Builder (Subscripts & Superscripts) ────
@@ -622,12 +710,12 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.appendMathSegment(s
         val c = text[i]
         if (c == '_' || c == '^') {
             val isSub = (c == '_')
-            flushNormal()
-            i++
-            if (i < n && text[i] == '{') {
-                val close = text.indexOf('}', i + 1)
+            val startIdx = i + 1
+            if (startIdx < n && text[startIdx] == '{') {
+                val close = text.indexOf('}', startIdx + 1)
                 if (close != -1) {
-                    val inner = text.substring(i + 1, close)
+                    flushNormal()
+                    val inner = text.substring(startIdx + 1, close)
                     withStyle(
                         SpanStyle(
                             baselineShift = if (isSub) BaselineShift(-0.25f) else BaselineShift.Superscript,
@@ -639,8 +727,9 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.appendMathSegment(s
                     i = close + 1
                     continue
                 }
-            } else if (i < n && (text[i].isLetterOrDigit() || text[i] == '+' || text[i] == '-')) {
-                val ch = text[i]
+            } else if (startIdx < n && (text[startIdx].isLetterOrDigit() || text[startIdx] == '+' || text[startIdx] == '-' || text[startIdx] == '°' || text[startIdx] == '′' || text[startIdx] == '″' || text[startIdx] == '∥' || text[startIdx] == '⊥')) {
+                flushNormal()
+                val ch = text[startIdx]
                 withStyle(
                     SpanStyle(
                         baselineShift = if (isSub) BaselineShift(-0.25f) else BaselineShift.Superscript,
@@ -649,9 +738,13 @@ private fun androidx.compose.ui.text.AnnotatedString.Builder.appendMathSegment(s
                 ) {
                     append(ch.toString())
                 }
-                i++
+                i = startIdx + 1
                 continue
             }
+            // Neither matched: do NOT advance past startIdx!
+            normalBuf.append(c)
+            i++
+            continue
         }
         normalBuf.append(c)
         i++
@@ -682,13 +775,30 @@ fun isPureEquationLine(raw: String): Boolean {
         s.contains("](") || s.contains("][") || s.startsWith("![") || s.startsWith("<")
     ) return false
 
+    // 1. Prose label prefix with colon (e.g. "Relation to speed of light:", "Note:", "For example:")
+    if (Regex("""^[a-zA-Z\s]{3,}\s*:""").containsMatchIn(s)) return false
+
+    // 2. If line has inline $...$ with surrounding prose, it is prose!
+    if (s.contains("$")) {
+        val cleanDollar = s.trimEnd('.', ',', ';').trim()
+        val isEntirelyDollar = (
+            (cleanDollar.startsWith("$$") && cleanDollar.endsWith("$$") && cleanDollar.length >= 4) ||
+            (cleanDollar.startsWith("$") && cleanDollar.endsWith("$") && cleanDollar.length >= 2)
+        )
+        if (!isEntirelyDollar) return false
+    }
+
     // Strip enclosing single or double dollars or brackets if present
+    var wasDelimited = false
     if (s.startsWith("$$") && s.endsWith("$$") && s.length >= 4) {
         s = s.substring(2, s.length - 2).trim()
+        wasDelimited = true
     } else if (s.startsWith("$") && s.endsWith("$") && s.length >= 2) {
         s = s.substring(1, s.length - 1).trim()
+        wasDelimited = true
     } else if (s.startsWith("\\[") && s.endsWith("\\]") && s.length >= 4) {
         s = s.substring(2, s.length - 2).trim()
+        wasDelimited = true
     }
 
     if (s.contains("**") || s.contains("~~")) return false
@@ -709,40 +819,23 @@ fun isPureEquationLine(raw: String): Boolean {
         "dot", "ddot", "bar", "tilde", "alpha", "beta", "gamma", "delta", "epsilon",
         "varepsilon", "zeta", "eta", "theta", "vartheta", "iota", "kappa", "lambda",
         "mu", "nu", "xi", "pi", "varpi", "rho", "varrho", "sigma", "varsigma", "tau",
-        "upsilon", "phi", "varphi", "chi", "psi", "omega", "mathcal", "mathscr",
-        "mathbf", "mathbb", "mathrm", "operatorname", "left", "right", "pm", "times",
-        "cdot", "div", "infty", "approx", "equiv", "neq", "le", "ge", "leq", "geq",
-        "ll", "gg", "sim", "to", "rightarrow", "leftarrow", "Rightarrow", "implies",
-        "iff", "in", "notin", "cos", "sin", "tan", "sec", "csc", "cot", "det",
-        "exp", "ln", "log", "lim", "text", "unit", "si", "quad", "qquad"
+        "upsilon", "phi", "varphi", "chi", "psi", "omega", "Delta", "Theta", "Lambda",
+        "Sigma", "Phi", "Psi", "Omega", "mathcal", "mathscr", "mathbf", "mathbb",
+        "mathrm", "operatorname", "left", "right", "pm", "times", "cdot", "div",
+        "infty", "approx", "equiv", "neq", "le", "ge", "leq", "geq", "ll", "gg",
+        "sim", "to", "rightarrow", "leftarrow", "Rightarrow", "implies", "iff", "in",
+        "notin", "cos", "sin", "tan", "sec", "csc", "cot", "det", "exp", "ln",
+        "log", "lim", "text", "unit", "si", "quad", "qquad", "parallel", "perp"
     )
 
-    val englishWords = setOf(
-        "the","is","of","and","in","to","that","this","we","can","for","with","as","by",
-        "from","are","which","where","quantum","physics","system","systems","state","states",
-        "rather","than","classical","microscopic","action","scales","comparable","constant",
-        "pure","physical","space","spaces","represented","vector","vectors","potential",
-        "electric","dipole","field","charge","energy","force","surface","volume","point",
-        "distance","plane","line","axis","note","consider","assume","given","when","if","then",
-        "since","so","thus","hence","therefore","because","work","expansion","process",
-        "spontaneous","equilibrium","temperature","pressure","enthalpy","entropy","reaction",
-        "forward","reverse","path","rule"
-    )
+    val rawTokens = Regex("""[a-zA-Z]+""").findAll(sNoSub).map { it.value }.toList()
+    if (rawTokens.isEmpty()) return false
 
-    val proseStarters = setOf(
-        "when","if","then","where","for","with","since","so","thus","hence","therefore",
-        "because","assuming","let","given","here","also","note","by","at","in","from",
-        "substituting","using","under","on","as","always"
-    )
-
-    val rawWords = Regex("""[a-zA-Z]+""").findAll(sNoSub).map { it.value.lowercase() }.toList()
-    val firstWord = rawWords.firstOrNull() ?: ""
-    if (proseStarters.contains(firstWord)) return false
-
-    val proseWords = rawWords.filter { it !in latexKeywords && it.length >= 3 }
-    val matchedEng = proseWords.count { it in englishWords }
-    if (matchedEng >= 1 && proseWords.size > 1) return false
-    if (proseWords.size > 3) return false
+    // Treat uppercase tokens like NAB, BIL, EMF, RMS as variables
+    val proseWords = rawTokens.filter {
+        val lower = it.lowercase()
+        lower !in latexKeywords && it.length >= 3 && it != it.uppercase()
+    }
 
     val mathTokens = listOf(
         "\\frac","frac{","\\int","int_","\\sum","sum_","\\prod","prod_","\\sqrt","sqrt{",
@@ -753,16 +846,18 @@ fun isPureEquationLine(raw: String): Boolean {
         "\\Delta","\\Theta","\\Lambda","\\Sigma","\\Phi","\\Psi","\\Omega",
         "\\mathcal","\\mathscr","\\mathbf","\\mathbb","\\mathrm","\\operatorname","\\adj","\\det",
         "\\left","\\right","\\pm","\\times","\\cdot","\\infty","\\approx","\\equiv","\\neq",
-        "\\le","\\ge","\\in","\\to","\\vmatrix","\\bmatrix","\\pmatrix"
+        "\\le","\\ge","\\in","\\to","\\vmatrix","\\bmatrix","\\pmatrix","\\parallel","\\perp"
     )
-    val hasMathToken    = mathTokens.any { sClean.contains(it) }
+    val hasMathToken = mathTokens.any { sClean.contains(it) }
     val hasMathRelation = sClean.contains("=") || sClean.contains("\\approx") || sClean.contains("\\sim") ||
         sClean.contains("\\le") || sClean.contains("\\ge") || sClean.contains("\\in") || sClean.contains("\\to") ||
         sClean.contains("\\neq") || sClean.contains("\\Rightarrow") || sClean.contains("\\implies") ||
         sClean.contains("<") || sClean.contains(">") || sClean.contains("+") || sClean.contains("-")
 
-    if (hasMathToken && (hasMathRelation || sClean.startsWith("\\frac") || sClean.startsWith("frac{") || sClean.startsWith("\\int") || sClean.startsWith("\\sum") || sClean.contains("\\vmatrix") || sClean.contains("\\bmatrix")) && proseWords.size <= 3) return true
-    if (sClean.contains("=") && (sClean.contains("\\") || sClean.contains("^") || sClean.contains("_") || sClean.contains("[") || sClean.contains("{") || sClean.contains("|")) && matchedEng == 0 && proseWords.size <= 2) return true
+    if (wasDelimited && proseWords.isEmpty()) return true
+
+    if (hasMathToken && (hasMathRelation || sClean.startsWith("\\frac") || sClean.startsWith("frac{") || sClean.startsWith("\\int") || sClean.startsWith("\\sum") || sClean.contains("\\vmatrix") || sClean.contains("\\bmatrix")) && proseWords.isEmpty()) return true
+    if (sClean.contains("=") && (sClean.contains("\\") || sClean.contains("^") || sClean.contains("_") || sClean.contains("[") || sClean.contains("{") || sClean.contains("|")) && proseWords.isEmpty()) return true
     return false
 }
 
@@ -798,8 +893,12 @@ fun StackedFractionView(
     textColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val formattedNum = remember(numerator, textColor) { buildAnnotatedMathString(numerator, textColor) }
-    val formattedDen = remember(denominator, textColor) { buildAnnotatedMathString(denominator, textColor) }
+    val normNum = remember(numerator) { normalizeLatexFormula(numerator) }
+    val normDen = remember(denominator) { normalizeLatexFormula(denominator) }
+    val numTokens = remember(normNum) { tokenizeMathFormula(normNum) }
+    val denTokens = remember(normDen) { tokenizeMathFormula(normDen) }
+    val hasComplexNum = remember(numTokens) { numTokens.any { it !is MathToken.Text } }
+    val hasComplexDen = remember(denTokens) { denTokens.any { it !is MathToken.Text } }
 
     Column(
         modifier = modifier
@@ -809,19 +908,48 @@ fun StackedFractionView(
         verticalArrangement = Arrangement.Center
     ) {
         // Numerator
-        Text(
-            text = formattedNum,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = FontFamily.Serif,
-                fontStyle = FontStyle.Italic,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.5.sp,
-                lineHeight = 18.sp
-            ),
-            color = textColor,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 1.dp)
-        )
+        if (hasComplexNum) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 1.dp)) {
+                numTokens.forEach { token ->
+                    when (token) {
+                        is MathToken.Text -> {
+                            val formatted = remember(token.text, textColor) { buildAnnotatedMathString(token.text, textColor) }
+                            if (formatted.isNotBlank()) {
+                                Text(
+                                    text = formatted,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = FontFamily.Serif,
+                                        fontStyle = FontStyle.Italic,
+                                        fontSize = 14.5.sp,
+                                        lineHeight = 18.sp
+                                    ),
+                                    color = textColor
+                                )
+                            }
+                        }
+                        is MathToken.Fraction -> StackedFractionView(numerator = token.numerator, denominator = token.denominator, textColor = textColor)
+                        is MathToken.Radical -> RadicalEquationView(degree = token.degree, content = token.content, textColor = textColor)
+                        is MathToken.Vector -> VectorSymbolView(base = token.base, subscript = token.subscript, textColor = textColor)
+                    }
+                }
+            }
+        } else {
+            val formattedNum = remember(normNum, textColor) { buildAnnotatedMathString(normNum, textColor) }
+            Text(
+                text = formattedNum,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.5.sp,
+                    lineHeight = 18.sp
+                ),
+                color = textColor,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 1.dp)
+            )
+        }
+
         // Solid horizontal fraction line (vinculum) "------"
         Box(
             modifier = Modifier
@@ -831,20 +959,49 @@ fun StackedFractionView(
                 .clip(RoundedCornerShape(1.dp))
                 .background(textColor.copy(alpha = 0.85f))
         )
+
         // Denominator
-        Text(
-            text = formattedDen,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = FontFamily.Serif,
-                fontStyle = FontStyle.Italic,
-                fontWeight = FontWeight.Medium,
-                fontSize = 14.5.sp,
-                lineHeight = 18.sp
-            ),
-            color = textColor,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 1.dp)
-        )
+        if (hasComplexDen) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 1.dp)) {
+                denTokens.forEach { token ->
+                    when (token) {
+                        is MathToken.Text -> {
+                            val formatted = remember(token.text, textColor) { buildAnnotatedMathString(token.text, textColor) }
+                            if (formatted.isNotBlank()) {
+                                Text(
+                                    text = formatted,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = FontFamily.Serif,
+                                        fontStyle = FontStyle.Italic,
+                                        fontSize = 14.5.sp,
+                                        lineHeight = 18.sp
+                                    ),
+                                    color = textColor
+                                )
+                            }
+                        }
+                        is MathToken.Fraction -> StackedFractionView(numerator = token.numerator, denominator = token.denominator, textColor = textColor)
+                        is MathToken.Radical -> RadicalEquationView(degree = token.degree, content = token.content, textColor = textColor)
+                        is MathToken.Vector -> VectorSymbolView(base = token.base, subscript = token.subscript, textColor = textColor)
+                    }
+                }
+            }
+        } else {
+            val formattedDen = remember(normDen, textColor) { buildAnnotatedMathString(normDen, textColor) }
+            Text(
+                text = formattedDen,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = FontFamily.Serif,
+                    fontStyle = FontStyle.Italic,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 14.5.sp,
+                    lineHeight = 18.sp
+                ),
+                color = textColor,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 1.dp)
+            )
+        }
     }
 }
 
@@ -1418,13 +1575,41 @@ private fun BlockquoteView(
                 }
                 if (calloutBody.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
-                    FormattedMarkdownText(
-                        text              = calloutBody,
-                        style             = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                        color             = textColor,
-                        showTrailingCursor = isTrailingStreaming,
-                        onLinkClick       = onLinkClick
-                    )
+                    val innerBlocks = remember(calloutBody) { parseMarkdownBlocks(calloutBody) }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        innerBlocks.forEach { block ->
+                            when (block) {
+                                is MarkdownBlock.MathEquation -> {
+                                    MathEquationBlockView(formula = block.formula, textColor = textColor)
+                                }
+                                is MarkdownBlock.Paragraph -> {
+                                    FormattedMarkdownText(
+                                        text              = block.text,
+                                        style             = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                                        color             = textColor,
+                                        showTrailingCursor = isTrailingStreaming,
+                                        onLinkClick       = onLinkClick
+                                    )
+                                }
+                                is MarkdownBlock.ListBlock -> {
+                                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        block.items.forEach { item ->
+                                            ListItemRow(item = item, textColor = textColor, showTrailingCursor = false, onLinkClick = onLinkClick)
+                                        }
+                                    }
+                                }
+                                else -> {
+                                    FormattedMarkdownText(
+                                        text              = block.toString(),
+                                        style             = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
+                                        color             = textColor,
+                                        showTrailingCursor = isTrailingStreaming,
+                                        onLinkClick       = onLinkClick
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1444,13 +1629,34 @@ private fun BlockquoteView(
                 }
                 .padding(start = 14.dp, top = 8.dp, bottom = 8.dp, end = 10.dp)
         ) {
-            FormattedMarkdownText(
-                text              = text,
-                style             = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic, lineHeight = 22.sp),
-                color             = MaterialTheme.colorScheme.onSurfaceVariant,
-                showTrailingCursor = isTrailingStreaming,
-                onLinkClick       = onLinkClick
-            )
+            val innerBlocks = remember(text) { parseMarkdownBlocks(text) }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                innerBlocks.forEach { block ->
+                    when (block) {
+                        is MarkdownBlock.MathEquation -> {
+                            MathEquationBlockView(formula = block.formula, textColor = textColor)
+                        }
+                        is MarkdownBlock.Paragraph -> {
+                            FormattedMarkdownText(
+                                text              = block.text,
+                                style             = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic, lineHeight = 22.sp),
+                                color             = MaterialTheme.colorScheme.onSurfaceVariant,
+                                showTrailingCursor = isTrailingStreaming,
+                                onLinkClick       = onLinkClick
+                            )
+                        }
+                        else -> {
+                            FormattedMarkdownText(
+                                text              = block.toString(),
+                                style             = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic, lineHeight = 22.sp),
+                                color             = MaterialTheme.colorScheme.onSurfaceVariant,
+                                showTrailingCursor = isTrailingStreaming,
+                                onLinkClick       = onLinkClick
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -15,8 +15,8 @@ android {
         applicationId = "com.agychat.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26
-        versionName = "3.4.4"
+        versionCode = 27
+        versionName = "3.4.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
