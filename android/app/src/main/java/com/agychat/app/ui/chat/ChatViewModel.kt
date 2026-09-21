@@ -711,6 +711,9 @@ class ChatViewModel @Inject constructor(
     var currentConversationId: String = UUID.randomUUID().toString()
         private set
 
+    private val _activeConversationId = MutableStateFlow<String>(currentConversationId)
+    val activeConversationId: StateFlow<String> = _activeConversationId.asStateFlow()
+
     // Workspace & Terminal State
     private val _currentCwd = MutableStateFlow("/content")
     val currentCwd: StateFlow<String> = _currentCwd.asStateFlow()
@@ -3079,6 +3082,7 @@ class ChatViewModel @Inject constructor(
     fun loadConversation(conversationId: String) {
         val isSwitching = conversationId != currentConversationId
         currentConversationId = conversationId
+        _activeConversationId.value = conversationId
         if (isSwitching) {
             streamingMessageId = null
             _isLoading.value = false

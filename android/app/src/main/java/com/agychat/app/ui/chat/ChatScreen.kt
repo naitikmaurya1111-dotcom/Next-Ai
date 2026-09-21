@@ -4257,17 +4257,28 @@ fun ClaudeFloatingInputBar(
     val activeMode = recognizedModes.firstOrNull { text.startsWith(it.prefix) }
     val isWebSearchActive = activeMode?.prefix == "/browser"
 
+    val inputBorderColor by animateColorAsState(
+        targetValue = if (text.isNotBlank()) ClaudeTerracotta.copy(alpha = 0.55f)
+                      else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+        animationSpec = tween(durationMillis = 200),
+        label = "inputBorderColor"
+    )
+    val inputShadowElevation by animateDpAsState(
+        targetValue = if (text.isNotBlank()) 6.dp else 3.dp,
+        animationSpec = tween(durationMillis = 200),
+        label = "inputShadowElevation"
+    )
+
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 2.dp,
-        shadowElevation = 4.dp,
+        shadowElevation = inputShadowElevation,
         modifier = Modifier
             .fillMaxWidth()
             .border(
                 1.dp,
-                if (text.isNotBlank()) ClaudeTerracotta.copy(alpha = 0.45f)
-                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+                inputBorderColor,
                 RoundedCornerShape(24.dp)
             )
     ) {
