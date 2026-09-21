@@ -59,6 +59,81 @@ def cancel_agy_command(client_conv_id: str) -> bool:
                 pass
     return False
 
+
+def get_host_environment_summary(cwd: str = "/content") -> dict:
+    """Collect real-time host environment telemetry for the client and model awareness."""
+    import platform
+    import subprocess
+    import sys
+
+    target_cwd = cwd if (cwd and os.path.exists(cwd)) else "/content"
+    drive_mounted = os.path.exists("/content/drive/MyDrive")
+
+    git_info = {}
+    git_candidate = target_cwd if os.path.exists(os.path.join(target_cwd, ".git")) else "/content/Next-Ai"
+    if os.path.exists(os.path.join(git_candidate, ".git")):
+        try:
+            branch = subprocess.check_output(["git", "-C", git_candidate, "rev-parse", "--abbrev-ref", "HEAD"], text=True, timeout=2).strip()
+            sha = subprocess.check_output(["git", "-C", git_candidate, "rev-parse", "--short", "HEAD"], text=True, timeout=2).strip()
+            commit_msg = subprocess.check_output(["git", "-C", git_candidate, "log", "-1", "--pretty=%B"], text=True, timeout=2).strip().split('\n')[0]
+            git_info = {
+                "repo": os.path.basename(git_candidate),
+                "branch": branch,
+                "commit": sha,
+                "commit_msg": commit_msg[:60]
+            }
+        except Exception:
+            pass
+
+    skills = []
+    skills_dir = "/root/.gemini/config/skills"
+    if os.path.exists(skills_dir):
+        try:
+            for s in os.listdir(skills_dir):
+                if os.path.isdir(os.path.join(skills_dir, s)):
+                    skills.append(s)
+        except Exception:
+            pass
+
+    mem_total_gb = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if "MemTotal:" in line:
+                    mem_kb = int(line.split()[1])
+                    mem_total_gb = round(mem_kb / (1024 * 1024), 1)
+                    break
+    except Exception:
+        pass
+
+    has_gpu = False
+    gpu_name = ""
+    try:
+        gpu_out = subprocess.check_output(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True, timeout=2).strip()
+        if gpu_out:
+            has_gpu = True
+            gpu_name = gpu_out.split('\n')[0]
+    except Exception:
+        pass
+
+    return {
+        "host": "Google Colab",
+        "os": f"Linux Ubuntu ({platform.machine()})",
+        "python": sys.version.split()[0],
+        "cpu_count": os.cpu_count() or 2,
+        "ram_gb": mem_total_gb,
+        "has_gpu": has_gpu,
+        "gpu_name": gpu_name,
+        "drive_mounted": drive_mounted,
+        "drive_backup_path": "/content/drive/MyDrive/NextAI_Backup" if drive_mounted else None,
+        "cwd": target_cwd,
+        "git": git_info,
+        "skills": skills,
+        "active_models_count": len(AVAILABLE_MODELS) if 'AVAILABLE_MODELS' in globals() else 7,
+        "websearch_available": os.path.exists("/usr/local/bin/websearch") or shutil.which("websearch") is not None
+    }
+
+
 def resolve_model_and_effort(model: str, effort: str) -> tuple[str, str | None]:
     """
     Resolve model name and thinking effort so there are ZERO flag conflicts in Antigravity CLI.
@@ -277,7 +352,8 @@ def format_prompt_with_personalization(
     history: list = None,
     model_name: str = "",
     effort_level: str = "high",
-    client_metadata: dict = None
+    client_metadata: dict = None,
+    cwd: str = "/content"
 ) -> str:
     """
     Build the complete AI system context from environment awareness, user Personalization profile,
@@ -288,6 +364,7 @@ def format_prompt_with_personalization(
     # ── 0. Environment Awareness & System Context ──────────────────────────────
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     drive_mounted = os.path.exists("/content/drive/MyDrive")
+    target_cwd = cwd if (cwd and os.path.exists(cwd)) else "/content"
 
     client_desc = "Next AI Android Mobile App (Material 3 Dynamic Theme, Jetpack Compose)"
     if client_metadata and isinstance(client_metadata, dict):
@@ -299,20 +376,40 @@ def format_prompt_with_personalization(
         loc = client_metadata.get("locale", "en")
         client_desc = f"{dev} | {os_ver} | Next AI {app_v} | Screen: {scr} | Theme: {thm} | Locale: {loc}"
 
+    env_summary = get_host_environment_summary(target_cwd)
+    git_data = env_summary.get("git", {})
+    git_line = f"• Git Repository: {git_data.get('repo')} on branch '{git_data.get('branch')}' ({git_data.get('commit')}: {git_data.get('commit_msg')})" if git_data else "• Workspace: /content scratch environment"
+
+    skills_list = env_summary.get("skills", [])
+    skills_line = f"• Active Agent Skills: {', '.join(skills_list)} (High-Thinking Engineering Protocol is active)" if skills_list else ""
+
+    gpu_str = f" | GPU: {env_summary.get('gpu_name')}" if env_summary.get("has_gpu") else ""
+    hw_str = f"{env_summary.get('cpu_count')} CPU cores, {env_summary.get('ram_gb')} GB RAM{gpu_str}"
+
     env_lines = [
         f"• Current Date & Time: {now_utc}",
-        "• Host OS & Environment: Google Colab (Linux Ubuntu x86_64, Python 3.12, bash shell)",
+        f"• Host OS & Environment: Google Colab ({env_summary.get('os')}, Python {env_summary.get('python')}, bash shell, {hw_str})",
+        f"• Active Working Directory (CWD): {target_cwd}",
         f"• Connected Client Device: {client_desc}",
+        git_line,
         f"• Storage & Persistence: Google Drive is {'MOUNTED at /content/drive/MyDrive' if drive_mounted else 'NOT MOUNTED'}; local scratch at /content and /tmp",
+        "• Next AI Project Root: /content/Next-Ai (Android package com.agychat.app)",
         "• Web Search Tool: /usr/local/bin/websearch utility is installed and ready for real-time web querying",
         f"• Active Model: {model_name or 'Gemini 3.8 Flash'} (Thinking Effort: {effort_level.upper()})",
-        "• Output Formatting: LaTeX mathematical notation ($ for inline, $$ for display blocks), GitHub-flavored Markdown tables, code blocks with language headers"
+        "• Output Formatting: LaTeX mathematical notation ($ for inline, $$ for display blocks), GitHub-flavored Markdown tables, code blocks with language headers, and clickable file links [label](file:///path)"
     ]
+    if skills_line:
+        env_lines.append(skills_line)
+
     sections.append(
         "<environment_awareness>\n"
         "You are operating as the intelligent assistant for the Next AI Android app running via Google Colab:\n"
-        + "\n".join(env_lines) + "\n"
-        "Always use accurate current dates, reference real filesystem paths, and deliver concise, polished answers.\n"
+        + "\n".join(env_lines) + "\n\n"
+        "WORKSPACE EXECUTION & CODEBASE INTERACTION DIRECTIVES:\n"
+        "1. You execute directly within the active workspace directory listed above.\n"
+        "2. When the user requests code creation, fixes, notes, or derivations, utilize file tools or bash commands to create the real files on disk.\n"
+        "3. Provide clickable markdown links for all created, modified, or referenced files using the file:/// URI scheme (e.g. [filename.kt](file:///content/Next-Ai/...)).\n"
+        "4. Always deliver concise, production-ready, verified answers with zero placeholders.\n"
         "</environment_awareness>"
     )
 
@@ -615,7 +712,8 @@ async def run_agy_command(
     is_auto_memory: bool = True,
     is_temporary: bool = False,
     history: list = None,
-    client_metadata: dict = None
+    client_metadata: dict = None,
+    cwd: str = "/content"
 ):
     """
     Runs agy command asynchronously with native stream-json output
@@ -626,6 +724,8 @@ async def run_agy_command(
     if not message_trimmed:
         yield _make_event("error", "Empty prompt received.")
         return
+
+    target_cwd = cwd if (cwd and os.path.exists(cwd)) else "/content"
 
     agy_bin = get_agy_path()
     agy_conv_id = conversation_map.get(client_conv_id) if client_conv_id else None
@@ -652,7 +752,8 @@ async def run_agy_command(
         history=history,
         model_name=model_display,
         effort_level=effort,
-        client_metadata=client_metadata
+        client_metadata=client_metadata,
+        cwd=target_cwd
     )
 
     cmd_args.extend([
@@ -661,7 +762,7 @@ async def run_agy_command(
         "-p", full_prompt
     ])
 
-    logger.info(f"Executing: {' '.join(cmd_args[:6])} ... -p '{message_trimmed[:40]}'")
+    logger.info(f"Executing: {' '.join(cmd_args[:6])} ... [CWD: {target_cwd}] -p '{message_trimmed[:40]}'")
     yield _make_event("info", f"Starting {model_display}…")
 
     process = None
@@ -669,7 +770,8 @@ async def run_agy_command(
         process = await asyncio.create_subprocess_exec(
             *cmd_args,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            cwd=target_cwd
         )
         if client_conv_id:
             active_processes[client_conv_id] = process

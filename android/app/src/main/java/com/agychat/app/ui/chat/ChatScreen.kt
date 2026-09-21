@@ -163,6 +163,7 @@ fun ChatScreen(
     val reasoningEffort by viewModel.reasoningEffort.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
     val connectionLatency by viewModel.connectionLatencyMs.collectAsState()
+    val hostEnvironment by viewModel.hostEnvironment.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showPluginBottomSheet by remember { mutableStateOf(false) }
@@ -173,6 +174,7 @@ fun ChatScreen(
     var showCustomInstructionsSheet by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showTextSizeSheet by remember { mutableStateOf(false) }
+    var showEnvironmentSheet by remember { mutableStateOf(false) }
     val enabledMemoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
     val isTemporaryChat by viewModel.isTemporaryChat.collectAsState()
     val currentCwd by viewModel.currentCwd.collectAsState()
@@ -987,28 +989,41 @@ fun ChatScreen(
                             }
                         }
 
-                        // Terminal Workspace Environment Bar (AGY CLI Connection)
+                        // Interactive Terminal Workspace & Model Connection Bar
                         AnimatedVisibility(
                             visible = connectionState == ConnectionState.CONNECTED && !isTemporaryChat,
                             enter = expandVertically() + fadeIn(),
                             exit = shrinkVertically() + fadeOut()
                         ) {
                             Surface(
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.pingBridge()
+                                    viewModel.requestEnvironmentRefresh()
+                                    showEnvironmentSheet = true
+                                },
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                border = androidx.compose.foundation.BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                                        .padding(horizontal = 12.dp, vertical = 5.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f, fill = false)
                                     ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(ChatGptEmerald)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
                                         Icon(
                                             Icons.Default.Terminal,
                                             contentDescription = "Workspace CWD",
@@ -1016,35 +1031,73 @@ fun ChatScreen(
                                             modifier = Modifier.size(13.dp)
                                         )
                                         Spacer(Modifier.width(6.dp))
+                                        val cwdDisplay = remember(currentCwd) {
+                                            if (currentCwd.startsWith("/content/Next-Ai")) "Next-Ai"
+                                            else if (currentCwd == "/content") "content"
+                                            else currentCwd.substringAfterLast('/').ifBlank { currentCwd }
+                                        }
                                         Text(
-                                            text = currentCwd,
+                                            text = cwdDisplay,
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 fontFamily = FontFamily.Monospace,
                                                 fontSize = 11.sp,
-                                                fontWeight = FontWeight.Medium
+                                                fontWeight = FontWeight.SemiBold
                                             ),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            color = MaterialTheme.colorScheme.onSurface,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
-                                    }
-                                    if (activeTasksCount > 0) {
-                                        Surface(
-                                            shape = RoundedCornerShape(8.dp),
-                                            color = ChatGptEmerald.copy(alpha = 0.15f)
-                                        ) {
+                                        if (hostEnvironment.gitBranch != null) {
+                                            Spacer(Modifier.width(5.dp))
                                             Text(
-                                                text = "$activeTasksCount tasks",
-                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
-                                                color = ChatGptEmerald,
-                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                text = "(${hostEnvironment.gitBranch})",
+                                                style = MaterialTheme.typography.labelSmall.copy(
+                                                    fontFamily = FontFamily.Monospace,
+                                                    fontSize = 10.sp
+                                                ),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                                maxLines = 1
                                             )
                                         }
-                                    } else {
-                                        Text(
-                                            text = "AGY Connected",
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
-                                            color = ChatGptEmerald.copy(alpha = 0.9f)
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        if (hostEnvironment.skills.isNotEmpty()) {
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = ChatGptPurple.copy(alpha = 0.12f)
+                                            ) {
+                                                Text(
+                                                    text = "High-Thinking",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
+                                                    color = ChatGptPurple,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+
+                                        if (connectionLatency != null) {
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = (if (connectionLatency!! < 100) ChatGptEmerald else Color(0xFFF59E0B)).copy(alpha = 0.12f)
+                                            ) {
+                                                Text(
+                                                    text = "${connectionLatency}ms",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Bold),
+                                                    color = if (connectionLatency!! < 100) ChatGptEmerald else Color(0xFFF59E0B),
+                                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Icon(
+                                            Icons.Default.Tune,
+                                            contentDescription = "Environment Details",
+                                            modifier = Modifier.size(13.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                         )
                                     }
                                 }
@@ -1498,6 +1551,8 @@ fun ChatScreen(
                             userOccupation = personalization.occupation,
                             depthLevel = personalization.depthLevel,
                             showMemoryBadge = showMemoryActivityBadges,
+                            hostEnvironment = hostEnvironment,
+                            onOpenEnvironmentSheet = { showEnvironmentSheet = true },
                             onOpenMemorySheet = { showMemorySheet = true },
                             onOpenCustomInstructions = { showCustomInstructionsSheet = true }
                         )
@@ -2005,6 +2060,22 @@ fun ChatScreen(
             onScaleChange = { viewModel.setChatTextSizeScale(it) },
             onCompactDensityToggle = { viewModel.setCompactMessageDensity(!compactMessageDensity) },
             onDismiss = { showTextSizeSheet = false }
+        )
+    }
+
+    if (showEnvironmentSheet) {
+        EnvironmentDetailsSheet(
+            hostEnvironment = hostEnvironment,
+            selectedModel = selectedModel,
+            reasoningEffort = reasoningEffort,
+            serverUrl = viewModel.serverUrl.collectAsState().value,
+            connectionLatency = connectionLatency,
+            connectionState = connectionState,
+            currentCwd = currentCwd,
+            onPing = { viewModel.pingBridge() },
+            onRefresh = { viewModel.requestEnvironmentRefresh() },
+            onSwitchCwd = { newCwd -> viewModel.updateCwd(newCwd) },
+            onDismiss = { showEnvironmentSheet = false }
         )
     }
 
@@ -4699,6 +4770,8 @@ fun EmptyChatGreeting(
     userOccupation: String = "",
     depthLevel: String = "Expert",
     showMemoryBadge: Boolean = true,
+    hostEnvironment: HostEnvironment = HostEnvironment(),
+    onOpenEnvironmentSheet: () -> Unit = {},
     onOpenMemorySheet: () -> Unit = {},
     onOpenCustomInstructions: () -> Unit = {}
 ) {
@@ -4789,13 +4862,17 @@ fun EmptyChatGreeting(
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
         )
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
 
-        // Context Status Badges (Model, Memories, Custom Instructions)
+        // Context Status Badges (Model, Colab Environment, Memories, Custom Instructions)
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Model Badge
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
@@ -4819,6 +4896,36 @@ fun EmptyChatGreeting(
                     )
                 }
             }
+
+            Spacer(Modifier.width(8.dp))
+
+            // Colab Environment Badge
+            Surface(
+                onClick = onOpenEnvironmentSheet,
+                shape = RoundedCornerShape(12.dp),
+                color = ChatGptEmerald.copy(alpha = 0.12f),
+                border = androidx.compose.foundation.BorderStroke(0.6.dp, ChatGptEmerald.copy(alpha = 0.35f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(ChatGptEmerald)
+                    )
+                    Text(
+                        text = "Colab · ${hostEnvironment.gitRepo ?: "Workspace"}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+                        color = ChatGptEmerald
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(8.dp))
 
             if (showMemoryBadge && memoriesCount > 0) {
                 Surface(
@@ -7162,3 +7269,441 @@ fun ChatTextSizeSheet(
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EnvironmentDetailsSheet(
+    hostEnvironment: HostEnvironment,
+    selectedModel: AiModel,
+    reasoningEffort: String,
+    serverUrl: String,
+    connectionLatency: Long?,
+    connectionState: ConnectionState,
+    currentCwd: String,
+    onPing: () -> Unit,
+    onRefresh: () -> Unit,
+    onSwitchCwd: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+
+    val cardBg = if (isDark) Color(0xFF1B1B1F) else Color(0xFFF7F7FA)
+    val cardBorder = if (isDark) Color(0xFF2C2C32) else Color(0xFFE5E5EB)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 36.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(ChatGptEmerald.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Terminal,
+                            contentDescription = null,
+                            tint = ChatGptEmerald,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Model & Execution Environment",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Live telemetry of AI model, Colab host, and workspace",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // 1. Live Connection Status Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = cardBg,
+                border = androidx.compose.foundation.BorderStroke(0.8.dp, cardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val isConnected = connectionState == ConnectionState.CONNECTED
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isConnected) ChatGptEmerald else MaterialTheme.colorScheme.error)
+                            )
+                            Text(
+                                text = if (isConnected) "Colab Bridge Online" else "Disconnected",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (isConnected) ChatGptEmerald else MaterialTheme.colorScheme.error
+                            )
+                            if (connectionLatency != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = ChatGptEmerald.copy(alpha = 0.12f)
+                                ) {
+                                    Text(
+                                        text = "${connectionLatency}ms",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.sp),
+                                        color = ChatGptEmerald,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Ping & Refresh Buttons
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Surface(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onPing()
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                            ) {
+                                Text(
+                                    text = "Ping",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, fontSize = 10.5.sp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Surface(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onRefresh()
+                                    Toast.makeText(context, "Refreshed environment", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "Refresh",
+                                    modifier = Modifier
+                                        .padding(4.dp)
+                                        .size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    if (serverUrl.isNotBlank()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = serverUrl,
+                                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontSize = 10.5.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = "Copy URL",
+                                modifier = Modifier
+                                    .size(14.dp)
+                                    .clickable {
+                                        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Server URL", serverUrl))
+                                        Toast.makeText(context, "URL copied", Toast.LENGTH_SHORT).show()
+                                    },
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 2. Active AI Model & Cognition Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = cardBg,
+                border = androidx.compose.foundation.BorderStroke(0.8.dp, cardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "AI MODEL & COGNITION",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, fontSize = 10.sp),
+                        color = ClaudeTerracotta
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text(
+                                text = selectedModel.name,
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Provider: ${selectedModel.provider} · ${selectedModel.badge}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (selectedModel.supportsEffort) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = ClaudeTerracotta.copy(alpha = 0.12f),
+                                border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(Icons.Default.ElectricBolt, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(12.dp))
+                                    Text(
+                                        text = reasoningEffort.replaceFirstChar { it.uppercase() },
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 10.5.sp),
+                                        color = ClaudeTerracotta
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Capability Pills Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("1M Context", "LaTeX Vinculum Math", "Tool Execution", "Web Search", "Drive Persistence").forEach { cap ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ) {
+                                Text(
+                                    text = cap,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Colab Host & Runtime Specs Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = cardBg,
+                border = androidx.compose.foundation.BorderStroke(0.8.dp, cardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "COLAB RUNTIME & HARDWARE",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, fontSize = 10.sp),
+                        color = ChatGptEmerald
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Host Platform", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(hostEnvironment.host, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("OS & Python", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Python ${hostEnvironment.pythonVersion}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Hardware Resources", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${hostEnvironment.cpuCount} CPU · ${hostEnvironment.ramGb} GB RAM", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Google Drive", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(if (hostEnvironment.isDriveMounted) "Mounted (/MyDrive)" else "Not Mounted", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), color = if (hostEnvironment.isDriveMounted) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+
+                    if (hostEnvironment.gitRepo != null) {
+                        HorizontalDivider(thickness = 0.6.dp, color = cardBorder)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Code, contentDescription = null, tint = ClaudeTerracotta, modifier = Modifier.size(15.dp))
+                            Column {
+                                Text(
+                                    text = "${hostEnvironment.gitRepo} (${hostEnvironment.gitBranch}) · ${hostEnvironment.gitCommit}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                if (!hostEnvironment.gitCommitMsg.isNullOrBlank()) {
+                                    Text(
+                                        text = hostEnvironment.gitCommitMsg!!,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (hostEnvironment.skills.isNotEmpty()) {
+                        HorizontalDivider(thickness = 0.6.dp, color = cardBorder)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = ChatGptPurple, modifier = Modifier.size(15.dp))
+                            Column {
+                                Text(
+                                    text = "Active Skills: ${hostEnvironment.skills.joinToString(", ")}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Adversarial self-review & execution verification enforced",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = ChatGptPurple
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Workspace Directory Switcher Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = cardBg,
+                border = androidx.compose.foundation.BorderStroke(0.8.dp, cardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "ACTIVE WORKSPACE CWD",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp, fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = currentCwd,
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.SemiBold, fontSize = 11.sp),
+                            color = ChatGptEmerald
+                        )
+                    }
+
+                    Text(
+                        text = "Commands, tests, and file modifications execute in this folder on the host:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // Quick directory buttons
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val targets = listOf("/content/Next-Ai", "/content", "/tmp")
+                        targets.forEach { path ->
+                            val isSelected = currentCwd == path
+                            Surface(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onSwitchCwd(path)
+                                    Toast.makeText(context, "CWD switched to $path", Toast.LENGTH_SHORT).show()
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    0.7.dp,
+                                    if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = path.substringAfterLast('/').ifBlank { path },
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
+                                        color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = path,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

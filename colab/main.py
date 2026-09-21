@@ -9,7 +9,7 @@ import logging
 import asyncio
 import base64
 from aiofiles import open as aio_open
-from agy_runner import run_agy_command, cancel_agy_command
+from agy_runner import run_agy_command, cancel_agy_command, get_host_environment_summary
 
 BINARY_EXTENSIONS = {
     ".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".ico",
@@ -439,9 +439,13 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     await manager.connect(websocket)
 
-    # Send welcome handshake
+    # Send welcome handshake with real-time host environment telemetry
     await manager.send(
-        json.dumps({"type": "connected", "content": "AGY Chat Bridge ready"}),
+        json.dumps({
+            "type": "connected",
+            "content": "AGY Chat Bridge ready",
+            "environment": get_host_environment_summary()
+        }),
         websocket
     )
 
@@ -556,8 +560,22 @@ async def websocket_endpoint(websocket: WebSocket):
 
                 # Handle client ping heartbeat
                 if payload.get("action") == "ping" or payload.get("type") == "ping":
+                    c_ts = payload.get("client_timestamp") or payload.get("timestamp") or time.time()
+                    req_cwd = payload.get("cwd", "/content")
                     await manager.send(json.dumps({
                         "type": "pong",
+                        "client_timestamp": c_ts,
+                        "timestamp": time.time(),
+                        "environment": get_host_environment_summary(req_cwd)
+                    }), websocket)
+                    continue
+
+                # Handle get_environment request from client
+                if payload.get("action") == "get_environment" or payload.get("type") == "get_environment":
+                    req_cwd = payload.get("cwd", "/content")
+                    await manager.send(json.dumps({
+                        "type": "environment_info",
+                        "environment": get_host_environment_summary(req_cwd),
                         "timestamp": time.time()
                     }), websocket)
                     continue
@@ -653,6 +671,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 conv_id = payload.get("conversation_id", "")
                 effort = payload.get("effort", "high")
                 model = payload.get("model", "")
+                cwd = payload.get("cwd", "/content")
                 memories = payload.get("memories", [])
                 custom_instructions = payload.get("custom_instructions")
                 personalization = payload.get("personalization")  # Full Personalization profile
@@ -706,6 +725,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 is_temporary = False
                 history = []
                 client_metadata = None
+                cwd = "/content"
 
             # Cancel previous task for this conversation if starting a new prompt
             if conv_id:
@@ -718,7 +738,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
             current_conv_id = conv_id
 
-            async def stream_worker(msg, cid, eff, mdl, mems, c_inst, pers, a_mem, is_temp, hist, c_meta):
+            async def stream_worker(msg, cid, eff, mdl, mems, c_inst, pers, a_mem, is_temp, hist, c_meta, work_dir):
                 try:
                     conversation_buffers[cid] = []
                     seq_counter = 0
@@ -733,7 +753,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         is_auto_memory=a_mem,
                         is_temporary=is_temp,
                         history=hist,
-                        client_metadata=c_meta
+                        client_metadata=c_meta,
+                        cwd=work_dir
                     ):
                         try:
                             ev_obj = json.loads(event)
@@ -778,7 +799,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     auto_memory,
                     is_temporary,
                     history,
-                    client_metadata
+                    client_metadata,
+                    cwd
                 )
             )
             if conv_id:

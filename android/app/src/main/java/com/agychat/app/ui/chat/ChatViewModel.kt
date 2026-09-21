@@ -71,6 +71,26 @@ data class FileViewerData(
     }
 }
 
+data class HostEnvironment(
+    val host: String = "Google Colab",
+    val os: String = "Linux Ubuntu",
+    val pythonVersion: String = "3.12",
+    val cpuCount: Int = 2,
+    val ramGb: Double = 0.0,
+    val hasGpu: Boolean = false,
+    val gpuName: String = "",
+    val isDriveMounted: Boolean = false,
+    val driveBackupPath: String? = null,
+    val cwd: String = "/content",
+    val gitRepo: String? = null,
+    val gitBranch: String? = null,
+    val gitCommit: String? = null,
+    val gitCommitMsg: String? = null,
+    val skills: List<String> = emptyList(),
+    val activeModelsCount: Int = 7,
+    val isWebsearchAvailable: Boolean = true
+)
+
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -478,12 +498,73 @@ class ChatViewModel @Inject constructor(
     private val _connectionLatencyMs = MutableStateFlow<Long?>(null)
     val connectionLatencyMs: StateFlow<Long?> = _connectionLatencyMs.asStateFlow()
 
+    private val _hostEnvironment = MutableStateFlow(HostEnvironment())
+    val hostEnvironment: StateFlow<HostEnvironment> = _hostEnvironment.asStateFlow()
+
+    fun updateHostEnvironment(envJson: JSONObject?) {
+        if (envJson == null) return
+        try {
+            val gitObj = envJson.optJSONObject("git")
+            val skillsArray = envJson.optJSONArray("skills")
+            val skillsList = mutableListOf<String>()
+            if (skillsArray != null) {
+                for (i in 0 until skillsArray.length()) {
+                    val s = skillsArray.optString(i)
+                    if (s.isNotBlank()) skillsList.add(s)
+                }
+            }
+            val serverCwd = envJson.optString("cwd", "")
+            if (serverCwd.isNotBlank() && _currentCwd.value == "/content" && serverCwd != "/content") {
+                _currentCwd.value = serverCwd
+            }
+
+            _hostEnvironment.value = HostEnvironment(
+                host = envJson.optString("host", "Google Colab"),
+                os = envJson.optString("os", "Linux Ubuntu"),
+                pythonVersion = envJson.optString("python", "3.12"),
+                cpuCount = envJson.optInt("cpu_count", 2),
+                ramGb = envJson.optDouble("ram_gb", 0.0),
+                hasGpu = envJson.optBoolean("has_gpu", false),
+                gpuName = envJson.optString("gpu_name", ""),
+                isDriveMounted = envJson.optBoolean("drive_mounted", false),
+                driveBackupPath = envJson.optString("drive_backup_path", null),
+                cwd = if (serverCwd.isNotBlank()) serverCwd else _currentCwd.value,
+                gitRepo = gitObj?.optString("repo", null),
+                gitBranch = gitObj?.optString("branch", null),
+                gitCommit = gitObj?.optString("commit", null),
+                gitCommitMsg = gitObj?.optString("commit_msg", null),
+                skills = skillsList,
+                activeModelsCount = envJson.optInt("active_models_count", 7),
+                isWebsearchAvailable = envJson.optBoolean("websearch_available", true)
+            )
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "Error parsing host environment telemetry", e)
+        }
+    }
+
     fun pingBridge() {
         pingStartTime = System.currentTimeMillis()
         try {
-            webSocketClient.sendMessage(JSONObject().apply { put("action", "ping") }.toString())
+            val pingObj = JSONObject().apply {
+                put("action", "ping")
+                put("client_timestamp", pingStartTime)
+                put("cwd", _currentCwd.value)
+            }
+            webSocketClient.sendMessage(pingObj.toString())
         } catch (t: Throwable) {
             Log.w("ChatViewModel", "Failed to send ping", t)
+        }
+    }
+
+    fun requestEnvironmentRefresh() {
+        viewModelScope.launch {
+            try {
+                val payload = JSONObject().apply {
+                    put("action", "get_environment")
+                    put("cwd", _currentCwd.value)
+                }
+                webSocketClient.sendMessage(payload.toString())
+            } catch (_: Throwable) {}
         }
     }
 
@@ -641,11 +722,14 @@ class ChatViewModel @Inject constructor(
         val trimmed = newCwd.trim()
         if (trimmed.isNotBlank()) {
             _currentCwd.value = trimmed
+            val prefs = context.getSharedPreferences("next_ai_prefs", Context.MODE_PRIVATE)
+            prefs.edit().putString("current_cwd", trimmed).apply()
             viewModelScope.launch {
                 try {
                     chatDao.updateConversationCwd(currentConversationId, trimmed)
                 } catch (_: Exception) {}
             }
+            requestEnvironmentRefresh()
         }
     }
 
@@ -1372,12 +1456,28 @@ class ChatViewModel @Inject constructor(
                     // Server keep-alive heartbeat to prevent Cloudflare 100s timeout
                 }
                 "pong" -> {
-                    val latency = if (pingStartTime > 0L) (System.currentTimeMillis() - pingStartTime).coerceAtLeast(1L) else null
+                    val clientTs = json.optLong("client_timestamp", 0L)
+                    val latency = if (clientTs > 0L) {
+                        (System.currentTimeMillis() - clientTs).coerceAtLeast(1L)
+                    } else if (pingStartTime > 0L) {
+                        (System.currentTimeMillis() - pingStartTime).coerceAtLeast(1L)
+                    } else null
                     _connectionLatencyMs.value = latency
+                    if (json.has("environment")) {
+                        updateHostEnvironment(json.optJSONObject("environment"))
+                    }
                 }
                 "connected" -> {
                     _connectionState.value = ConnectionState.CONNECTED
                     _currentStatus.value = null
+                    if (json.has("environment")) {
+                        updateHostEnvironment(json.optJSONObject("environment"))
+                    }
+                }
+                "environment_info" -> {
+                    if (json.has("environment")) {
+                        updateHostEnvironment(json.optJSONObject("environment"))
+                    }
                 }
                 "info" -> {
                     _currentStatus.value = sanitizeChunk(content)
