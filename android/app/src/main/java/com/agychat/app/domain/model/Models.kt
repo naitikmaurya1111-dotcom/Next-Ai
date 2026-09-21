@@ -122,7 +122,7 @@ data class Personalization(
     val responseFormat: String = "Auto",          // "Auto" | "Always Markdown" | "Plain Text"
     val toneStyle: String = "Direct",             // "Direct" | "Formal" | "Casual" | "Socratic" | "Empathetic"
     val depthLevel: String = "Expert",            // "Beginner" | "Intermediate" | "Expert" | "Research"
-    val codeLanguage: String = "Kotlin",          // preferred programming language
+    val codeLanguage: String = "Auto",            // preferred programming language ("Auto" | "Python" | "Kotlin" etc.)
     val enableExamples: Boolean = true,           // include code/concept examples by default
     val enableProactiveInsights: Boolean = true,  // volunteer useful related info unprompted
     val enableCriticalFeedback: Boolean = true,   // give honest critical analysis, no sugarcoating

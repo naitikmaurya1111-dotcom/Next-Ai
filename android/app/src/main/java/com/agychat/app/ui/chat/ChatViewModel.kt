@@ -825,7 +825,7 @@ class ChatViewModel @Inject constructor(
                 responseFormat = prefs.getString("p_response_format", "Auto") ?: "Auto",
                 toneStyle = prefs.getString("p_tone_style", "Direct") ?: "Direct",
                 depthLevel = prefs.getString("p_depth_level", "Expert") ?: "Expert",
-                codeLanguage = prefs.getString("p_code_lang", "Kotlin") ?: "Kotlin",
+                codeLanguage = prefs.getString("p_code_lang", "Auto") ?: "Auto",
                 enableExamples = prefs.getBoolean("p_examples", true),
                 enableProactiveInsights = prefs.getBoolean("p_proactive", true),
                 enableCriticalFeedback = prefs.getBoolean("p_critical", true),
@@ -2599,7 +2599,7 @@ class ChatViewModel @Inject constructor(
                     put("response_format", p.responseFormat)
                     put("tone_style", p.toneStyle)
                     put("depth_level", p.depthLevel)
-                    put("code_language", p.codeLanguage)
+                    if (p.codeLanguage.isNotBlank() && p.codeLanguage != "Auto") put("code_language", p.codeLanguage)
                     put("enable_examples", p.enableExamples)
                     put("enable_proactive", p.enableProactiveInsights)
                     put("enable_critical", p.enableCriticalFeedback)

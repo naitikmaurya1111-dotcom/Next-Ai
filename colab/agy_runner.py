@@ -70,14 +70,13 @@ def get_host_environment_summary(cwd: str = "/content") -> dict:
     drive_mounted = os.path.exists("/content/drive/MyDrive")
 
     git_info = {}
-    git_candidate = target_cwd if os.path.exists(os.path.join(target_cwd, ".git")) else "/content/Next-Ai"
-    if os.path.exists(os.path.join(git_candidate, ".git")):
+    if os.path.exists(os.path.join(target_cwd, ".git")):
         try:
-            branch = subprocess.check_output(["git", "-C", git_candidate, "rev-parse", "--abbrev-ref", "HEAD"], text=True, timeout=2).strip()
-            sha = subprocess.check_output(["git", "-C", git_candidate, "rev-parse", "--short", "HEAD"], text=True, timeout=2).strip()
-            commit_msg = subprocess.check_output(["git", "-C", git_candidate, "log", "-1", "--pretty=%B"], text=True, timeout=2).strip().split('\n')[0]
+            branch = subprocess.check_output(["git", "-C", target_cwd, "rev-parse", "--abbrev-ref", "HEAD"], text=True, timeout=2).strip()
+            sha = subprocess.check_output(["git", "-C", target_cwd, "rev-parse", "--short", "HEAD"], text=True, timeout=2).strip()
+            commit_msg = subprocess.check_output(["git", "-C", target_cwd, "log", "-1", "--pretty=%B"], text=True, timeout=2).strip().split('\n')[0]
             git_info = {
-                "repo": os.path.basename(git_candidate),
+                "repo": os.path.basename(target_cwd),
                 "branch": branch,
                 "commit": sha,
                 "commit_msg": commit_msg[:60]
@@ -315,7 +314,7 @@ def _build_response_directives(p: dict) -> list:
         directives.append("Use plain text ONLY — no Markdown, no headers, no bullet points.")
 
     code_lang = p.get("code_language", "").strip()
-    if code_lang:
+    if code_lang and code_lang.lower() not in ("auto", "none", "any", "default", ""):
         directives.append(f"Default all code examples to {code_lang} unless explicitly asked for another language.")
 
     if not p.get("enable_examples", True):
@@ -361,56 +360,18 @@ def format_prompt_with_personalization(
     """
     sections = []
 
-    # ── 0. Environment Awareness & System Context ──────────────────────────────
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    drive_mounted = os.path.exists("/content/drive/MyDrive")
-    target_cwd = cwd if (cwd and os.path.exists(cwd)) else "/content"
-
-    client_desc = "Next AI Android Mobile App (Material 3 Dynamic Theme, Jetpack Compose)"
-    if client_metadata and isinstance(client_metadata, dict):
-        dev = client_metadata.get("device", "Android Device")
-        os_ver = client_metadata.get("os", "Android")
-        app_v = client_metadata.get("app_version", "v1.1.0")
-        scr = client_metadata.get("screen", "")
-        thm = client_metadata.get("theme", "")
-        loc = client_metadata.get("locale", "en")
-        client_desc = f"{dev} | {os_ver} | Next AI {app_v} | Screen: {scr} | Theme: {thm} | Locale: {loc}"
-
-    env_summary = get_host_environment_summary(target_cwd)
-    git_data = env_summary.get("git", {})
-    git_line = f"• Git Repository: {git_data.get('repo')} on branch '{git_data.get('branch')}' ({git_data.get('commit')}: {git_data.get('commit_msg')})" if git_data else "• Workspace: /content scratch environment"
-
-    skills_list = env_summary.get("skills", [])
-    skills_line = f"• Active Agent Skills: {', '.join(skills_list)} (High-Thinking Engineering Protocol is active)" if skills_list else ""
-
-    gpu_str = f" | GPU: {env_summary.get('gpu_name')}" if env_summary.get("has_gpu") else ""
-    hw_str = f"{env_summary.get('cpu_count')} CPU cores, {env_summary.get('ram_gb')} GB RAM{gpu_str}"
-
-    env_lines = [
-        f"• Current Date & Time: {now_utc}",
-        f"• Host OS & Environment: Google Colab ({env_summary.get('os')}, Python {env_summary.get('python')}, bash shell, {hw_str})",
-        f"• Active Working Directory (CWD): {target_cwd}",
-        f"• Connected Client Device: {client_desc}",
-        git_line,
-        f"• Storage & Persistence: Google Drive is {'MOUNTED at /content/drive/MyDrive' if drive_mounted else 'NOT MOUNTED'}; local scratch at /content and /tmp",
-        "• Next AI Project Root: /content/Next-Ai (Android package com.agychat.app)",
-        "• Web Search Tool: /usr/local/bin/websearch utility is installed and ready for real-time web querying",
-        f"• Active Model: {model_name or 'Gemini 3.8 Flash'} (Thinking Effort: {effort_level.upper()})",
-        "• Output Formatting: LaTeX mathematical notation ($ for inline, $$ for display blocks), GitHub-flavored Markdown tables, code blocks with language headers, and clickable file links [label](file:///path)"
-    ]
-    if skills_line:
-        env_lines.append(skills_line)
-
+    # ── 0. Universal AI Assistant Core Identity (ChatGPT Standard) ─────────────
     sections.append(
-        "<environment_awareness>\n"
-        "You are operating as the intelligent assistant for the Next AI Android app running via Google Colab:\n"
-        + "\n".join(env_lines) + "\n\n"
-        "WORKSPACE EXECUTION & CODEBASE INTERACTION DIRECTIVES:\n"
-        "1. You execute directly within the active workspace directory listed above.\n"
-        "2. When the user requests code creation, fixes, notes, or derivations, utilize file tools or bash commands to create the real files on disk.\n"
-        "3. Provide clickable markdown links for all created, modified, or referenced files using the file:/// URI scheme (e.g. [filename.kt](file:///content/Next-Ai/...)).\n"
-        "4. Always deliver concise, production-ready, verified answers with zero placeholders.\n"
-        "</environment_awareness>"
+        "<system_instruction>\n"
+        "You are Next AI, a versatile, brilliant, and helpful general-purpose AI assistant like ChatGPT.\n\n"
+        "CORE OPERATIONAL DIRECTIVES:\n"
+        "1. FRESH CHAT SESSIONS: Treat every conversation session as completely fresh and focused entirely on the user's specific prompt.\n"
+        "2. UNIVERSAL DOMAIN ASSISTANCE: Confidently assist across any field — creative writing, general knowledge, science, mathematics, reasoning, literature, philosophy, language learning, and coding across ANY programming language.\n"
+        "3. ZERO CODEBASE / PROJECT BIAS: NEVER assume the user is asking about the Next AI app, Android mobile development, or any internal project unless the user explicitly and directly asks about it.\n"
+        "4. NO INTERNAL METADATA LEAKAGE: Never mention internal repository details, git branches, commits, or host file paths unprompted.\n"
+        "5. TOOL CAPABILITIES: You have real execution capabilities (file writing, shell execution, web search) in Google Colab. Use them ONLY when the user explicitly requests saving a file, executing code, or querying live web data.\n"
+        "6. MATHEMATICS & FORMATTING: Format mathematical equations using standard LaTeX ($ for inline, $$ for block display). Format output using clean, structured Markdown.\n"
+        "</system_instruction>"
     )
 
     # ── 1. Prior Conversation History (Multi-turn Context Persistence) ─────────
