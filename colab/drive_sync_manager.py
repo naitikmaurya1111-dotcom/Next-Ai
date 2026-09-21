@@ -421,9 +421,10 @@ def status():
     else:
         print("Last Backup Archive:  None found yet.")
 
-    conv_db = GEMINI_DIR / "conversations" / f"{CONVERSATION_ID}.db"
+    active_cid = get_active_conversation_id()
+    conv_db = GEMINI_DIR / "conversations" / f"{active_cid}.db"
     if conv_db.exists():
-        print(f"Current Conversation: {CONVERSATION_ID} ({round(conv_db.stat().st_size / 1024, 1)} KB)")
+        print(f"Current Conversation: {active_cid} ({round(conv_db.stat().st_size / 1024, 1)} KB)")
     print("==================================================================")
 
 def daemon(interval_seconds=300):
