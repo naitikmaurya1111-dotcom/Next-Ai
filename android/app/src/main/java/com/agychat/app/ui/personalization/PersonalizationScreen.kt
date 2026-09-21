@@ -50,7 +50,7 @@ fun PersonalizationScreen(
     val memoriesCount by viewModel.enabledMemoriesCount.collectAsState(initial = 0)
 
     var currentTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("🧠 Memory", "🎨 Personalize")
+    val tabs = listOf("🧠 Memory Vault", "📝 Custom Instructions", "🎨 Persona & Behavior")
 
     Scaffold(
         topBar = {
@@ -97,14 +97,15 @@ fun PersonalizationScreen(
                     Tab(
                         selected = currentTab == i,
                         onClick = { currentTab = i },
-                        text = { Text(title, fontWeight = if (currentTab == i) FontWeight.Bold else FontWeight.Normal) }
+                        text = { Text(title, fontWeight = if (currentTab == i) FontWeight.Bold else FontWeight.Normal, fontSize = 13.sp) }
                     )
                 }
             }
 
             when (currentTab) {
                 0 -> MemoryTab(viewModel = viewModel, memories = memories, personalization = personalization)
-                1 -> PersonalizeTab(viewModel = viewModel, personalization = personalization)
+                1 -> CustomInstructionsTab(viewModel = viewModel, personalization = personalization)
+                2 -> PersonalizeTab(viewModel = viewModel, personalization = personalization)
             }
         }
     }
@@ -274,8 +275,8 @@ fun MemoryTab(
     if (showAddDialog) {
         AddEditMemoryDialog(
             existing = null,
-            onSave = { content, category ->
-                viewModel.addMemory(content, category)
+            onSave = { content, category, importance ->
+                viewModel.addMemory(content, category, importance)
                 showAddDialog = false
             },
             onDismiss = { showAddDialog = false }
@@ -285,8 +286,8 @@ fun MemoryTab(
     editingMemory?.let { mem ->
         AddEditMemoryDialog(
             existing = mem,
-            onSave = { content, category ->
-                viewModel.editMemory(mem.id, content, category)
+            onSave = { content, category, importance ->
+                viewModel.editMemory(mem.id, content, category, importance)
                 editingMemory = null
             },
             onDismiss = { editingMemory = null }
@@ -311,7 +312,242 @@ fun MemoryTab(
     }
 }
 
-// ─── Personalize Tab ─────────────────────────────────────────────────────────
+// ─── Custom Instructions Tab (ChatGPT Standard) ─────────────────────────────
+
+data class CustomInstructionPreset(
+    val title: String,
+    val subtitle: String,
+    val aboutUser: String,
+    val responsePrefs: String
+)
+
+@Composable
+fun CustomInstructionsTab(
+    viewModel: ChatViewModel,
+    personalization: Personalization
+) {
+    var draft by remember(personalization) { mutableStateOf(personalization) }
+    var hasChanges by remember { mutableStateOf(false) }
+
+    fun update(new: Personalization) {
+        draft = new
+        hasChanges = true
+    }
+
+    val inspirationPresets = listOf(
+        CustomInstructionPreset(
+            title = "Android & Mobile Architect",
+            subtitle = "Modern Jetpack Compose, clean MVI, coroutines, robust error handling",
+            aboutUser = "I am an Android developer building modern apps using Jetpack Compose, Kotlin Coroutines & Flow, Room SQLite, and Clean Architecture. I prefer robust, production-ready code with zero shortcuts.",
+            responsePrefs = "Default all code examples to Kotlin using Jetpack Compose. Explain architectural trade-offs, state management, and lifecycle safety. Keep answers precise, assertive, and technically deep."
+        ),
+        CustomInstructionPreset(
+            title = "Full-Stack Engineer",
+            subtitle = "TypeScript, React, Python backend, API design, DevOps",
+            aboutUser = "I work on full-stack systems with TypeScript/React frontends and Python/FastAPI backends. I focus on modular APIs, data validation, and clean design patterns.",
+            responsePrefs = "Provide complete, typed code snippets. Highlight edge cases, security considerations, and performance implications. Be direct and avoid unnecessary boilerplate."
+        ),
+        CustomInstructionPreset(
+            title = "AI & ML Researcher",
+            subtitle = "Mathematical foundations, PyTorch, model architectures, theory",
+            aboutUser = "I am a computer science researcher working on machine learning, deep neural networks, LLMs, and agentic workflows.",
+            responsePrefs = "Format mathematical formulations using standard LaTeX. Focus on underlying theory, mathematical rigor, architectural trade-offs, and empirical findings."
+        ),
+        CustomInstructionPreset(
+            title = "Academic & Student",
+            subtitle = "Intuitive analogies, first-principles explanations, step-by-step logic",
+            aboutUser = "I am a university student studying computer science and mathematics. I learn best when complex topics are broken down from first principles.",
+            responsePrefs = "Explain difficult concepts using intuitive real-world analogies first, followed by clear step-by-step mathematical or code breakdowns. Guide my understanding Socratically."
+        ),
+        CustomInstructionPreset(
+            title = "Executive & Concise",
+            subtitle = "Bottom-line first, structured bullet points, zero fluff, actionable",
+            aboutUser = "I am a product leader and entrepreneur managing multiple software initiatives.",
+            responsePrefs = "Be extremely concise. State conclusions and key findings first. Use structured bullet points, high-impact recommendations, and no diplomatic filler."
+        )
+    )
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // Master Toggle Card
+        item {
+            MasterToggleCard(
+                title = "Custom Instructions",
+                subtitle = if (draft.isEnabled)
+                    "Active · Next AI incorporates these instructions into every prompt"
+                else
+                    "Inactive · Next AI uses default general behavior",
+                isEnabled = draft.isEnabled,
+                icon = Icons.Outlined.EditNote,
+                onToggle = { update(draft.copy(isEnabled = it)) }
+            )
+        }
+
+        if (draft.isEnabled) {
+            // Quick Inspiration Presets
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Quick Inspiration Presets",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Tap a preset card to populate both instructions below:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(inspirationPresets) { preset ->
+                            Card(
+                                modifier = Modifier
+                                    .width(260.dp)
+                                    .clickable {
+                                        update(
+                                            draft.copy(
+                                                aboutUser = preset.aboutUser,
+                                                responsePreferences = preset.responsePrefs
+                                            )
+                                        )
+                                    },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(preset.title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        preset.subtitle,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Box 1: What to know about you
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Icon(Icons.Outlined.PersonPin, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column {
+                                Text(
+                                    "What would you like Next AI to know about you?",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    "Your background, role, tech stack, or ongoing projects",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = draft.aboutUser,
+                            onValueChange = { update(draft.copy(aboutUser = it)) },
+                            placeholder = { Text("e.g. I am an Android developer building Next AI using Jetpack Compose, Kotlin, and Room...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 4,
+                            maxLines = 8,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Text(
+                                "${draft.aboutUser.length} characters",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Box 2: How AI should respond
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Icon(Icons.Outlined.QuestionAnswer, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                            Column {
+                                Text(
+                                    "How would you like Next AI to respond?",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    "Tone, code language, formatting guidelines, dos & don'ts",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = draft.responsePreferences,
+                            onValueChange = { update(draft.copy(responsePreferences = it)) },
+                            placeholder = { Text("e.g. Always write complete Kotlin code without ellipses. Be direct, explain trade-offs, and skip unnecessary pleasantries.") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 4,
+                            maxLines = 8,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            Text(
+                                "${draft.responsePreferences.length} characters",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Save Button
+            item {
+                Button(
+                    onClick = {
+                        viewModel.savePersonalization(draft)
+                        hasChanges = false
+                    },
+                    enabled = hasChanges,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (hasChanges) "Save Custom Instructions" else "Saved", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
 
 @Composable
 fun PersonalizeTab(
@@ -854,11 +1090,12 @@ fun EmptyMemoryState(onAdd: () -> Unit) {
 @Composable
 fun AddEditMemoryDialog(
     existing: MemoryEntity?,
-    onSave: (content: String, category: String) -> Unit,
+    onSave: (content: String, category: String, importance: Int) -> Unit,
     onDismiss: () -> Unit
 ) {
     var content by remember { mutableStateOf(existing?.content ?: "") }
     var category by remember { mutableStateOf(existing?.category ?: MemoryCategory.GENERAL) }
+    var importance by remember { mutableFloatStateOf((existing?.importance ?: 7).toFloat()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -890,11 +1127,26 @@ fun AddEditMemoryDialog(
                         )
                     }
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Importance Level", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Text("${importance.toInt()}/10", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = 13.sp)
+                }
+                Slider(
+                    value = importance,
+                    onValueChange = { importance = it },
+                    valueRange = 1f..10f,
+                    steps = 8
+                )
             }
         },
         confirmButton = {
             Button(
-                onClick = { if (content.isNotBlank()) onSave(content.trim(), category) },
+                onClick = { if (content.isNotBlank()) onSave(content.trim(), category, importance.toInt()) },
                 enabled = content.isNotBlank()
             ) { Text(if (existing == null) "Add" else "Save") }
         },

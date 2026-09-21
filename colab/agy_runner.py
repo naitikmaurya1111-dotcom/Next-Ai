@@ -170,40 +170,138 @@ def resolve_model_and_effort(model: str, effort: str) -> tuple[str, str | None]:
 
     return clean_model, None
 
-# Autonomous Memory Tag Pattern (ChatGPT Memory Extraction)
+# Autonomous Memory Patterns (ChatGPT Standard: XML Tags, JSON Blocks, and Reflex)
 MEMORY_TAG_REGEX = re.compile(
-    r'<memory_update\s+([^>]*?)(?:/>|>([\s\S]*?)</memory_update>)',
+    r'<(?:memory_update|memory|memory_save)\s+([^>]*?)(?:/>|>([\s\S]*?)</(?:memory_update|memory|memory_save)>)',
+    re.DOTALL | re.IGNORECASE
+)
+JSON_MEMORY_BLOCK_REGEX = re.compile(
+    r'```(?:memory|json:memory)\s*\n?(\{[\s\S]*?\})\s*\n?```',
     re.DOTALL | re.IGNORECASE
 )
 ATTR_REGEX = re.compile(r'(\w+)\s*=\s*["\']([^"\']*)["\']', re.IGNORECASE)
-PARTIAL_TAG_REGEX = re.compile(r'<memory_update(?:\s+[^>]*)?$', re.DOTALL | re.IGNORECASE)
+PARTIAL_TAG_REGEX = re.compile(r'<(?:memory_update|memory|memory_save)(?:\s+[^>]*)?$', re.DOTALL | re.IGNORECASE)
+PARTIAL_JSON_BLOCK_REGEX = re.compile(r'```(?:memory|json:memory)(?:\s*[\s\S]*)?$', re.DOTALL | re.IGNORECASE)
+
+
+def detect_semantic_memory_intent(user_msg: str, assistant_resp: str) -> list[dict]:
+    """
+    Autonomous Semantic Memory Reflex:
+    If the model fails to emit a memory tag, but the conversation established a durable
+    personal fact or user instruction, extract it reliably.
+    """
+    updates = []
+    user_clean = (user_msg or "").strip()
+    resp_clean = (assistant_resp or "").strip()
+
+    # Case 1: Direct slash commands
+    if user_clean.startswith("/remember "):
+        fact = user_clean[10:].strip()
+        if fact:
+            updates.append({"action": "add", "category": "general", "content": fact, "importance": 8})
+            return updates
+    elif user_clean.startswith("/forget "):
+        query = user_clean[8:].strip()
+        if query:
+            updates.append({"action": "delete", "category": "general", "content": query, "importance": 5})
+            return updates
+
+    # Case 2: User explicit "remember that / keep in mind that / remember: / note that"
+    remember_patterns = [
+        r"(?:please\s+)?remember\s+(?:that\s+)?(.+)",
+        r"(?:please\s+)?keep\s+in\s+mind\s+(?:that\s+)?(.+)",
+        r"(?:please\s+)?note\s+(?:that\s+)?(?:down[:\s]+)?(.+)",
+        r"my\s+name\s+is\s+([A-Za-z0-9\s]+?)(?:\.|\,|$)",
+        r"i\s+(?:am\s+living|live)\s+in\s+([A-Za-z0-9\s]+?)(?:\.|\,|$)",
+        r"i\s+(?:work\s+as|am)\s+(?:an?\s+)?([A-Za-z0-9\s]+?)(?:\.|\,|$)",
+    ]
+
+    for p in remember_patterns:
+        match = re.search(p, user_clean, re.IGNORECASE)
+        if match:
+            extracted = match.group(1).strip().rstrip(".")
+            # Filter out non-durable queries like "remember this code?" or "remember what we discussed"
+            if extracted and not extracted.lower().startswith(("what ", "how ", "when ", "where ", "who ", "why ", "this code", "this equation", "what we")):
+                if 3 <= len(extracted) <= 140:
+                    cat = "personal" if any(w in user_clean.lower() for w in ["my name", "i live", "i am", "my role", "my job"]) else "preferences"
+                    updates.append({"action": "add", "category": cat, "content": extracted, "importance": 8})
+                    break
+
+    # Case 3: User explicit "forget that / forget about / clear memory about"
+    forget_patterns = [
+        r"(?:please\s+)?forget\s+(?:that\s+|about\s+)?(.+)",
+        r"(?:please\s+)?clear\s+(?:my\s+)?memory\s+(?:about\s+)?(.+)",
+        r"(?:please\s+)?don[\'\u2019]?t\s+remember\s+(.+)"
+    ]
+    for p in forget_patterns:
+        match = re.search(p, user_clean, re.IGNORECASE)
+        if match:
+            q = match.group(1).strip().rstrip(".")
+            if q and len(q) <= 60:
+                updates.append({"action": "delete", "category": "general", "content": q, "importance": 5})
+                break
+
+    return updates
+
 
 def extract_and_strip_memory_tags(text: str, is_streaming: bool = False):
     """
-    Finds all <memory_update ... /> tags regardless of quote style, multiline formatting,
+    Finds all memory update tags and JSON blocks regardless of quote style, multiline formatting,
     or attribute order. Returns (updates: list, cleaned_text: str).
     """
     updates = []
-    def _repl(match):
+
+    # 1. Parse XML-style tags (<memory_update .../>, <memory .../>)
+    def _repl_xml(match):
         attrs_str = match.group(1) or ""
         body_content = (match.group(2) or "").strip()
         attrs = dict(ATTR_REGEX.findall(attrs_str))
         action = (attrs.get("action") or "add").strip().lower()
         category = (attrs.get("category") or "general").strip().lower()
         fact = (attrs.get("fact") or attrs.get("query") or body_content or "").strip()
+        importance_str = attrs.get("importance", "7").strip()
+        try:
+            importance = max(1, min(10, int(importance_str)))
+        except ValueError:
+            importance = 7
         if fact:
-            updates.append({"action": action, "category": category, "content": fact})
+            updates.append({"action": action, "category": category, "content": fact, "importance": importance})
         return ""
 
-    cleaned = MEMORY_TAG_REGEX.sub(_repl, text)
+    cleaned = MEMORY_TAG_REGEX.sub(_repl_xml, text)
+
+    # 2. Parse Markdown JSON memory blocks (```memory { ... } ```)
+    def _repl_json(match):
+        raw_json = match.group(1) or "{}"
+        try:
+            parsed = json.loads(raw_json)
+            if isinstance(parsed, dict):
+                action = (parsed.get("action") or "add").strip().lower()
+                category = (parsed.get("category") or "general").strip().lower()
+                fact = (parsed.get("fact") or parsed.get("content") or parsed.get("query") or "").strip()
+                imp = parsed.get("importance", 7)
+                try:
+                    imp_val = max(1, min(10, int(imp)))
+                except (ValueError, TypeError):
+                    imp_val = 7
+                if fact:
+                    updates.append({"action": action, "category": category, "content": fact, "importance": imp_val})
+        except Exception:
+            pass
+        return ""
+
+    cleaned = JSON_MEMORY_BLOCK_REGEX.sub(_repl_json, cleaned)
+
     if is_streaming:
         cleaned = PARTIAL_TAG_REGEX.sub("", cleaned)
+        cleaned = PARTIAL_JSON_BLOCK_REGEX.sub("", cleaned)
+
     return updates, cleaned.strip()
 
 
 class MemoryStreamingSanitizer:
     """
-    Stateful stream buffer ensuring that <memory_update ... /> tags split across
+    Stateful stream buffer ensuring that memory tags or JSON blocks split across
     consecutive streaming chunks are never leaked into the user's visible text stream.
     """
     def __init__(self):
@@ -220,17 +318,24 @@ class MemoryStreamingSanitizer:
                 self.emitted_facts.add(fact_key)
                 new_updates.append(u)
 
-        # Hold back potential incomplete tag at the tail of buffer
-        tag_idx = self.buffer.rfind("<memory_update")
-        if tag_idx != -1 and tag_idx >= len(self.buffer) - 350:
-            emit_chunk = self.buffer[:tag_idx]
-            self.buffer = self.buffer[tag_idx:]
-            return new_updates, emit_chunk
+        # Hold back potential incomplete tag or block at the tail of buffer
+        for pattern in ("<memory_update", "<memory", "```memory", "```json:memory"):
+            tag_idx = self.buffer.rfind(pattern)
+            if tag_idx != -1 and tag_idx >= len(self.buffer) - 350:
+                emit_chunk = self.buffer[:tag_idx]
+                self.buffer = self.buffer[tag_idx:]
+                return new_updates, emit_chunk
 
         last_bracket = self.buffer.rfind("<")
-        if last_bracket != -1 and last_bracket >= len(self.buffer) - 20 and "<memory_update".startswith(self.buffer[last_bracket:]):
+        if last_bracket != -1 and last_bracket >= len(self.buffer) - 20 and any(p.startswith(self.buffer[last_bracket:]) for p in ("<memory_update", "<memory")):
             emit_chunk = self.buffer[:last_bracket]
             self.buffer = self.buffer[last_bracket:]
+            return new_updates, emit_chunk
+
+        last_tick = self.buffer.rfind("```")
+        if last_tick != -1 and last_tick >= len(self.buffer) - 25 and any(p.startswith(self.buffer[last_tick:]) for p in ("```memory", "```json:memory")):
+            emit_chunk = self.buffer[:last_tick]
+            self.buffer = self.buffer[last_tick:]
             return new_updates, emit_chunk
 
         emit_chunk = self.buffer
@@ -438,8 +543,8 @@ def format_prompt_with_personalization(
         )
         sections.append(persona_text)
 
-    # ── 2. Legacy Custom Instructions (backward compatibility) ────────────────
-    elif custom_instructions and isinstance(custom_instructions, dict) and custom_instructions.get("is_enabled", True):
+    # ── 2. Custom Instructions (ChatGPT Standard: About User & Response Preferences)
+    if custom_instructions and isinstance(custom_instructions, dict) and custom_instructions.get("is_enabled", True):
         about_user = custom_instructions.get("about_user", "").strip()
         response_prefs = custom_instructions.get("response_preferences", "").strip()
         tone_preset = custom_instructions.get("tone_preset", "Balanced").strip()
@@ -452,15 +557,15 @@ def format_prompt_with_personalization(
             pass
         instr_parts = []
         if about_user:
-            instr_parts.append(f"• User Profile & Background (Implicit Context):\n  {about_user}")
+            instr_parts.append(f"• What to know about user:\n  {about_user}")
         if response_prefs:
-            instr_parts.append(f"• Response Preferences:\n  {response_prefs}")
-        if tone_preset and tone_preset != "Default":
-            instr_parts.append(f"• Tone: {tone_preset}")
+            instr_parts.append(f"• How user wants AI to respond:\n  {response_prefs}")
+        if tone_preset and tone_preset != "Default" and tone_preset != "Balanced":
+            instr_parts.append(f"• Preferred Tone: {tone_preset}")
         if instr_parts:
             sections.append(
                 "<custom_instructions>\n"
-                "Persistent user instructions — follow always:\n"
+                "Standing user instructions (apply to every response):\n"
                 + "\n".join(instr_parts) + "\n"
                 "</custom_instructions>"
             )
@@ -524,25 +629,35 @@ def format_prompt_with_personalization(
 
     # ── 4. Autonomous Memory Directive (Durable facts only) ───────────────────
     if is_auto_memory:
-        cat_options = "facts|personal|prefs|project|goals|skills|feedback|general"
+        cat_options = "personal|preferences|project|skills|facts|instructions|general"
         sections.append(
             "<autonomous_memory>\n"
-            "You have ChatGPT-style persistent memory across conversations.\n\n"
+            "You possess ChatGPT-grade persistent memory across conversations.\n"
+            "When the user shares durable personal facts, enduring technical preferences, project architectures, or gives an explicit instruction to remember, you MUST record it.\n\n"
             "RULES FOR MEMORY CREATION:\n"
-            "A) DIRECT MEMORY INQUIRIES: If the user asks 'what do you remember about me?' or 'what do you know?', "
-            "summarize known memories concisely by topic without robotic tags.\n\n"
-            "B) DURABLE FACT EXTRACTION:\n"
-            "   • DO NOT record transient tasks, homework, one-off debug problems, temporary script writing, or math queries.\n"
-            "   • ONLY extract durable, long-term facts when the user explicitly reveals:\n"
-            "     - Permanent identity / role / location ('I am a mobile developer at ABC', 'My name is Alex')\n"
-            "     - Enduring technical stack / conventions ('I always use Jetpack Compose and Kotlin coroutines')\n"
-            "     - Explicit instruction ('Remember that I live in Toronto', 'Never suggest Java')\n"
-            "   • If a durable fact is learned, emit AT MOST ONE tag at the VERY END of your response:\n"
-            f'     <memory_update action="add" category="{cat_options}" fact="concise atomic enduring fact" />\n\n'
-            "C) FORGETTING:\n"
-            "   • If the user says 'forget that', 'clear my memory about X':\n"
-            '     <memory_update action="delete" query="keywords of memory to remove" />\n\n'
-            "D) PRIVACY: The <memory_update> tag is hidden from user display. Never discuss the tag itself.\n"
+            "1. WHAT TO REMEMBER:\n"
+            "   • Permanent identity, role, profession, location ('My name is Alex', 'I live in London', 'I am an iOS developer').\n"
+            "   • Enduring technical stack, libraries, conventions ('I use Jetpack Compose and Kotlin coroutines', 'My backend is FastAPI').\n"
+            "   • Explicit user instructions ('Remember that I prefer dark mode', 'Never write raw SQL queries').\n"
+            "   • Durable personal preferences ('I am vegetarian', 'Keep code explanations brief').\n"
+            "   • DO NOT remember one-off homework, temporary math calculations, ephemeral debugging sessions, or fleeting queries.\n\n"
+            "2. HOW TO EMIT MEMORY UPDATES:\n"
+            "   Emit a memory tag at the VERY END of your response:\n"
+            f'   <memory_update action="add" category="{cat_options}" fact="concise atomic enduring fact" importance="1-10" />\n'
+            '   Or if deleting/forgetting:\n'
+            '   <memory_update action="delete" query="keywords of memory to remove" />\n\n'
+            "   FEW-SHOT EXAMPLES:\n"
+            "   User: 'I am building an Android assistant called Next AI with Jetpack Compose.'\n"
+            "   Assistant: 'Sounds like a great project! ...'\n"
+            '   <memory_update action="add" category="project" fact="Building Next AI Android assistant app with Jetpack Compose" importance="8" />\n\n'
+            "   User: 'Remember that I live in New Delhi and work as an Android architect.'\n"
+            "   Assistant: 'Noted! I have saved your location and role.'\n"
+            '   <memory_update action="add" category="personal" fact="User lives in New Delhi and works as an Android architect" importance="9" />\n\n'
+            "   User: 'Forget what I told you about Vue.js.'\n"
+            "   Assistant: 'Understood, I have removed Vue.js from memory.'\n"
+            '   <memory_update action="delete" query="Vue.js" />\n\n'
+            "3. DIRECT INQUIRIES:\n"
+            "   If the user asks 'What do you remember about me?' or 'What are my memories?', summarize your known memories conversationally by category without reciting internal tags.\n"
             "</autonomous_memory>"
         )
 
@@ -810,7 +925,7 @@ async def run_agy_command(
                             updates, stripped_chunk = sanitizer.feed(cleaned_chunk)
                             for u in updates:
                                 logger.info(f"Autonomous memory detected: {u}")
-                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"], importance=u.get("importance", 7))
                             if stripped_chunk:
                                 yield _make_event("chunk", stripped_chunk)
                     elif text_delta:
@@ -820,7 +935,7 @@ async def run_agy_command(
                             updates, stripped_chunk = sanitizer.feed(cleaned_chunk)
                             for u in updates:
                                 logger.info(f"Autonomous memory detected: {u}")
-                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"], importance=u.get("importance", 7))
                             if stripped_chunk:
                                 yield _make_event("chunk", stripped_chunk)
 
@@ -830,11 +945,21 @@ async def run_agy_command(
                     final_updates, final_chunk = sanitizer.flush()
                     for u in final_updates:
                         logger.info(f"Final autonomous memory detected: {u}")
-                        yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"])
+                        yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"], importance=u.get("importance", 7))
                     if final_chunk:
                         yield _make_event("chunk", final_chunk)
 
                     _, cleaned_done = extract_and_strip_memory_tags(sanitize_text(final_response))
+
+                    # Autonomous Semantic Memory Reflex (Fallback when model emits no tag)
+                    if is_auto_memory and not is_temporary:
+                        reflex_updates = detect_semantic_memory_intent(message_trimmed, cleaned_done)
+                        for u in reflex_updates:
+                            fact_key = f"{u['action']}:{u['content'].lower()}"
+                            if fact_key not in sanitizer.emitted_facts:
+                                sanitizer.emitted_facts.add(fact_key)
+                                logger.info(f"Semantic reflex memory detected: {u}")
+                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u.get("category", "general"), importance=u.get("importance", 8))
                     elapsed_sec = max(0.05, time.time() - stream_start_time)
                     tokens_est = max(1, int(len(accumulated_text or cleaned_done) / 3.8))
                     tokens_per_sec = round(tokens_est / elapsed_sec, 1)

@@ -128,6 +128,9 @@ data class Personalization(
     val enableCriticalFeedback: Boolean = true,   // give honest critical analysis, no sugarcoating
     val enableEmoji: Boolean = false,             // use emoji in responses
     val avoidTopics: String = "",                 // topics to avoid/skip
+    // ChatGPT Standard Custom Instructions
+    val aboutUser: String = "",                   // What would you like Next AI to know about you?
+    val responsePreferences: String = "",         // How would you like Next AI to respond?
     // Extra free-form instructions
     val customContext: String = "",               // background context about user's work/projects
     val extraInstructions: String = "",           // any free-form extra directives
@@ -154,10 +157,11 @@ object MemoryCategory {
     const val GOALS = "goals"          // user goals & milestones
     const val PERSONAL = "personal"   // personal details, relationships
     const val SKILLS = "skills"       // known skills, tech stack
+    const val INSTRUCTIONS = "instructions" // standing rules and behavioral constraints
     const val FEEDBACK = "feedback"   // how user reacted to answers
     const val GENERAL = "general"
 
-    val ALL_CATEGORIES = listOf(ALL, FACTS, PREFERENCES, PROJECT, GOALS, PERSONAL, SKILLS, FEEDBACK, GENERAL)
+    val ALL_CATEGORIES = listOf(ALL, FACTS, PREFERENCES, PROJECT, GOALS, PERSONAL, SKILLS, INSTRUCTIONS, FEEDBACK, GENERAL)
 
     fun getDisplayName(category: String): String = when (category.lowercase()) {
         FACTS -> "📋 Facts"
@@ -166,6 +170,7 @@ object MemoryCategory {
         GOALS -> "🏆 Goals"
         PERSONAL -> "👤 Personal"
         SKILLS -> "💻 Skills"
+        INSTRUCTIONS -> "📜 Directives"
         FEEDBACK -> "💬 Feedback"
         GENERAL -> "💡 General"
         else -> "📌 ${category.replaceFirstChar { it.uppercase() }}"
@@ -178,6 +183,7 @@ object MemoryCategory {
         GOALS -> "🏆"
         PERSONAL -> "👤"
         SKILLS -> "💻"
+        INSTRUCTIONS -> "📜"
         FEEDBACK -> "💬"
         else -> "💡"
     }
@@ -189,6 +195,7 @@ object MemoryCategory {
         GOALS -> "#F48FB1"
         PERSONAL -> "#CE93D8"
         SKILLS -> "#80CBC4"
+        INSTRUCTIONS -> "#FF8A65"
         FEEDBACK -> "#FFCC02"
         else -> "#B0BEC5"
     }

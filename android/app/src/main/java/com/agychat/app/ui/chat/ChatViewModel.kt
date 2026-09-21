@@ -231,19 +231,21 @@ class ChatViewModel @Inject constructor(
         // Also sync memory/auto-memory toggles from personalization
         _isMemoryEnabled.value = p.memoryEnabled
         _isAutoMemoryEnabled.value = p.autoMemoryEnabled
+        val resolvedAboutUser = if (p.aboutUser.isNotBlank()) p.aboutUser else listOfNotNull(
+            if (p.name.isNotBlank()) "Name: ${p.name}" else null,
+            if (p.occupation.isNotBlank()) "Role: ${p.occupation}" else null,
+            if (p.expertise.isNotBlank()) "Stack: ${p.expertise}" else null,
+            if (p.customContext.isNotBlank()) p.customContext else null
+        ).joinToString("\n")
+        val resolvedResponsePrefs = if (p.responsePreferences.isNotBlank()) p.responsePreferences else listOfNotNull(
+            "Tone: ${p.toneStyle}",
+            "Depth: ${p.depthLevel}",
+            "Length: ${p.responseLength}",
+            if (p.extraInstructions.isNotBlank()) p.extraInstructions else null
+        ).joinToString("\n")
         _customInstructions.value = CustomInstructions(
-            aboutUser = listOfNotNull(
-                if (p.name.isNotBlank()) "Name: ${p.name}" else null,
-                if (p.occupation.isNotBlank()) "Role: ${p.occupation}" else null,
-                if (p.expertise.isNotBlank()) "Stack: ${p.expertise}" else null,
-                if (p.customContext.isNotBlank()) p.customContext else null
-            ).joinToString("\n"),
-            responsePreferences = listOfNotNull(
-                "Tone: ${p.toneStyle}",
-                "Depth: ${p.depthLevel}",
-                "Length: ${p.responseLength}",
-                if (p.extraInstructions.isNotBlank()) p.extraInstructions else null
-            ).joinToString("\n"),
+            aboutUser = resolvedAboutUser,
+            responsePreferences = resolvedResponsePrefs,
             tonePreset = p.toneStyle,
             isEnabled = p.isEnabled
         )
@@ -266,6 +268,8 @@ class ChatViewModel @Inject constructor(
             .putBoolean("p_critical", p.enableCriticalFeedback)
             .putBoolean("p_emoji", p.enableEmoji)
             .putString("p_avoid", p.avoidTopics)
+            .putString("p_about_user", p.aboutUser)
+            .putString("p_resp_prefs", p.responsePreferences)
             .putString("p_context", p.customContext)
             .putString("p_extra", p.extraInstructions)
             .putBoolean("p_enabled", p.isEnabled)
@@ -284,17 +288,27 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun addMemory(content: String, category: String = "general") {
+    fun addMemory(content: String, category: String = "general", importance: Int = 7) {
         viewModelScope.launch {
             val memory = MemoryEntity(
                 id = UUID.randomUUID().toString(),
                 content = content.trim(),
                 category = category,
                 isEnabled = true,
+                importance = importance.coerceIn(1, 10),
                 createdAt = System.currentTimeMillis(),
                 updatedAt = System.currentTimeMillis()
             )
             memoryDao.insertMemory(memory)
+        }
+    }
+
+    fun updateMemoryCategory(id: String, category: String) {
+        viewModelScope.launch {
+            val existing = memoryDao.getAllMemoriesList().firstOrNull { it.id == id }
+            if (existing != null) {
+                memoryDao.updateMemoryContent(id, existing.content, category, existing.importance, System.currentTimeMillis())
+            }
         }
     }
 
@@ -831,6 +845,8 @@ class ChatViewModel @Inject constructor(
                 enableCriticalFeedback = prefs.getBoolean("p_critical", true),
                 enableEmoji = prefs.getBoolean("p_emoji", false),
                 avoidTopics = prefs.getString("p_avoid", "") ?: "",
+                aboutUser = prefs.getString("p_about_user", "") ?: savedAbout,
+                responsePreferences = prefs.getString("p_resp_prefs", "") ?: savedResp,
                 customContext = prefs.getString("p_context", "") ?: "",
                 extraInstructions = prefs.getString("p_extra", "") ?: "",
                 isEnabled = prefs.getBoolean("p_enabled", true),
@@ -1502,8 +1518,9 @@ class ChatViewModel @Inject constructor(
                     val action = json.optString("action", "add")
                     val memContent = json.optString("content", "")
                     val category = json.optString("category", "general")
+                    val importance = json.optInt("importance", 7)
                     if (memContent.isNotBlank()) {
-                        handleAutonomousMemoryUpdate(action, memContent, category)
+                        handleAutonomousMemoryUpdate(action, memContent, category, importance)
                     }
                 }
                 "cloud_sync_result" -> {
@@ -1680,7 +1697,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun handleAutonomousMemoryUpdate(action: String, content: String, category: String) {
+    private fun handleAutonomousMemoryUpdate(action: String, content: String, category: String, importance: Int = 7) {
         if (!_isAutoMemoryEnabled.value || _isTemporaryChat.value) return
         viewModelScope.launch {
             if (action == "add") {
@@ -1693,13 +1710,13 @@ class ChatViewModel @Inject constructor(
                         .filter { it.category.equals(category, ignoreCase = true) }
                     val keywords = cleanContent.lowercase()
                         .split(" ")
-                        .filter { it.length > 3 && it !in setOf("user", "prefers", "likes", "always", "never", "with", "from") }
+                        .filter { it.length > 3 && it !in setOf("user", "prefers", "likes", "always", "never", "with", "from", "that") }
                         .toSet()
 
                     val existingMatch = existingMemories.firstOrNull { mem ->
                         val memKeywords = mem.content.lowercase()
                             .split(" ")
-                            .filter { it.length > 3 && it !in setOf("user", "prefers", "likes", "always", "never", "with", "from") }
+                            .filter { it.length > 3 && it !in setOf("user", "prefers", "likes", "always", "never", "with", "from", "that") }
                             .toSet()
                         val overlap = keywords.intersect(memKeywords).size
                         (keywords.isNotEmpty() && overlap >= 2) || (keywords.size <= 2 && overlap >= 1)
@@ -1707,19 +1724,21 @@ class ChatViewModel @Inject constructor(
 
                     if (existingMatch != null) {
                         // Update existing memory in place to avoid duplicate contradictions
+                        val updatedImportance = maxOf(existingMatch.importance, importance)
                         memoryDao.updateMemoryContent(
                             existingMatch.id, cleanContent, category,
-                            importance = existingMatch.importance,
+                            importance = updatedImportance,
                             updatedAt = System.currentTimeMillis()
                         )
                     } else {
-                        val importance = when (category.lowercase()) {
-                            "facts", "personal" -> 8
-                            "prefs", "preferences" -> 7
-                            "skills" -> 6
-                            "project" -> 7
+                        val computedImportance = if (importance in 1..10) importance else when (category.lowercase()) {
+                            "facts", "personal" -> 9
+                            "prefs", "preferences" -> 8
+                            "instructions" -> 9
+                            "project" -> 8
                             "goals" -> 8
-                            else -> 5
+                            "skills" -> 7
+                            else -> 6
                         }
                         memoryDao.insertMemory(
                             MemoryEntity(
@@ -1727,7 +1746,7 @@ class ChatViewModel @Inject constructor(
                                 content = cleanContent,
                                 category = category,
                                 isEnabled = true,
-                                importance = importance,
+                                importance = computedImportance,
                                 lastAccessedAt = System.currentTimeMillis(),
                                 accessCount = 0,
                                 createdAt = System.currentTimeMillis(),
@@ -2605,17 +2624,21 @@ class ChatViewModel @Inject constructor(
                     put("enable_critical", p.enableCriticalFeedback)
                     put("enable_emoji", p.enableEmoji)
                     if (p.avoidTopics.isNotBlank()) put("avoid_topics", p.avoidTopics)
+                    if (p.aboutUser.isNotBlank()) put("about_user", p.aboutUser)
+                    if (p.responsePreferences.isNotBlank()) put("response_preferences", p.responsePreferences)
                     if (p.customContext.isNotBlank()) put("custom_context", p.customContext)
                     if (p.extraInstructions.isNotBlank()) put("extra_instructions", p.extraInstructions)
                 })
             }
-            // Legacy custom_instructions for backward compatibility
-            if (!_isTemporaryChat.value && _customInstructions.value.isEnabled) {
+            // Custom instructions payload
+            val resolvedAbout = p.aboutUser.ifBlank { _customInstructions.value.aboutUser }
+            val resolvedResp = p.responsePreferences.ifBlank { _customInstructions.value.responsePreferences }
+            if (!_isTemporaryChat.value && (resolvedAbout.isNotBlank() || resolvedResp.isNotBlank())) {
                 put("custom_instructions", JSONObject().apply {
-                    put("about_user", _customInstructions.value.aboutUser)
-                    put("response_preferences", _customInstructions.value.responsePreferences)
-                    put("tone_preset", _customInstructions.value.tonePreset)
-                    put("is_enabled", _customInstructions.value.isEnabled)
+                    put("about_user", resolvedAbout)
+                    put("response_preferences", resolvedResp)
+                    put("tone_preset", p.toneStyle)
+                    put("is_enabled", true)
                 })
             }
             put("auto_memory", _isAutoMemoryEnabled.value && !_isTemporaryChat.value)
