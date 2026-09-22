@@ -374,6 +374,9 @@ fun ChatScreen(
         }
     }
 
+    var unreadNewMessagesCount by remember { mutableStateOf(0) }
+    var previousMessagesCount by remember { mutableStateOf(displayedMessages.size) }
+
     val isUserDragging by listState.interactionSource.collectIsDraggedAsState()
 
     // Detect user manual scroll gesture: only pause auto-follow when user physically drags upward
@@ -410,9 +413,6 @@ fun ChatScreen(
             !isAutoFollowActive && displayedMessages.size > 1
         }
     }
-
-    var unreadNewMessagesCount by remember { mutableStateOf(0) }
-    var previousMessagesCount by remember { mutableStateOf(displayedMessages.size) }
 
     LaunchedEffect(isAutoFollowActive) {
         if (isAutoFollowActive) {

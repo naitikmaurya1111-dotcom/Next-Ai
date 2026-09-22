@@ -846,6 +846,29 @@ class LocalFileManager @Inject constructor(
     }
 
     /**
+     * Locate existing file on local phone disk from various path or name representations.
+     */
+    fun getLocalFileOnDisk(pathOrName: String): File? {
+        val norm = normalizeFileId(pathOrName)
+        val fn = getFileName(norm)
+        val safeDiskName = "${norm.hashCode().toString().replace("-", "n")}_$fn"
+        val exactFile = File(savedFilesDir, safeDiskName)
+        if (exactFile.exists() && exactFile.length() > 0) return exactFile
+        val byName = File(savedFilesDir, fn)
+        if (byName.exists() && byName.length() > 0) return byName
+        val byNorm = File(savedFilesDir, norm)
+        if (byNorm.exists() && byNorm.length() > 0) return byNorm
+        val direct = File(pathOrName)
+        if (direct.exists() && direct.length() > 0) return direct
+        return listOf(savedFilesDir, attachmentsDir).asSequence()
+            .mapNotNull { dir ->
+                dir.listFiles()?.firstOrNull { f ->
+                    (f.name.endsWith("_$fn") || f.name == fn || f.name.contains(fn)) && f.length() > 0
+                }
+            }.firstOrNull()
+    }
+
+    /**
      * Batch export multiple files to the device's public Downloads directory.
      */
     suspend fun batchExportToDownloads(paths: List<String>): Pair<Int, String> = withContext(Dispatchers.IO) {
@@ -860,9 +883,15 @@ class LocalFileManager @Inject constructor(
                     if (res.first) successCount++
                 } else {
                     val entity = getCachedFile(p)
-                    if (entity != null && entity.content.isNotBlank()) {
-                        val res = exportToPublicDownloads(fn, entity.content)
-                        if (res.first) successCount++
+                    if (entity != null) {
+                        val diskFile = File(entity.localPath)
+                        if (diskFile.exists() && diskFile.length() > 0) {
+                            val res = exportToPublicDownloads(diskFile, fn)
+                            if (res.first) successCount++
+                        } else if (entity.content.isNotBlank()) {
+                            val res = exportToPublicDownloads(fn, entity.content)
+                            if (res.first) successCount++
+                        }
                     }
                 }
             } catch (t: Throwable) {
