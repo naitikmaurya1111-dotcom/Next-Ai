@@ -383,8 +383,6 @@ class LocalFileManager @Inject constructor(
         return primary
     }
 
-    private val savedFilesDir: File get() = getSavedFilesDir()
-    private val attachmentsDir: File get() = getAttachmentsDir()
 
     private val downloadHttpClient: OkHttpClient by lazy {
         okHttpClient.newBuilder()

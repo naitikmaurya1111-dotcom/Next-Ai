@@ -1472,11 +1472,11 @@ fun ChatScreen(
                             if (connectionState != ConnectionState.CONNECTED) {
                                 Toast.makeText(context, "Not connected. Reconnecting to Colab Bridge...", Toast.LENGTH_SHORT).show()
                                 viewModel.reconnect()
-                                return@ClaudeFloatingInputBar
+                            } else {
+                                isAutoFollowActive = true
+                                viewModel.sendMessage(inputText)
+                                inputText = ""
                             }
-                            isAutoFollowActive = true
-                            viewModel.sendMessage(inputText)
-                            inputText = ""
                         },
                         onStop = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
