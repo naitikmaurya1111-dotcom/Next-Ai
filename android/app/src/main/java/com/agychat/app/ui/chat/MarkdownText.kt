@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Environment
+import java.io.File
 import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
@@ -1926,8 +1928,10 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
     val isDark      = MaterialTheme.colorScheme.background.red < 0.5f
     val displayLang = if (language.isNotBlank()) language.uppercase() else "CODE"
     var isCopied    by remember { mutableStateOf(false) }
+    var isSaved     by remember { mutableStateOf(false) }
     var isWrapped   by remember { mutableStateOf(false) }
     LaunchedEffect(isCopied) { if (isCopied) { delay(2000); isCopied = false } }
+    LaunchedEffect(isSaved) { if (isSaved) { delay(2000); isSaved = false } }
 
     val lines           = remember(code) { code.lines() }
     val lineCount       = lines.size
@@ -1953,6 +1957,51 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Surface(onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); isWrapped = !isWrapped }, shape = RoundedCornerShape(6.dp), color = if (isWrapped) ClaudeTerracotta.copy(alpha = 0.15f) else Color.Transparent) {
                         Text(text = if (isWrapped) "Wrap" else "Scroll", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold), color = if (isWrapped) ClaudeTerracotta else if (isDark) Color(0xFFA6A6B0) else Color(0xFF606068), modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                    }
+                    Surface(onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        val ext = when (language.lowercase()) {
+                            "python", "py" -> ".py"
+                            "kotlin", "kt" -> ".kt"
+                            "java" -> ".java"
+                            "javascript", "js" -> ".js"
+                            "typescript", "ts" -> ".ts"
+                            "json" -> ".json"
+                            "html" -> ".html"
+                            "css" -> ".css"
+                            "c" -> ".c"
+                            "cpp", "c++" -> ".cpp"
+                            "csharp", "cs" -> ".cs"
+                            "rust", "rs" -> ".rs"
+                            "go" -> ".go"
+                            "sh", "bash" -> ".sh"
+                            "sql" -> ".sql"
+                            "markdown", "md" -> ".md"
+                            else -> ".txt"
+                        }
+                        val fname = "code_${System.currentTimeMillis() % 1000000}$ext"
+                        try {
+                            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                            val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
+                            val targetFile = File(targetDir, fname)
+                            targetFile.writeText(code, Charsets.UTF_8)
+                            isSaved = true
+                            Toast.makeText(context, "Saved to Downloads/NextAI/$fname", Toast.LENGTH_SHORT).show()
+                        } catch (_: Throwable) {
+                            try {
+                                val fallbackFile = File(context.filesDir, fname)
+                                fallbackFile.writeText(code, Charsets.UTF_8)
+                                isSaved = true
+                                Toast.makeText(context, "Saved to app storage: $fname", Toast.LENGTH_SHORT).show()
+                            } catch (_: Throwable) {
+                                Toast.makeText(context, "Could not save file", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }, shape = RoundedCornerShape(6.dp), color = if (isSaved) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)) {
+                        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Icon(if (isSaved) Icons.Default.Check else Icons.Default.Download, contentDescription = null, modifier = Modifier.size(12.dp), tint = if (isSaved) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
+                            Text(text = if (isSaved) "Saved!" else "Save", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold), color = if (isSaved) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
+                        }
                     }
                     Surface(onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Code", code)); isCopied = true; Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show() }, shape = RoundedCornerShape(6.dp), color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)) {
                         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {

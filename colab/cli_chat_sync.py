@@ -24,6 +24,7 @@ import re
 import shutil
 import sqlite3
 import tarfile
+import tempfile
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -259,6 +260,49 @@ def export_all_conversation_sessions(target_sessions_dir: Path, sha: str, msg: s
             "mtime": mtime[:19] if mtime else "unknown",
             "file": file_name
         })
+
+    # Discover and preserve historical sessions already archived on disk or in Google Drive
+    seen_ids = set(s["id"] for s in sessions_meta)
+    scan_dirs = [target_sessions_dir]
+    drive_sessions_dir = Path("/content/drive/MyDrive/NextAI_CLI_Chat_History/sessions")
+    if drive_sessions_dir.exists() and drive_sessions_dir != target_sessions_dir:
+        scan_dirs.append(drive_sessions_dir)
+
+    for s_dir in scan_dirs:
+        for md_file in s_dir.glob("*.md"):
+            try:
+                txt = md_file.read_text(encoding="utf-8", errors="ignore")
+                cid_match = re.search(r"Conversation ID\*\*:\s*`?([a-f0-9-]+)`?", txt)
+                if not cid_match:
+                    continue
+                h_cid = cid_match.group(1).strip()
+                if h_cid in seen_ids:
+                    continue
+                seen_ids.add(h_cid)
+
+                # Copy to target sessions dir if not already there
+                dest_file = target_sessions_dir / md_file.name
+                if not dest_file.exists():
+                    shutil.copy2(str(md_file), str(dest_file))
+
+                # Parse header
+                title_match = re.search(r"# 📜 Next AI Session — (.+)", txt)
+                h_title = title_match.group(1).strip() if title_match else md_file.stem
+                mtime_match = re.search(r"Last Synced\*\*:\s*`?([^`\n]+)`?", txt)
+                h_mtime = mtime_match.group(1).strip() if mtime_match else "archived"
+                turns_match = re.search(r"Total Dialogues Recorded\*\*:\s*`?(\d+)`?", txt)
+                h_turns = int(turns_match.group(1)) if turns_match else 1
+
+                sessions_meta.append({
+                    "id": h_cid,
+                    "title": h_title,
+                    "steps": 0,
+                    "turns": h_turns,
+                    "mtime": h_mtime[:19] if h_mtime else "archived",
+                    "file": md_file.name
+                })
+            except Exception:
+                pass
 
     return sessions_meta
 
@@ -551,42 +595,46 @@ def sync():
     generate_recovery_command_file(cmd_file_path)
     print(f"📋 Saved one-click restore prompt: {cmd_file_path}")
 
-    # 8. Backup raw conversation databases and brain transcripts (staged locally in /tmp for speed)
-    raw_dir = Path("/tmp/raw_cli_backup")
-    if raw_dir.exists():
-        shutil.rmtree(raw_dir)
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    # 8. Backup raw conversation databases and brain transcripts (isolated temp dir for race-free concurrency)
+    raw_dir = Path(tempfile.mkdtemp(prefix="raw_cli_backup_"))
+    tmp_archive = Path(tempfile.mktemp(prefix="cli_backup_tmp_", suffix=".tar.gz"))
 
-    print("📦 Backing up raw conversation DBs & transcripts...")
-    if conv_dir.exists():
-        shutil.copytree(conv_dir, raw_dir / "conversations", dirs_exist_ok=True)
-    brain_dir = GEMINI_DIR / "brain"
-    if brain_dir.exists():
-        shutil.copytree(brain_dir, raw_dir / "brain", dirs_exist_ok=True)
-    for fname in ["conversation_summaries.db", "history.jsonl", "settings.json", "installation_id", "antigravity-oauth-token"]:
-        fpath = GEMINI_DIR / fname
-        if fpath.exists():
-            shutil.copy2(fpath, raw_dir / fname)
+    try:
+        print("📦 Backing up raw conversation DBs & transcripts...")
+        if conv_dir.exists():
+            shutil.copytree(conv_dir, raw_dir / "conversations", dirs_exist_ok=True)
+        brain_dir = GEMINI_DIR / "brain"
+        if brain_dir.exists():
+            shutil.copytree(brain_dir, raw_dir / "brain", dirs_exist_ok=True)
+        for fname in ["conversation_summaries.db", "history.jsonl", "settings.json", "installation_id", "antigravity-oauth-token"]:
+            fpath = GEMINI_DIR / fname
+            if fpath.exists():
+                try:
+                    shutil.copy2(fpath, raw_dir / fname)
+                except Exception:
+                    pass
 
-    # Also persist GitHub token in both directories
-    tok_file = DRIVE_DIR / "NextAI_Backup" / ".github_token"
-    if tok_file.exists():
-        try:
-            shutil.copy2(str(tok_file), str(SYNC_TARGET_DIR / ".github_token"))
-        except Exception:
-            pass
+        # Also persist GitHub token in both directories
+        tok_file = DRIVE_DIR / "NextAI_Backup" / ".github_token"
+        if tok_file.exists():
+            try:
+                shutil.copy2(str(tok_file), str(SYNC_TARGET_DIR / ".github_token"))
+            except Exception:
+                pass
 
-    # 9. Create compressed state archive in Drive
-    archive_path = SYNC_TARGET_DIR / "antigravity_cli_full_state.tar.gz"
-    tmp_archive = Path("/tmp/cli_backup_tmp.tar.gz")
-    if tmp_archive.exists():
-        tmp_archive.unlink()
-
-    print(f"🗜️ Compressing full Antigravity CLI state into {archive_path.name}...")
-    with tarfile.open(tmp_archive, "w:gz") as tar:
-        tar.add(str(raw_dir), arcname=".")
-    shutil.move(str(tmp_archive), str(archive_path))
-    shutil.rmtree(raw_dir, ignore_errors=True)
+        # 9. Create compressed state archive in Drive
+        archive_path = SYNC_TARGET_DIR / "antigravity_cli_full_state.tar.gz"
+        print(f"🗜️ Compressing full Antigravity CLI state into {archive_path.name}...")
+        with tarfile.open(tmp_archive, "w:gz") as tar:
+            tar.add(str(raw_dir), arcname=".")
+        shutil.move(str(tmp_archive), str(archive_path))
+    finally:
+        shutil.rmtree(raw_dir, ignore_errors=True)
+        if tmp_archive.exists():
+            try:
+                tmp_archive.unlink()
+            except Exception:
+                pass
 
     # 10. Create standalone restore script inside Drive folder
     standalone_restore_code = generate_standalone_restore_script()

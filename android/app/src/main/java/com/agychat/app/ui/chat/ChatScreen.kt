@@ -3441,24 +3441,25 @@ fun MessageItem(
                                 val hasSteps = cLower.contains("1.") || cLower.contains("step 1") || cLower.contains("first,")
 
                                 if (hasCode) {
-                                    list.add("Check for bugs" to "Review the code above for potential edge cases, security issues, or bugs.")
-                                    list.add("Optimize code" to "How can this code be optimized for maximum speed and memory efficiency?")
-                                    list.add("Add unit tests" to "Write comprehensive unit tests with edge cases for this implementation.")
-                                    list.add("Save to workspace file" to "Please save this code to an appropriate file using the write_to_file tool.")
+                                    list.add("🛡️ Multi-lens audit" to "Perform an exhaustive 3-lens adversarial code review (correctness, security, maintainability) per flash38-swe-protocol.")
+                                    list.add("⚡ Edge-case tests" to "Write comprehensive unit tests with edge cases (empty, boundary, negative, concurrent) for this code.")
+                                    list.add("🚀 Optimize code" to "How can this code be optimized for maximum speed and memory efficiency?")
+                                    list.add("📁 Save to file" to "Please save this code to an appropriate workspace file using the write_to_file tool.")
                                 } else if (hasError) {
-                                    list.add("How to fix" to "What are the exact step-by-step instructions to fix this error?")
-                                    list.add("Root cause analysis" to "Can you explain the deep root cause of why this error happens?")
-                                    list.add("Prevent regression" to "How can we prevent this issue from happening again in the future?")
+                                    list.add("🛠️ How to fix" to "What are the exact step-by-step instructions to fix this error?")
+                                    list.add("🔬 Root cause analysis" to "Can you explain the deep root cause of why this error happens?")
+                                    list.add("🛡️ Prevent regression" to "How can we prevent this issue from happening again in the future?")
+                                    list.add("🌐 Search web" to "Search the web for known fixes and official documentation for this error.")
                                 } else if (hasSteps || isExplanation) {
-                                    list.add("Technical deep dive" to "Can you explain the technical internals in deeper detail?")
-                                    list.add("Key takeaways" to "Summarize the key takeaways and actionable points in bullet format.")
-                                    list.add("Concrete examples" to "Can you provide concrete practical examples illustrating this?")
-                                    list.add("Generate markdown doc" to "Please generate a formatted markdown documentation artifact summarizing this.")
+                                    list.add("💡 Technical deep dive" to "Can you explain the technical internals in deeper detail?")
+                                    list.add("📌 Key takeaways" to "Summarize the key takeaways and actionable points in bullet format.")
+                                    list.add("✨ Concrete examples" to "Can you provide concrete practical examples illustrating this?")
+                                    list.add("🌐 Search web" to "Search the web for the latest updates and real-time community discussions on this.")
                                 } else {
-                                    list.add("Explain in detail" to "Please explain this step-by-step in detail.")
-                                    list.add("Key takeaways" to "What are the key takeaways from this?")
-                                    list.add("Practical examples" to "Can you provide concrete practical examples for this?")
-                                    list.add("Save summary artifact" to "Please create a formatted artifact of this summary.")
+                                    list.add("💡 Explain in detail" to "Please explain this step-by-step in detail.")
+                                    list.add("📌 Key takeaways" to "What are the key takeaways from this?")
+                                    list.add("✨ Practical examples" to "Can you provide concrete practical examples for this?")
+                                    list.add("🌐 Search web" to "Search the web for real-time live sources on this topic.")
                                 }
                                 list.take(4)
                             }
@@ -3473,28 +3474,28 @@ fun MessageItem(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(20.dp))
                                             .background(
-                                                if (isDarkChip) Color(0xFF1C1C20) else Color(0xFFF6F6F9)
+                                                if (isDarkChip) Color(0xFF1E1E24) else Color(0xFFF4F3F0)
                                             )
                                             .border(
                                                 0.8.dp,
-                                                ClaudeTerracotta.copy(alpha = 0.28f),
+                                                ClaudeTerracotta.copy(alpha = 0.35f),
                                                 RoundedCornerShape(20.dp)
                                             )
                                             .clickable {
                                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                                 onSendSuggestion(prompt)
                                             }
-                                            .padding(horizontal = 12.dp, vertical = 7.dp),
+                                            .padding(horizontal = 13.dp, vertical = 7.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
                                             text = label,
                                             style = MaterialTheme.typography.labelSmall.copy(
-                                                fontWeight = FontWeight.Medium,
+                                                fontWeight = FontWeight.SemiBold,
                                                 fontSize = 12.sp
                                             ),
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.88f)
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f)
                                         )
                                     }
                                 }

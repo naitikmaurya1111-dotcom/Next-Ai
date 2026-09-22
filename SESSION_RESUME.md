@@ -1,7 +1,8 @@
-# Next AI & Antigravity Session Resume Context
-> **Last Synced**: `2026-09-21 18:06:00 UTC`  
-> **Conversation ID**: `380d3ab0-d585-42f9-90ce-bf063023bd97`  
-> **Active App Version**: `v3.4.6` (versionCode: 28, Release: `v1.0.78`)  
+# 🧠 Next AI & Antigravity Session Resume Context
+> **Last Synced**: `2026-09-22 01:44:12 UTC`  
+> **Conversation ID**: `965047b9-81aa-426d-a53f-3f5de39ceae1`  
+> **Git Head SHA**: `97fdd8f`  
+> **Active App Version**: `v1.0.80`  
 > **GitHub Repo**: [naitikmaurya1111-dotcom/Next-Ai](https://github.com/naitikmaurya1111-dotcom/Next-Ai)
 
 ---
@@ -46,8 +47,7 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
   7. `/grill-me` — Interactive interview to clarify requirements
   8. `/teamwork-preview` — Multi-agent team coordination
 - **Latest Downloadable Release**:
-  - Tag: `v1.0.78`
-  - Version: `3.4.6` (`versionCode = 28`)
+  - Tag: `v1.0.80`
   - URL: `https://github.com/naitikmaurya1111-dotcom/Next-Ai/releases`
 
 ---
@@ -56,14 +56,14 @@ You are pair programming on **Next AI**, a premium Android Chat App inspired by 
 - **Location**: `/content/Next-Ai/colab`
 - **Stack**: FastAPI + Uvicorn (Port 8000) + Cloudflare Tunnel (`cloudflared`)
 - **Execution**: Runs `/root/.local/bin/agy -p "<message>" --output-format stream-json --dangerously-skip-permissions`
-- **Session Continuity**: Retains `--conversation 380d3ab0-d585-42f9-90ce-bf063023bd97` across turns.
+- **Session Continuity**: Retains `--conversation 965047b9-81aa-426d-a53f-3f5de39ceae1` across turns.
 - **Launcher**: `/content/Next-Ai/colab/start_bridge.sh`
 
 ---
 
 ## 📂 Restored Antigravity State
 - **Conversation DBs**: `/root/.gemini/antigravity-cli/conversations/`
-- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/380d3ab0-d585-42f9-90ce-bf063023bd97/`
+- **Brain Artifacts & Transcripts**: `/root/.gemini/antigravity-cli/brain/965047b9-81aa-426d-a53f-3f5de39ceae1/`
 - **History & Summaries**: `/root/.gemini/antigravity-cli/conversation_summaries.db`, `history.jsonl`
 
 ---

@@ -119,6 +119,49 @@ async def get_models():
     }
 
 
+@app.get("/api/system/status")
+async def system_status():
+    """Detailed host runtime environment, memory, GPU and performance telemetry."""
+    env = get_host_environment_summary()
+    return {
+        "status": "ok",
+        "environment": env,
+        "connected_clients": len(manager.active_connections),
+        "buffered_conversations": len(conversation_buffers),
+        "timestamp": time.time()
+    }
+
+
+@app.get("/api/skills")
+async def get_skills():
+    """List all installed skills in Antigravity CLI (both custom and builtin)."""
+    skills_list = []
+    roots = ["/root/.gemini/config/skills", "/root/.gemini/antigravity-cli/builtin/skills"]
+    for r in roots:
+        if os.path.exists(r):
+            for item in os.listdir(r):
+                item_path = os.path.join(r, item)
+                if os.path.isdir(item_path):
+                    skill_md = os.path.join(item_path, "SKILL.md")
+                    desc = ""
+                    if os.path.exists(skill_md):
+                        try:
+                            with open(skill_md, "r", encoding="utf-8") as f:
+                                for line in f:
+                                    if line.startswith("description:"):
+                                        desc = line.split(":", 1)[1].strip()
+                                        break
+                        except Exception:
+                            pass
+                    skills_list.append({
+                        "name": item,
+                        "description": desc or f"Antigravity skill: {item}",
+                        "path": item_path,
+                        "is_builtin": "builtin" in r
+                    })
+    return {"skills": skills_list, "count": len(skills_list)}
+
+
 MAX_INLINE_PAYLOAD_SIZE = 8 * 1024 * 1024  # 8 MB threshold for inline base64 / text over WebSocket or JSON
 
 def resolve_colab_file_path(path_str: str) -> str:

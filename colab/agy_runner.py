@@ -457,7 +457,8 @@ def format_prompt_with_personalization(
     model_name: str = "",
     effort_level: str = "high",
     client_metadata: dict = None,
-    cwd: str = "/content"
+    cwd: str = "/content",
+    search_results: list = None
 ) -> str:
     """
     Build the complete AI system context from environment awareness, user Personalization profile,
@@ -661,6 +662,45 @@ def format_prompt_with_personalization(
             "</autonomous_memory>"
         )
 
+    # ── 4. Grounded Live Web Search Context (if available) ───────────────────
+    if search_results and isinstance(search_results, list):
+        search_lines = []
+        for i, sr in enumerate(search_results, 1):
+            t = sr.get("title", "").strip()
+            u = sr.get("url", "").strip()
+            s = sr.get("snippet", "").strip()
+            search_lines.append(f"{i}. [{t}]({u})\n   Snippet: {s}")
+        sections.append(
+            "<grounded_live_web_search_results>\n"
+            "The following are real-time, grounded web search results retrieved from live internet search for this turn:\n"
+            + "\n".join(search_lines) + "\n\n"
+            "INSTRUCTIONS FOR NEXT AI:\n"
+            "- Answer the user's question accurately using the fresh information above.\n"
+            "- Include clickable markdown links [Source Title](URL) to cite your sources directly.\n"
+            "- If information is not in the search results, state so clearly.\n"
+            "</grounded_live_web_search_results>"
+        )
+
+    # ── 5. Flash 3.8 High-Thinking SWE Protocol Discipline ────────────────────
+    is_gemini_38 = "3.8" in model_name.lower() or "gemini-3.8-flash" in model_name.lower()
+    has_coding_intent = any(kw in message.lower() for kw in [
+        "code", "function", "class", "debug", "refactor", "bug", "algorithm",
+        "implement", "build", "api", "kotlin", "python", "javascript", "test",
+        "coding.md", "full stack", "architecture", "ui", "ux", "backend"
+    ])
+    swe_skill_path = "/root/.gemini/config/skills/flash38-swe-protocol/SKILL.md"
+    if (is_gemini_38 or has_coding_intent) and os.path.exists(swe_skill_path):
+        sections.append(
+            "<flash38_swe_protocol>\n"
+            "DISCIPLINE PROTOCOL ACTIVE (`flash38-swe-protocol`):\n"
+            "You are running as Gemini 3.8 Flash High-Thinking with abundant token compute.\n"
+            "1. Multi-candidate design: compare at least two distinct approaches before settling.\n"
+            "2. Exhaustive edge-case thinking: cover boundaries, null/empty states, error paths, and concurrency.\n"
+            "3. Strict verification: ensure code is syntactically complete, robust, and verified.\n"
+            "4. Zero bluffing: never invent APIs or state unverified facts.\n"
+            "</flash38_swe_protocol>"
+        )
+
     if sections:
         return "\n\n".join(sections) + "\n\n" + message
     return message
@@ -801,6 +841,33 @@ async def run_agy_command(
         yield _make_event("error", "Empty prompt received.")
         return
 
+    # ── Real-time Web Search Execution Pipeline ──────────────────────────────
+    search_results = []
+    actual_prompt = message_trimmed
+    is_search_intent = False
+    search_query = ""
+
+    if message_trimmed.startswith("/browser ") or message_trimmed.startswith("/search "):
+        is_search_intent = True
+        search_query = message_trimmed.split(" ", 1)[1].strip()
+        actual_prompt = search_query if search_query else message_trimmed
+    elif client_metadata and client_metadata.get("web_search") is True:
+        is_search_intent = True
+        search_query = message_trimmed
+
+    if is_search_intent and search_query:
+        yield _make_event("info", f"🌐 Searching the web for: \"{search_query}\"…")
+        try:
+            from websearch import search_ddg_lite, search_google_news
+            search_results = await asyncio.to_thread(search_ddg_lite, search_query, 5)
+            if not search_results:
+                search_results = await asyncio.to_thread(search_google_news, search_query, 5)
+        except Exception as s_err:
+            logger.warning(f"Live web search failed: {s_err}")
+
+        if search_results:
+            yield _make_event("info", f"🌐 Found {len(search_results)} live web sources")
+
     target_cwd = cwd if (cwd and os.path.exists(cwd)) else "/content"
 
     agy_bin = get_agy_path()
@@ -819,7 +886,7 @@ async def run_agy_command(
 
     # Inject environment awareness, full personalization, memories, custom instructions, and prior history into prompt
     full_prompt = format_prompt_with_personalization(
-        message_trimmed,
+        actual_prompt,
         memories=memories or [],
         custom_instructions=custom_instructions,
         personalization=personalization,
@@ -829,7 +896,8 @@ async def run_agy_command(
         model_name=model_display,
         effort_level=effort,
         client_metadata=client_metadata,
-        cwd=target_cwd
+        cwd=target_cwd,
+        search_results=search_results
     )
 
     cmd_args.extend([
