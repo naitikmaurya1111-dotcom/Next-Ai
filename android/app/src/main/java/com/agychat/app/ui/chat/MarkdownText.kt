@@ -1361,99 +1361,162 @@ fun MathEquationBlockView(
     val isDark      = MaterialTheme.colorScheme.background.red < 0.5f
     val normFormula = remember(formula) { normalizeLatexFormula(formula) }
     var isCopied    by remember { mutableStateOf(false) }
+    var showRaw     by remember { mutableStateOf(false) }
     LaunchedEffect(isCopied) { if (isCopied) { delay(1800); isCopied = false } }
 
     val mathScrollState = rememberScrollState()
-    val cardBg = if (isDark) Color(0xFF16161B) else Color(0xFFF8F7F4)
-    val cardBorder = if (isDark) Color(0xFF282832) else Color(0xFFE4E0D6)
+    val cardBg      = if (isDark) Color(0xFF14141A) else Color(0xFFF9F8F6)
+    val cardBorder  = if (isDark) Color(0xFF282834) else Color(0xFFE2DED6)
+    val headerBg    = if (isDark) Color(0xFF1A1A22) else Color(0xFFF0EEE8)
+    val category    = remember(normFormula) { detectMathCategory(normFormula) }
 
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = cardBg,
-        border = androidx.compose.foundation.BorderStroke(0.8.dp, cardBorder),
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(cardBg)
+            .border(1.dp, cardBorder, RoundedCornerShape(14.dp))
     ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+        // macOS-style Header Bar
+        DisableSelection {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(headerBg)
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // macOS window control dots
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFF5F56).copy(alpha = 0.85f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFFBD2E).copy(alpha = 0.85f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFF27C93F).copy(alpha = 0.85f)))
+                    }
+
+                    // KaTeX Math Pill
                     Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = ClaudeTerracotta.copy(alpha = 0.15f),
-                        border = androidx.compose.foundation.BorderStroke(0.5.dp, ClaudeTerracotta.copy(alpha = 0.4f))
+                        shape = RoundedCornerShape(5.dp),
+                        color = ClaudeTerracotta.copy(alpha = if (isDark) 0.18f else 0.12f),
+                        border = androidx.compose.foundation.BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.4f))
                     ) {
                         Text(
-                            text = "MATH",
+                            text = "KaTeX",
                             style = MaterialTheme.typography.labelSmall.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 9.sp,
-                                letterSpacing = 0.5.sp
+                                fontSize = 9.5.sp,
+                                letterSpacing = 0.6.sp
                             ),
                             color = ClaudeTerracotta,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
-                    val category = remember(normFormula) { detectMathCategory(normFormula) }
-                    Text(
-                        text = category,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
+
+                    if (category.isNotBlank() && category != "Equation") {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(5.dp),
+                            color = if (isDark) Color(0xFF22222D) else Color(0xFFE6E3DB),
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) Color(0xFF333342) else Color(0xFFD4CFBF))
+                        ) {
+                            Text(
+                                text = category,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                            )
+                        }
+                    }
                 }
 
-                Surface(
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normFormula))
-                        isCopied = true
-                        Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
-                    },
-                    shape = RoundedCornerShape(6.dp),
-                    color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else Color.Transparent
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    // Raw LaTeX vs KaTeX Rendered Toggle
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showRaw = !showRaw
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (showRaw) ClaudeTerracotta.copy(alpha = 0.15f) else Color.Transparent
                     ) {
-                        Icon(
-                            imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                            contentDescription = "Copy LaTeX",
-                            tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                            modifier = Modifier.size(11.dp)
-                        )
                         Text(
-                            text = if (isCopied) "Copied!" else "LaTeX",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
-                            color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            text = if (showRaw) "Math" else "LaTeX",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                            color = if (showRaw) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                         )
+                    }
+
+                    // Copy formula button
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normFormula))
+                            isCopied = true
+                            Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF262632) else Color(0xFFDCDAD2)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = "Copy LaTeX",
+                                tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = if (isCopied) "Copied!" else "Copy",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                                color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
                     }
                 }
             }
+        }
 
-            Spacer(Modifier.height(6.dp))
-
-            DisableSelection {
-                Box(
+        // Card Body: Either KaTeX live rendering or Raw LaTeX
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            if (showRaw) {
+                Text(
+                    text = normFormula,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp
+                    ),
+                    color = ClaudeTerracotta,
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(mathScrollState)
-                        .padding(vertical = 2.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    NativeMathEquationView(
-                        formula   = normFormula,
-                        textColor = textColor,
-                        modifier  = Modifier.wrapContentWidth()
-                    )
-                }
+                )
+            } else {
+                KaTeXMathView(
+                    formula = normFormula,
+                    isDark = isDark,
+                    modifier = Modifier.fillMaxWidth(),
+                    isDisplayMode = true
+                )
             }
         }
     }
@@ -2020,13 +2083,13 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
         }
     }
 
-    var isCopied    by remember { mutableStateOf(false) }
-    var isSaved     by remember { mutableStateOf(false) }
-    var isWrapped   by remember { mutableStateOf(false) }
+    var isCopied     by remember { mutableStateOf(false) }
+    var isDownloaded by remember { mutableStateOf(false) }
+    var isWrapped    by remember { mutableStateOf(false) }
     val codeScrollState = rememberScrollState()
 
     LaunchedEffect(isCopied) { if (isCopied) { delay(2000); isCopied = false } }
-    LaunchedEffect(isSaved) { if (isSaved) { delay(2000); isSaved = false } }
+    LaunchedEffect(isDownloaded) { if (isDownloaded) { delay(2000); isDownloaded = false } }
 
     val lines           = remember(code) { code.lines() }
     val lineCount       = lines.size
@@ -2055,22 +2118,22 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Modern IDE window control dots
+                    // macOS window control dots
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp),
                         modifier = Modifier.padding(end = 9.dp)
                     ) {
-                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFF5F56).copy(alpha = 0.85f)))
-                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFFBD2E).copy(alpha = 0.85f)))
-                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFF27C93F).copy(alpha = 0.85f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFF5F56).copy(alpha = 0.9f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFFBD2E).copy(alpha = 0.9f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFF27C93F).copy(alpha = 0.9f)))
                     }
 
                     // Clear language tag with distinct language color accent
                     Surface(
                         shape = RoundedCornerShape(5.dp),
                         color = langColor.copy(alpha = if (isDark) 0.18f else 0.12f),
-                        border = androidx.compose.foundation.BorderStroke(0.6.dp, langColor.copy(alpha = 0.35f))
+                        border = androidx.compose.foundation.BorderStroke(0.6.dp, langColor.copy(alpha = 0.45f))
                     ) {
                         Text(
                             text = displayLang,
@@ -2081,17 +2144,28 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
                                 letterSpacing = 0.7.sp
                             ),
                             color = if (isDark) langColor else Color(0xFF252528),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                         )
                     }
 
                     if (lineCount > 1) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "$lineCount lines",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
-                            color = if (isDark) Color(0xFF868694) else Color(0xFF757582)
-                        )
+                        Spacer(Modifier.width(7.dp))
+                        Surface(
+                            shape = RoundedCornerShape(5.dp),
+                            color = if (isDark) Color(0xFF22222B) else Color(0xFFE5E2DA),
+                            border = androidx.compose.foundation.BorderStroke(0.5.dp, if (isDark) Color(0xFF32323D) else Color(0xFFD2CEC4))
+                        ) {
+                            Text(
+                                text = "$lineCount lines",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                color = if (isDark) Color(0xFF9696A4) else Color(0xFF6B6B78),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.5.dp)
+                            )
+                        }
                     }
                 }
 
@@ -2113,11 +2187,11 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
                         )
                     }
 
-                    // Save file button
+                    // Instant Download file button
                     Surface(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            val ext = when (language.lowercase()) {
+                            val ext = when (language.lowercase().trim()) {
                                 "python", "py" -> ".py"
                                 "kotlin", "kt" -> ".kt"
                                 "java" -> ".java"
@@ -2136,31 +2210,45 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
                                 "markdown", "md" -> ".md"
                                 else -> ".txt"
                             }
-                            val fname = "code_${System.currentTimeMillis() % 1000000}$ext"
+                            // Detect filename in top comment line if present (e.g. // file.kt or # script.py)
+                            val detectedName = code.lines().take(3).firstNotNullOfOrNull { l ->
+                                val trimmed = l.trim()
+                                val rawComment = when {
+                                    trimmed.startsWith("//") -> trimmed.removePrefix("//").trim()
+                                    trimmed.startsWith("#") -> trimmed.removePrefix("#").trim()
+                                    trimmed.startsWith("/*") -> trimmed.removePrefix("/*").removeSuffix("*/").trim()
+                                    else -> null
+                                }
+                                rawComment?.let { c ->
+                                    val token = c.split(Regex("\\s+")).lastOrNull()?.trim() ?: ""
+                                    if (token.contains(".") && token.matches(Regex("[a-zA-Z0-9_\\-]+\\.[a-zA-Z0-9]+"))) token else null
+                                }
+                            }
+                            val fname = detectedName ?: "code_${System.currentTimeMillis() % 1000000}$ext"
                             try {
                                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                                 val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
                                 val targetFile = File(targetDir, fname)
                                 targetFile.writeText(code, Charsets.UTF_8)
-                                isSaved = true
-                                Toast.makeText(context, "Saved to Downloads/NextAI/$fname", Toast.LENGTH_SHORT).show()
+                                isDownloaded = true
+                                Toast.makeText(context, "Downloaded to Downloads/NextAI/$fname", Toast.LENGTH_SHORT).show()
                             } catch (_: Throwable) {
                                 try {
                                     val fallbackFile = File(context.filesDir, fname)
                                     fallbackFile.writeText(code, Charsets.UTF_8)
-                                    isSaved = true
-                                    Toast.makeText(context, "Saved to app storage: $fname", Toast.LENGTH_SHORT).show()
+                                    isDownloaded = true
+                                    Toast.makeText(context, "Downloaded: $fname", Toast.LENGTH_SHORT).show()
                                 } catch (_: Throwable) {
-                                    Toast.makeText(context, "Could not save file", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Download failed", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         },
                         shape = RoundedCornerShape(6.dp),
-                        color = if (isSaved) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)
+                        color = if (isDownloaded) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)
                     ) {
                         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Icon(if (isSaved) Icons.Default.Check else Icons.Default.Download, contentDescription = null, modifier = Modifier.size(12.dp), tint = if (isSaved) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
-                            Text(text = if (isSaved) "Saved!" else "Save", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold), color = if (isSaved) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
+                            Icon(if (isDownloaded) Icons.Default.Check else Icons.Default.Download, contentDescription = "Download code", modifier = Modifier.size(12.dp), tint = if (isDownloaded) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
+                            Text(text = if (isDownloaded) "Downloaded" else "Download", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold), color = if (isDownloaded) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
                         }
                     }
 

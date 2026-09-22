@@ -1,5 +1,10 @@
 package com.agychat.app.ui.history
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,20 +15,25 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import com.agychat.app.ui.theme.ClaudeTerracotta
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.agychat.app.data.local.ConversationEntity
+import com.agychat.app.domain.model.AiModel
+import com.agychat.app.domain.model.ModelRegistry
 import com.agychat.app.ui.chat.ChatViewModel
+import com.agychat.app.ui.theme.ClaudeTerracotta
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -31,7 +41,7 @@ enum class HistoryFilter { ALL, PINNED, RECENT }
 
 private fun formatRelativeTime(updatedAt: Long): String {
     val now = System.currentTimeMillis()
-    val diff = now - updatedAt
+    val diff = (now - updatedAt).coerceAtLeast(0L)
     return when {
         diff < 60_000L -> "Just now"
         diff < 3_600_000L -> "${(diff / 60_000L).coerceAtLeast(1)}m ago"
@@ -49,6 +59,7 @@ fun HistoryScreen(
     onRestoreConversation: (String) -> Unit = {},
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
+    val haptic = LocalHapticFeedback.current
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(HistoryFilter.ALL) }
     var showClearAllDialog by remember { mutableStateOf(false) }
@@ -67,11 +78,12 @@ fun HistoryScreen(
     val todayStart = cal.timeInMillis
     val yesterdayStart = todayStart - 86_400_000L
     val sevenDaysAgo = todayStart - (7 * 86_400_000L)
-    val thirtyDaysAgo = todayStart - (30 * 86_400_000L)
 
     val filteredConversations = remember(conversations, searchQuery, selectedFilter, sevenDaysAgo) {
         conversations.filter { conv ->
-            val matchesSearch = searchQuery.isBlank() || conv.title.contains(searchQuery, ignoreCase = true)
+            val matchesSearch = searchQuery.isBlank() ||
+                conv.title.contains(searchQuery, ignoreCase = true) ||
+                (conv.modelId != null && conv.modelId.contains(searchQuery, ignoreCase = true))
             val matchesFilter = when (selectedFilter) {
                 HistoryFilter.ALL -> true
                 HistoryFilter.PINNED -> conv.isPinned
@@ -81,15 +93,52 @@ fun HistoryScreen(
         }
     }
 
+    val pinnedList = remember(filteredConversations) { filteredConversations.filter { it.isPinned } }
+    val unpinnedList = remember(filteredConversations) { filteredConversations.filter { !it.isPinned } }
+
+    val grouped = remember(unpinnedList, todayStart, yesterdayStart, sevenDaysAgo) {
+        unpinnedList.groupBy { conv ->
+            when {
+                conv.updatedAt >= todayStart -> "Today"
+                conv.updatedAt >= yesterdayStart -> "Yesterday"
+                conv.updatedAt >= sevenDaysAgo -> "Previous 7 Days"
+                else -> "Older"
+            }
+        }
+    }
+    val groupOrder = listOf("Today", "Yesterday", "Previous 7 Days", "Older")
+
+    var conversationToRename by remember { mutableStateOf<ConversationEntity?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var conversationToDelete by remember { mutableStateOf<ConversationEntity?>(null) }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        "Chat History",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "Chat History",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (conversations.isNotEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = ClaudeTerracotta.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = "${conversations.size}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = ClaudeTerracotta,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -98,57 +147,84 @@ fun HistoryScreen(
                 },
                 actions = {
                     IconButton(onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         chatViewModel.startNewConversation()
                         onBack()
                     }) {
-                        Icon(Icons.Default.AddComment, contentDescription = "New Chat")
+                        Icon(Icons.Default.AddComment, contentDescription = "New Chat", tint = ClaudeTerracotta)
                     }
                     if (conversations.isNotEmpty()) {
-                        IconButton(onClick = { showClearAllDialog = true }) {
+                        IconButton(onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            showClearAllDialog = true
+                        }) {
                             Icon(
                                 Icons.Default.DeleteSweep,
                                 contentDescription = "Clear All Chats",
-                                tint = MaterialTheme.colorScheme.error
+                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
                             )
                         }
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
             )
         }
     ) { padding ->
-        var conversationToRename by remember { mutableStateOf<ConversationEntity?>(null) }
-        var renameText by remember { mutableStateOf("") }
-        var conversationToDelete by remember { mutableStateOf<ConversationEntity?>(null) }
-
         // Clear All Confirmation Dialog
         if (showClearAllDialog) {
             AlertDialog(
                 onDismissRequest = { showClearAllDialog = false },
                 icon = {
-                    Icon(
-                        Icons.Default.DeleteSweep,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(32.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteSweep,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                },
+                title = {
+                    Text(
+                        "Clear All History?",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
                 },
-                title = { Text("Clear All History?") },
-                text = { Text("This will permanently delete all conversations and cached messages. This action cannot be undone.") },
+                text = {
+                    Text(
+                        "This will permanently delete all ${conversations.size} conversations and cached messages from this device. This action cannot be undone.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
                 confirmButton = {
-                    TextButton(
+                    Button(
                         onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             chatViewModel.clearAllConversations()
                             showClearAllDialog = false
-                        }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Delete All", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        Text("Delete All", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showClearAllDialog = false }) {
                         Text("Cancel")
                     }
-                }
+                },
+                shape = RoundedCornerShape(18.dp)
             )
         }
 
@@ -156,24 +232,28 @@ fun HistoryScreen(
         if (conversationToRename != null) {
             AlertDialog(
                 onDismissRequest = { conversationToRename = null },
-                title = { Text("Rename Chat") },
+                title = { Text("Rename Chat", fontWeight = FontWeight.Bold) },
                 text = {
                     OutlinedTextField(
                         value = renameText,
                         onValueChange = { renameText = it },
-                        label = { Text("Title") },
+                        label = { Text("Chat Title") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
                     )
                 },
                 confirmButton = {
-                    TextButton(
+                    Button(
                         onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             conversationToRename?.let {
-                                chatViewModel.renameConversation(it.id, renameText)
+                                chatViewModel.renameConversation(it.id, renameText.trim())
                             }
                             conversationToRename = null
-                        }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
                         Text("Save")
                     }
@@ -182,41 +262,66 @@ fun HistoryScreen(
                     TextButton(onClick = { conversationToRename = null }) {
                         Text("Cancel")
                     }
-                }
+                },
+                shape = RoundedCornerShape(18.dp)
             )
         }
 
-        // Delete Single Confirmation Dialog
+        // Single Conversation Delete Modal
         if (conversationToDelete != null) {
             AlertDialog(
                 onDismissRequest = { conversationToDelete = null },
                 icon = {
-                    Icon(
-                        Icons.Default.DeleteOutline,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(28.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                },
+                title = {
+                    Text(
+                        "Delete Conversation?",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
                 },
-                title = { Text("Delete Conversation?") },
-                text = { Text("Are you sure you want to delete \"${conversationToDelete?.title}\"?") },
+                text = {
+                    Text(
+                        "Are you sure you want to delete \"${conversationToDelete?.title}\"? All associated messages will be permanently removed.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
                 confirmButton = {
-                    TextButton(
+                    Button(
                         onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             conversationToDelete?.let {
                                 chatViewModel.deleteConversation(it.id)
                             }
                             conversationToDelete = null
-                        }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        Text("Delete", fontWeight = FontWeight.Bold)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { conversationToDelete = null }) {
                         Text("Cancel")
                     }
-                }
+                },
+                shape = RoundedCornerShape(18.dp)
             )
         }
 
@@ -235,17 +340,24 @@ fun HistoryScreen(
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search past conversations...") },
+                    placeholder = { Text("Search conversations & models...") },
                     leadingIcon = {
                         Icon(
                             Icons.Default.Search,
                             contentDescription = "Search",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (searchQuery.isNotBlank()) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     },
                     trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
+                        AnimatedVisibility(
+                            visible = searchQuery.isNotEmpty(),
+                            enter = fadeIn() + scaleIn(),
+                            exit = fadeOut() + scaleOut()
+                        ) {
+                            IconButton(onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                searchQuery = ""
+                            }) {
                                 Icon(
                                     Icons.Default.Close,
                                     contentDescription = "Clear search",
@@ -258,10 +370,14 @@ fun HistoryScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 6.dp),
                     shape = RoundedCornerShape(16.dp),
-                    singleLine = true
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ClaudeTerracotta,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+                    )
                 )
 
-                // Quick Filter Chips Row
+                // Quick Filter Chips Row (All, Pinned, Recent)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -269,9 +385,13 @@ fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // ALL Filter Chip
                     FilterChip(
                         selected = selectedFilter == HistoryFilter.ALL,
-                        onClick = { selectedFilter = HistoryFilter.ALL },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedFilter = HistoryFilter.ALL
+                        },
                         label = { Text("All (${conversations.size})") },
                         shape = RoundedCornerShape(16.dp),
                         colors = FilterChipDefaults.filterChipColors(
@@ -279,10 +399,15 @@ fun HistoryScreen(
                             selectedLabelColor = ClaudeTerracotta
                         )
                     )
+
+                    // PINNED Filter Chip
                     val pinnedCount = remember(conversations) { conversations.count { it.isPinned } }
                     FilterChip(
                         selected = selectedFilter == HistoryFilter.PINNED,
-                        onClick = { selectedFilter = HistoryFilter.PINNED },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedFilter = HistoryFilter.PINNED
+                        },
                         label = { Text("Pinned ($pinnedCount)") },
                         leadingIcon = {
                             Icon(
@@ -298,10 +423,26 @@ fun HistoryScreen(
                             selectedLabelColor = Color(0xFFFFB300)
                         )
                     )
+
+                    // RECENT Filter Chip (7d)
+                    val recentCount = remember(conversations, sevenDaysAgo) {
+                        conversations.count { it.updatedAt >= sevenDaysAgo }
+                    }
                     FilterChip(
                         selected = selectedFilter == HistoryFilter.RECENT,
-                        onClick = { selectedFilter = HistoryFilter.RECENT },
-                        label = { Text("Recent (7d)") },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedFilter = HistoryFilter.RECENT
+                        },
+                        label = { Text("Recent ($recentCount)") },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Schedule,
+                                contentDescription = null,
+                                modifier = Modifier.size(13.dp),
+                                tint = if (selectedFilter == HistoryFilter.RECENT) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
                         shape = RoundedCornerShape(16.dp),
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = ClaudeTerracotta.copy(alpha = 0.15f),
@@ -310,6 +451,7 @@ fun HistoryScreen(
                     )
                 }
 
+                // Empty State View
                 if (filteredConversations.isEmpty()) {
                     Box(
                         modifier = Modifier
@@ -341,9 +483,9 @@ fun HistoryScreen(
                             }
                             Text(
                                 text = if (searchQuery.isNotBlank()) "No matching conversations"
-                                       else if (selectedFilter == HistoryFilter.PINNED) "No pinned conversations"
-                                       else if (selectedFilter == HistoryFilter.RECENT) "No recent chats"
-                                       else "No conversation history yet",
+                                else if (selectedFilter == HistoryFilter.PINNED) "No pinned conversations"
+                                else if (selectedFilter == HistoryFilter.RECENT) "No recent chats in 7 days"
+                                else "No conversation history yet",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -360,6 +502,7 @@ fun HistoryScreen(
                             if (searchQuery.isNotBlank() || selectedFilter != HistoryFilter.ALL) {
                                 OutlinedButton(
                                     onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                         searchQuery = ""
                                         selectedFilter = HistoryFilter.ALL
                                     },
@@ -370,6 +513,7 @@ fun HistoryScreen(
                             } else {
                                 Button(
                                     onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         chatViewModel.startNewConversation()
                                         onBack()
                                     },
@@ -384,58 +528,36 @@ fun HistoryScreen(
                         }
                     }
                 } else {
-                    val pinnedList = filteredConversations.filter { it.isPinned }
-                    val unpinnedList = filteredConversations.filter { !it.isPinned }
-
-                    val grouped = unpinnedList.groupBy { conv ->
-                        when {
-                            conv.updatedAt >= todayStart -> "Today"
-                            conv.updatedAt >= yesterdayStart -> "Yesterday"
-                            conv.updatedAt >= sevenDaysAgo -> "Previous 7 Days"
-                            conv.updatedAt >= thirtyDaysAgo -> "Previous 30 Days"
-                            else -> "Older"
-                        }
-                    }
-                    val groupOrder = listOf("Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older")
-
+                    // Conversation List grouped chronologically into Today, Yesterday, Previous 7 Days, Older
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        // Section: PINNED
                         if (selectedFilter != HistoryFilter.PINNED && pinnedList.isNotEmpty()) {
                             item(key = "h_pinned") {
-                                Row(
-                                    modifier = Modifier.padding(vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        Icons.Default.PushPin,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFFB300),
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(
-                                        text = "PINNED",
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 0.8.sp
-                                        ),
-                                        color = Color(0xFFFFB300)
-                                    )
-                                }
+                                SectionHeader(
+                                    title = "PINNED",
+                                    count = pinnedList.size,
+                                    icon = Icons.Default.PushPin,
+                                    tint = Color(0xFFFFB300)
+                                )
                             }
                             items(pinnedList, key = { it.id }) { conv ->
                                 ConversationCard(
                                     conversation = conv,
                                     isActive = conv.id == activeConversationId,
                                     onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         chatViewModel.loadConversation(conv.id)
                                         onRestoreConversation(conv.id)
                                         onBack()
                                     },
-                                    onPin = { chatViewModel.toggleConversationPinned(conv.id) },
+                                    onPin = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        chatViewModel.toggleConversationPinned(conv.id)
+                                    },
                                     onRename = {
                                         renameText = conv.title
                                         conversationToRename = conv
@@ -453,11 +575,15 @@ fun HistoryScreen(
                                     conversation = conv,
                                     isActive = conv.id == activeConversationId,
                                     onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         chatViewModel.loadConversation(conv.id)
                                         onRestoreConversation(conv.id)
                                         onBack()
                                     },
-                                    onPin = { chatViewModel.toggleConversationPinned(conv.id) },
+                                    onPin = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        chatViewModel.toggleConversationPinned(conv.id)
+                                    },
                                     onRename = {
                                         renameText = conv.title
                                         conversationToRename = conv
@@ -468,37 +594,47 @@ fun HistoryScreen(
                                 )
                             }
                         } else {
+                            // Render distinct visual sections: Today, Yesterday, Previous 7 Days, Older
                             groupOrder.forEach { groupName ->
                                 val groupConvs = grouped[groupName] ?: return@forEach
-                                item(key = "h_$groupName") {
-                                    Text(
-                                        text = groupName.uppercase(),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            letterSpacing = 0.8.sp
-                                        ),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                                    )
-                                }
-                                items(groupConvs, key = { it.id }) { conv ->
-                                    ConversationCard(
-                                        conversation = conv,
-                                        isActive = conv.id == activeConversationId,
-                                        onClick = {
-                                            chatViewModel.loadConversation(conv.id)
-                                            onRestoreConversation(conv.id)
-                                            onBack()
-                                        },
-                                        onPin = { chatViewModel.toggleConversationPinned(conv.id) },
-                                        onRename = {
-                                            renameText = conv.title
-                                            conversationToRename = conv
-                                        },
-                                        onDelete = {
-                                            conversationToDelete = conv
+                                if (groupConvs.isNotEmpty()) {
+                                    item(key = "h_$groupName") {
+                                        val sectionIcon = when (groupName) {
+                                            "Today" -> Icons.Default.Today
+                                            "Yesterday" -> Icons.Default.Schedule
+                                            "Previous 7 Days" -> Icons.Default.DateRange
+                                            else -> Icons.Default.Archive
                                         }
-                                    )
+                                        SectionHeader(
+                                            title = groupName.uppercase(),
+                                            count = groupConvs.size,
+                                            icon = sectionIcon,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    items(groupConvs, key = { it.id }) { conv ->
+                                        ConversationCard(
+                                            conversation = conv,
+                                            isActive = conv.id == activeConversationId,
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                chatViewModel.loadConversation(conv.id)
+                                                onRestoreConversation(conv.id)
+                                                onBack()
+                                            },
+                                            onPin = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                chatViewModel.toggleConversationPinned(conv.id)
+                                            },
+                                            onRename = {
+                                                renameText = conv.title
+                                                conversationToRename = conv
+                                            },
+                                            onDelete = {
+                                                conversationToDelete = conv
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -506,6 +642,54 @@ fun HistoryScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String,
+    count: Int,
+    icon: ImageVector,
+    tint: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(13.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp
+            ),
+            color = tint
+        )
+        Spacer(Modifier.width(6.dp))
+        Surface(
+            shape = RoundedCornerShape(6.dp),
+            color = tint.copy(alpha = 0.12f)
+        ) {
+            Text(
+                text = "$count",
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold),
+                color = tint,
+                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+        )
     }
 }
 
@@ -519,16 +703,44 @@ fun ConversationCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val resolvedModel: AiModel = remember(conversation.modelId) {
+        ModelRegistry.findById(conversation.modelId)
+    }
+
+    val modelBadgeInfo = remember(resolvedModel) {
+        when {
+            resolvedModel.id.contains("gemini", ignoreCase = true) -> Triple(
+                Icons.Default.AutoAwesome,
+                resolvedModel.name.replace("Gemini ", ""),
+                Color(0xFF4285F4)
+            )
+            resolvedModel.id.contains("claude", ignoreCase = true) -> Triple(
+                Icons.Default.Psychology,
+                resolvedModel.name.replace("Claude ", ""),
+                ClaudeTerracotta
+            )
+            resolvedModel.id.contains("gpt", ignoreCase = true) -> Triple(
+                Icons.Default.Memory,
+                "GPT-OSS",
+                Color(0xFF10A37F)
+            )
+            else -> Triple(
+                Icons.Default.SmartToy,
+                resolvedModel.name.take(12),
+                Color(0xFF8E24AA)
+            )
+        }
+    }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .border(
-                width = if (isActive) 1.2.dp else 0.8.dp,
+                width = if (isActive) 1.5.dp else if (conversation.isPinned) 1.dp else 0.8.dp,
                 color = when {
-                    isActive -> ClaudeTerracotta.copy(alpha = 0.7f)
-                    conversation.isPinned -> Color(0xFFFFB300).copy(alpha = 0.4f)
+                    isActive -> ClaudeTerracotta.copy(alpha = 0.8f)
+                    conversation.isPinned -> Color(0xFFFFB300).copy(alpha = 0.6f)
                     else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
                 },
                 shape = RoundedCornerShape(14.dp)
@@ -554,16 +766,16 @@ fun ConversationCard(
                 Box(
                     modifier = Modifier
                         .width(3.5.dp)
-                        .height(36.dp)
+                        .height(38.dp)
                         .background(ClaudeTerracotta, RoundedCornerShape(2.dp))
                 )
                 Spacer(Modifier.width(10.dp))
             }
 
-            // Chat / Pin Icon
+            // Chat / Pin Icon Container
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
                     .background(
                         when {
@@ -586,13 +798,14 @@ fun ConversationCard(
                         isActive -> ClaudeTerracotta
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(19.dp)
                 )
             }
 
             Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
+                // Title and Status Badges
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -607,6 +820,8 @@ fun ConversationCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
+
+                    // Active Badge
                     if (isActive) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
@@ -624,24 +839,112 @@ fun ConversationCard(
                             )
                         }
                     }
+
+                    // Gold Pin Ribbon Badge for Bookmarked Chats
+                    if (conversation.isPinned) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color(0xFFFFB300).copy(alpha = 0.18f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = "Pinned",
+                                    tint = Color(0xFFFFB300),
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Text(
+                                    text = "PINNED",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.4.sp
+                                    ),
+                                    color = Color(0xFFFFB300)
+                                )
+                            }
+                        }
+                    }
                 }
 
-                Spacer(Modifier.height(3.dp))
+                Spacer(Modifier.height(5.dp))
 
+                // Metadata Row: Model Badge + Message Count Pill + Relative Timestamp
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    val timeStr = formatRelativeTime(conversation.updatedAt)
+                    // Model Icon Badge
+                    val (mIcon, mLabel, mColor) = modelBadgeInfo
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = mColor.copy(alpha = 0.12f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                imageVector = mIcon,
+                                contentDescription = null,
+                                tint = mColor,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = mLabel,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                                color = mColor
+                            )
+                        }
+                    }
+
+                    // Message Count Pill
+                    if (conversation.messageCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Forum,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Text(
+                                    text = "${conversation.messageCount} msgs",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                                )
+                            }
+                        }
+                    }
+
                     Text(
-                        text = if (conversation.messageCount > 0) "${conversation.messageCount} messages · $timeStr" else timeStr,
+                        text = "·",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+
+                    // Relative Timestamp ('2h ago', 'Yesterday', etc.)
+                    Text(
+                        text = formatRelativeTime(conversation.updatedAt),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                     )
                 }
             }
 
-            // Single Sleek Overflow Menu Button (MoreVert)
+            // Overflow Menu Button (MoreVert)
             Box {
                 IconButton(
                     onClick = { showMenu = true },
