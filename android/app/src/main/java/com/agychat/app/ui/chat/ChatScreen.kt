@@ -53,9 +53,13 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
@@ -2416,6 +2420,7 @@ fun MessageItem(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     var isCopied by remember { mutableStateOf(false) }
+    var isUserPromptCopied by remember { mutableStateOf(false) }
 
     LaunchedEffect(isCopied) {
         if (isCopied) {
@@ -2423,11 +2428,42 @@ fun MessageItem(
             isCopied = false
         }
     }
+    LaunchedEffect(isUserPromptCopied) {
+        if (isUserPromptCopied) {
+            kotlinx.coroutines.delay(2000)
+            isUserPromptCopied = false
+        }
+    }
 
     when (message.role) {
         "user" -> {
             val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-            val userBubbleShape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+            val userBubbleShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp, bottomEnd = 6.dp, bottomStart = 24.dp)
+            val crystalBorderBrush = remember(isDark) {
+                if (isDark) {
+                    Brush.linearGradient(
+                        colors = listOf(
+                            Color(0x55FFFFFF),
+                            Color(0x20A78BFA),
+                            Color(0x18FFFFFF),
+                            Color(0x35E07A5F)
+                        ),
+                        start = Offset(0f, 0f),
+                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+                    )
+                } else {
+                    Brush.linearGradient(
+                        colors = listOf(
+                            Color(0x75FFFFFF),
+                            Color(0x25C96442),
+                            Color(0x18000000),
+                            Color(0x45FFFFFF)
+                        ),
+                        start = Offset(0f, 0f),
+                        end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+                    )
+                }
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2438,20 +2474,20 @@ fun MessageItem(
                     modifier = Modifier
                         .widthIn(min = 48.dp, max = 580.dp)
                         .shadow(
-                            elevation = 2.5.dp,
+                            elevation = 3.dp,
                             shape = userBubbleShape,
-                            ambientColor = if (isDark) Color.Black.copy(alpha = 0.5f) else Color(0x18000000),
-                            spotColor = if (isDark) Color.Black.copy(alpha = 0.4f) else Color(0x10000000)
+                            ambientColor = if (isDark) Color.Black.copy(alpha = 0.55f) else Color(0x20000000),
+                            spotColor = if (isDark) Color(0x30E07A5F) else Color(0x15000000)
                         )
                         .clip(userBubbleShape)
                         .background(
-                            brush = androidx.compose.ui.graphics.Brush.linearGradient(
+                            brush = Brush.linearGradient(
                                 colors = if (isDark)
                                     listOf(UserBubbleDarkBg1, UserBubbleDarkBg2)
                                 else
                                     listOf(UserBubbleLightBg1, UserBubbleLightBg2),
-                                start = androidx.compose.ui.geometry.Offset(0f, 0f),
-                                end = androidx.compose.ui.geometry.Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+                                start = Offset(0f, 0f),
+                                end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
                             )
                         )
                         .then(
@@ -2459,8 +2495,8 @@ fun MessageItem(
                                 Modifier.border(2.dp, ClaudeTerracotta, userBubbleShape)
                             else
                                 Modifier.border(
-                                    width = 1.dp,
-                                    color = if (isDark) UserBubbleDarkBorder else UserBubbleLightBorder,
+                                    width = 1.2.dp,
+                                    brush = crystalBorderBrush,
                                     shape = userBubbleShape
                                 )
                         )
@@ -2705,101 +2741,152 @@ fun MessageItem(
                         modifier = Modifier.padding(end = 4.dp)
                     )
 
-                    IconButton(
-                        onClick = {
-                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("User Prompt", message.content))
-                            Toast.makeText(context, "Copied prompt", Toast.LENGTH_SHORT).show()
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.ContentCopy,
-                            contentDescription = "Copy",
-                            modifier = Modifier.size(13.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                    // Crystalline Quick Action Icons Capsule
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (isDark) Color(0x221E1E28) else Color(0x26EDEAE3),
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.6.dp,
+                            if (isDark) Color(0x35FFFFFF) else Color(0x22000000)
                         )
-                    }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    cm.setPrimaryClip(ClipData.newPlainText("User Prompt", message.content))
+                                    isUserPromptCopied = true
+                                    Toast.makeText(context, "Copied prompt", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isUserPromptCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                    contentDescription = "Copy",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = if (isUserPromptCopied) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
 
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onReply()
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Reply,
-                            contentDescription = "Reply / Quote",
-                            modifier = Modifier.size(13.dp),
-                            tint = ClaudeTerracotta.copy(alpha = 0.8f)
-                        )
-                    }
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onReply()
+                                },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Reply,
+                                    contentDescription = "Reply / Quote",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = ClaudeTerracotta.copy(alpha = 0.85f)
+                                )
+                            }
 
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onEditMessage(message.content)
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = "Edit",
-                            modifier = Modifier.size(13.dp),
-                            tint = ClaudeTerracotta.copy(alpha = 0.75f)
-                        )
-                    }
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onEditMessage(message.content)
+                                },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = "Edit",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = ClaudeTerracotta.copy(alpha = 0.8f)
+                                )
+                            }
 
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onTogglePin()
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.PushPin,
-                            contentDescription = if (message.isPinned) "Unpin" else "Pin",
-                            modifier = Modifier.size(13.dp),
-                            tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                        )
-                    }
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onTogglePin()
+                                },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = if (message.isPinned) "Unpin" else "Pin",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = if (message.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
 
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onDeleteMessage()
-                        },
-                        modifier = Modifier.size(24.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.DeleteOutline,
-                            contentDescription = "Delete",
-                            modifier = Modifier.size(13.dp),
-                            tint = MaterialTheme.colorScheme.error.copy(alpha = 0.65f)
-                        )
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onDeleteMessage()
+                                },
+                                modifier = Modifier.size(26.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = "Delete",
+                                    modifier = Modifier.size(13.dp),
+                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
         "assistant" -> {
             val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+
+            val avatarTransition = rememberInfiniteTransition(label = "avatarAmbientGlow")
+            val auraScale by avatarTransition.animateFloat(
+                initialValue = 1.0f,
+                targetValue = 1.25f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1800, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "auraScale"
+            )
+            val auraAlpha by avatarTransition.animateFloat(
+                initialValue = 0.30f,
+                targetValue = 0.70f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(1800, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "auraAlpha"
+            )
+
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
             ) {
-                // Header: Avatar + Model name inline
+                // Header: Avatar with ambient glow + Model name + Streaming live dot
                 Row(
-                    modifier = Modifier.padding(bottom = 8.dp),
+                    modifier = Modifier.padding(bottom = 9.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Next AI Continuum Avatar with subtle warm aura glow
+                    // Next AI Continuum Avatar with ambient warm glow
                     Box(
                         modifier = Modifier
-                            .size(30.dp)
-                            .shadow(2.dp, CircleShape, spotColor = ClaudeTerracotta.copy(alpha = 0.35f)),
+                            .size(32.dp)
+                            .drawBehind {
+                                drawCircle(
+                                    brush = Brush.radialGradient(
+                                        colors = listOf(
+                                            ClaudeTerracotta.copy(alpha = 0.45f * auraAlpha),
+                                            ChatGptPurple.copy(alpha = 0.18f * auraAlpha),
+                                            Color.Transparent
+                                        )
+                                    ),
+                                    radius = size.maxDimension * 0.85f * auraScale
+                                )
+                            }
+                            .shadow(2.5.dp, CircleShape, spotColor = ClaudeTerracotta.copy(alpha = 0.4f)),
                         contentAlignment = Alignment.Center
                     ) {
                         NextAiLogo(
@@ -2812,20 +2899,53 @@ fun MessageItem(
                         text = "Next AI",
                         style = MaterialTheme.typography.labelMedium.copy(
                             fontWeight = FontWeight.SemiBold,
-                            fontSize = 13.sp,
+                            fontSize = 13.5.sp,
                             letterSpacing = 0.2.sp
                         ),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.95f)
                     )
                     if (message.isStreaming) {
                         Spacer(Modifier.width(8.dp))
-                        Box(
+                        val streamDotTransition = rememberInfiniteTransition(label = "streamDotPulse")
+                        val dotScale by streamDotTransition.animateFloat(
+                            initialValue = 0.8f,
+                            targetValue = 1.25f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(700, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "streamDotScale"
+                        )
+                        val dotAlpha by streamDotTransition.animateFloat(
+                            initialValue = 0.45f,
+                            targetValue = 1.0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(700, easing = FastOutSlowInEasing),
+                                repeatMode = RepeatMode.Reverse
+                            ),
+                            label = "streamDotAlpha"
+                        )
+
+                        Row(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(ClaudeTerracotta.copy(alpha = 0.15f))
-                                .border(0.6.dp, ClaudeTerracotta.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(ClaudeTerracotta.copy(alpha = if (isDark) 0.16f else 0.12f))
+                                .border(0.6.dp, ClaudeTerracotta.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 8.dp, vertical = 2.5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.5.dp)
+                                    .graphicsLayer {
+                                        scaleX = dotScale
+                                        scaleY = dotScale
+                                        alpha = dotAlpha
+                                    }
+                                    .clip(CircleShape)
+                                    .background(ClaudeTerracotta)
+                            )
                             Text(
                                 text = "generating...",
                                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold),
@@ -3630,36 +3750,45 @@ fun ThinkingAccordionCard(
     val isDark = MaterialTheme.colorScheme.background.red < 0.5f
 
     // Flagship AI color grading (ChatGPT o3, Claude 3.7, Antigravity Desktop)
-    val bgColor = if (isDark) Color(0xFF14131C) else Color(0xFFF7F6FC)
-    val baseBorderColor = if (isDark) Color(0xFF282638) else Color(0xFFE4E0F4)
+    val bgColor = if (isDark) Color(0xFF13131B) else Color(0xFFF7F6FC)
+    val baseBorderColor = if (isDark) Color(0xFF262436) else Color(0xFFE5E1F4)
     val accentColor = if (isDark) Color(0xFFA78BFA) else Color(0xFF6D28D9)
-    val textPrimaryColor = if (isDark) Color(0xFFEDE9FE) else Color(0xFF332F4C)
-    val textSecondaryColor = if (isDark) Color(0xFFA5A0BD) else Color(0xFF6B6684)
+    val textPrimaryColor = if (isDark) Color(0xFFEDE9FE) else Color(0xFF322E4A)
+    val textSecondaryColor = if (isDark) Color(0xFFA6A1BD) else Color(0xFF6A6582)
 
     var isCopied by remember { mutableStateOf(false) }
     LaunchedEffect(isCopied) {
         if (isCopied) {
-            kotlinx.coroutines.delay(1800)
+            delay(1800)
             isCopied = false
         }
     }
 
-    var activeElapsedSeconds by remember { mutableStateOf(1) }
+    var activeElapsedMs by remember { mutableStateOf(thinkingDurationMs.coerceAtLeast(0L)) }
     LaunchedEffect(isActivelyThinking) {
         if (isActivelyThinking) {
             val startWallTime = System.currentTimeMillis() - thinkingDurationMs.coerceAtLeast(0L)
             while (true) {
-                val elapsed = (System.currentTimeMillis() - startWallTime) / 1000L
-                activeElapsedSeconds = elapsed.coerceAtLeast(1L).toInt()
-                kotlinx.coroutines.delay(500L)
+                val elapsed = System.currentTimeMillis() - startWallTime
+                activeElapsedMs = elapsed.coerceAtLeast(0L)
+                delay(100L)
             }
         }
     }
 
     val infiniteTransition = rememberInfiniteTransition(label = "thinkingCardPulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.15f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "brainPulseScale"
+    )
     val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.45f,
-        targetValue = 1.0f,
+        initialValue = 0.35f,
+        targetValue = 0.95f,
         animationSpec = infiniteRepeatable(
             animation = tween(850, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
@@ -3667,35 +3796,29 @@ fun ThinkingAccordionCard(
         label = "sparklePulse"
     )
 
-    val borderColor = if (isActivelyThinking) {
-        accentColor.copy(alpha = 0.35f + (0.35f * pulseAlpha))
+    val cardBorderBrush = if (isActivelyThinking) {
+        Brush.linearGradient(
+            colors = listOf(
+                accentColor.copy(alpha = 0.30f + (0.50f * pulseAlpha)),
+                ClaudeTerracotta.copy(alpha = 0.20f + (0.35f * pulseAlpha)),
+                accentColor.copy(alpha = 0.25f)
+            ),
+            start = Offset(0f, 0f),
+            end = Offset(Float.POSITIVE_INFINITY, Float.POSITIVE_INFINITY)
+        )
     } else {
-        baseBorderColor
+        Brush.linearGradient(
+            colors = listOf(baseBorderColor, baseBorderColor)
+        )
     }
 
     val wordCount = remember(thinkingText) {
         thinkingText.trim().split(Regex("\\s+")).count { it.isNotBlank() }
     }
 
-    val summaryLabel = remember(isActivelyThinking, activeElapsedSeconds, thinkingDurationMs, wordCount) {
-        if (isActivelyThinking) {
-            "Thinking (${activeElapsedSeconds}s)…"
-        } else {
-            val durationSec = if (thinkingDurationMs > 0L) {
-                val s = thinkingDurationMs / 1000.0
-                String.format(Locale.US, "%.1fs", s)
-            } else {
-                val estimatedS = (wordCount / 65.0).coerceAtLeast(1.0)
-                String.format(Locale.US, "%.1fs", estimatedS)
-            }
-            if (wordCount > 0) "Thought for $durationSec (~$wordCount words)"
-            else "Thought for $durationSec"
-        }
-    }
-
     val chevronRotation by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
-        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
+        animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow),
         label = "chevronRotation"
     )
 
@@ -3704,7 +3827,7 @@ fun ThinkingAccordionCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(bgColor)
-            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+            .border(1.2.dp, cardBorderBrush, RoundedCornerShape(14.dp))
             .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
         Row(
@@ -3722,28 +3845,111 @@ fun ThinkingAccordionCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                Icon(
-                    imageVector = Icons.Default.AutoAwesome,
-                    contentDescription = null,
+                // Pulsing glowing brain & sparkle container
+                Box(
                     modifier = Modifier
-                        .size(15.dp)
+                        .size(28.dp)
                         .then(
-                            if (isActivelyThinking) Modifier.alpha(pulseAlpha)
-                            else Modifier
+                            if (isActivelyThinking) {
+                                Modifier.drawBehind {
+                                    drawCircle(
+                                        brush = Brush.radialGradient(
+                                            colors = listOf(
+                                                accentColor.copy(alpha = 0.55f * pulseAlpha),
+                                                ClaudeTerracotta.copy(alpha = 0.25f * pulseAlpha),
+                                                Color.Transparent
+                                            )
+                                        ),
+                                        radius = size.maxDimension * 0.85f * pulseScale
+                                    )
+                                }
+                            } else Modifier
                         ),
-                    tint = accentColor
-                )
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isActivelyThinking) Icons.Default.Psychology else Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(17.dp)
+                            .then(
+                                if (isActivelyThinking) Modifier.graphicsLayer {
+                                    scaleX = pulseScale
+                                    scaleY = pulseScale
+                                } else Modifier
+                            ),
+                        tint = accentColor
+                    )
+                }
+
                 Spacer(Modifier.width(8.dp))
+
                 Text(
-                    text = summaryLabel,
+                    text = if (isActivelyThinking) "Thinking Process" else "Thought Process",
                     style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.5.sp
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        letterSpacing = 0.2.sp
                     ),
-                    color = textPrimaryColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    color = textPrimaryColor
                 )
+
+                Spacer(Modifier.width(8.dp))
+
+                // Real-time Timer Badge
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isActivelyThinking) accentColor.copy(alpha = 0.16f) else textSecondaryColor.copy(alpha = 0.12f),
+                    border = androidx.compose.foundation.BorderStroke(
+                        0.6.dp,
+                        if (isActivelyThinking) accentColor.copy(alpha = 0.45f) else textSecondaryColor.copy(alpha = 0.25f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (isActivelyThinking) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .graphicsLayer {
+                                        scaleX = pulseScale
+                                        scaleY = pulseScale
+                                        alpha = pulseAlpha
+                                    }
+                                    .clip(CircleShape)
+                                    .background(accentColor)
+                            )
+                            Text(
+                                text = String.format(Locale.US, "%.1fs", activeElapsedMs / 1000.0),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = accentColor
+                            )
+                        } else {
+                            val durationSec = if (thinkingDurationMs > 0L) {
+                                String.format(Locale.US, "%.1fs", thinkingDurationMs / 1000.0)
+                            } else {
+                                val estimatedS = (wordCount / 65.0).coerceAtLeast(1.0)
+                                String.format(Locale.US, "%.1fs", estimatedS)
+                            }
+                            Text(
+                                text = if (wordCount > 0) "$durationSec • ~${wordCount}w" else durationSec,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                ),
+                                color = textSecondaryColor
+                            )
+                        }
+                    }
+                }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3781,8 +3987,8 @@ fun ThinkingAccordionCard(
 
         AnimatedVisibility(
             visible = isExpanded,
-            enter = fadeIn(tween(180)) + expandVertically(tween(220)),
-            exit = fadeOut(tween(140)) + shrinkVertically(tween(180))
+            enter = fadeIn(tween(200)) + expandVertically(spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow)),
+            exit = fadeOut(tween(160)) + shrinkVertically(spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow))
         ) {
             Column(
                 modifier = Modifier
@@ -3801,7 +4007,11 @@ fun ThinkingAccordionCard(
                             .width(3.dp)
                             .heightIn(min = 28.dp)
                             .clip(RoundedCornerShape(2.dp))
-                            .background(accentColor.copy(alpha = 0.55f))
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(accentColor.copy(alpha = 0.8f), ClaudeTerracotta.copy(alpha = 0.5f))
+                                )
+                            )
                     )
                     Spacer(Modifier.width(10.dp))
                     Box(modifier = Modifier.weight(1f)) {
@@ -4285,736 +4495,8 @@ fun StreamingCursorBlink() {
 }
 
 
-@Composable
-fun QuickSlashChipsRow(
-    plugins: List<PluginItem>,
-    onChipClick: (PluginItem) -> Unit,
-    onOpenAllTools: () -> Unit = {}
-) {
-    val haptic = LocalHapticFeedback.current
-    val curatedChips = remember {
-        listOf(
-            Triple("Search Web", "/browser ", Icons.Default.Language to ChatGptBlue),
-            Triple("Deep Think", "/boost ", Icons.Default.AutoAwesome to ChatGptPurple),
-            Triple("Plan", "/plan ", Icons.Default.Assignment to ClaudeTerracotta),
-            Triple("Auto Goal", "/goal ", Icons.Default.RocketLaunch to ChatGptEmerald),
-            Triple("Remember", "/remember ", Icons.Default.Psychology to ClaudeTerracottaDark)
-        )
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        curatedChips.forEach { (label, commandPrefix, iconAndColor) ->
-            val (icon, accentColor) = iconAndColor
-            val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-            Surface(
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    val trimmedPrefix = commandPrefix.trim()
-                    val matching = plugins.firstOrNull { it.prefix == trimmedPrefix }
-                        ?: if (trimmedPrefix == "/remember") plugins.firstOrNull { it.prefix == "/learn" } else null
-                    if (matching != null) {
-                        onChipClick(matching)
-                    } else {
-                        onChipClick(
-                            PluginItem(
-                                name = trimmedPrefix.removePrefix("/"),
-                                title = label,
-                                description = label,
-                                icon = icon,
-                                prefix = trimmedPrefix,
-                                tag = "TOOL",
-                                examplePrompt = "$trimmedPrefix ",
-                                badgeColor = 0xFFD4704B
-                            )
-                        )
-                    }
-                },
-                shape = RoundedCornerShape(18.dp),
-                color = if (isDark) Color(0xFF1C1C24) else Color(0xFFFFFFFF),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp,
-                    accentColor.copy(alpha = if (isDark) 0.55f else 0.4f)
-                ),
-                shadowElevation = 1.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(18.dp)
-                            .clip(CircleShape)
-                            .background(accentColor.copy(alpha = 0.16f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            tint = accentColor,
-                            modifier = Modifier.size(11.dp)
-                        )
-                    }
-                    Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.5.sp
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        }
-
-        Surface(
-            onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onOpenAllTools()
-            },
-            shape = RoundedCornerShape(18.dp),
-            color = ClaudeTerracotta.copy(alpha = 0.14f),
-            border = androidx.compose.foundation.BorderStroke(1.dp, ClaudeTerracotta.copy(alpha = 0.45f)),
-            shadowElevation = 1.dp
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                Icon(
-                    Icons.Default.Tune,
-                    contentDescription = null,
-                    modifier = Modifier.size(13.dp),
-                    tint = ClaudeTerracotta
-                )
-                Text(
-                    text = "All Tools ✦",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.5.sp),
-                    color = ClaudeTerracotta
-                )
-            }
-        }
-    }
-}
-
-enum class ActionButtonState { STOP, SEND, MIC }
-
-data class ActiveSlashMode(
-    val prefix: String,
-    val label: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector,
-    val color: Color
-)
-
-@Composable
-fun ClaudeFloatingInputBar(
-    text: String,
-    onTextChange: (String) -> Unit,
-    onSend: () -> Unit,
-    onStop: () -> Unit = {},
-    onOpenPlugins: () -> Unit,
-    onAttachFile: () -> Unit,
-    onToggleWebSearch: () -> Unit = {},
-    onVoiceInput: () -> Unit = {},
-    attachments: List<AttachmentItem> = emptyList(),
-    attachment: AttachmentItem? = null,
-    onRemoveAttachment: (AttachmentItem) -> Unit = {},
-    onAddMoreAttachments: () -> Unit = onAttachFile,
-    replyToMessage: Message? = null,
-    onCancelReply: () -> Unit = {},
-    isConnected: Boolean,
-    isLoading: Boolean
-) {
-    val context = LocalContext.current
-    val haptic = LocalHapticFeedback.current
-    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
-    var isFocused by remember { mutableStateOf(false) }
-    val activeAttachments = if (attachments.isNotEmpty()) attachments else if (attachment != null) listOf(attachment) else emptyList()
-    val canSend = (text.isNotBlank() || activeAttachments.isNotEmpty()) && isConnected
-
-    val recognizedModes = remember {
-        listOf(
-            ActiveSlashMode("/browser", "Web Search", Icons.Default.Language, ChatGptBlue),
-            ActiveSlashMode("/boost", "Deep Think", Icons.Default.AutoAwesome, ChatGptPurple),
-            ActiveSlashMode("/plan", "Plan Mode", Icons.Default.Assignment, Color(0xFF0284C7)),
-            ActiveSlashMode("/goal", "Autonomous Goal", Icons.Default.RocketLaunch, Color(0xFF10B981)),
-            ActiveSlashMode("/learn", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B)),
-            ActiveSlashMode("/remember", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B)),
-            ActiveSlashMode("/schedule", "Scheduled", Icons.Default.Schedule, Color(0xFF8B5CF6)),
-            ActiveSlashMode("/grill-me", "Interview", Icons.Default.QuestionAnswer, ClaudeTerracotta),
-            ActiveSlashMode("/teamwork-preview", "Multi-Agent", Icons.Default.Groups, Color(0xFF06B6D4))
-        )
-    }
-    val activeMode = recognizedModes.firstOrNull { text.startsWith(it.prefix) }
-    val isWebSearchActive = activeMode?.prefix == "/browser"
-
-    val isComposerElevated = isFocused || text.isNotBlank() || activeAttachments.isNotEmpty()
-    val composerElevation by animateDpAsState(
-        targetValue = if (isComposerElevated) 7.dp else 2.5.dp,
-        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-        label = "composerElevation"
-    )
-    val inputBorderColor by animateColorAsState(
-        targetValue = when {
-            isWebSearchActive -> ChatGptBlue.copy(alpha = 0.85f)
-            isComposerElevated -> ClaudeTerracotta.copy(alpha = 0.65f)
-            isDark -> GlassComposerDarkBorder
-            else -> GlassComposerLightBorder
-        },
-        animationSpec = tween(durationMillis = 220),
-        label = "inputBorderColor"
-    )
-    val composerBg by animateColorAsState(
-        targetValue = if (isDark) GlassComposerDarkBg else GlassComposerLightBg,
-        animationSpec = tween(durationMillis = 220),
-        label = "composerBg"
-    )
-
-    val composerShape = RoundedCornerShape(26.dp)
-    Surface(
-        shape = composerShape,
-        color = composerBg,
-        tonalElevation = if (isDark) 3.dp else 1.dp,
-        shadowElevation = composerElevation,
-        border = androidx.compose.foundation.BorderStroke(
-            width = if (isComposerElevated) 1.2.dp else 1.dp,
-            color = inputBorderColor
-        ),
-        modifier = Modifier
-            .fillMaxWidth()
-            .shadow(
-                elevation = composerElevation,
-                shape = composerShape,
-                spotColor = if (isComposerElevated) ClaudeTerracotta.copy(alpha = 0.22f) else Color.Black.copy(alpha = 0.10f),
-                ambientColor = Color.Black.copy(alpha = 0.06f)
-            )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            // Quoted Reply Preview Bar
-            AnimatedVisibility(visible = replyToMessage != null) {
-                if (replyToMessage != null) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 6.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(3.dp)
-                                    .height(26.dp)
-                                    .background(ClaudeTerracotta, RoundedCornerShape(2.dp))
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Replying to ${if (replyToMessage.role == "user") "You" else "Assistant"}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = ClaudeTerracotta,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = replyToMessage.content.lines().firstOrNull()?.take(80) ?: "",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            IconButton(
-                                onClick = onCancelReply,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Close,
-                                    contentDescription = "Cancel reply",
-                                    modifier = Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Multi-Attachment Preview Bar (ChatGPT modern carousel / row of attached files/images)
-            AnimatedVisibility(visible = activeAttachments.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    items(activeAttachments, key = { it.uri }) { att ->
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(
-                                0.8.dp,
-                                MaterialTheme.colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier.widthIn(max = 200.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (att.isImage) {
-                                    AsyncImage(
-                                        model = att.uri,
-                                        contentDescription = "Attached image",
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(RoundedCornerShape(8.dp)),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(ClaudeTerracotta.copy(alpha = 0.14f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            Icons.Default.InsertDriveFile,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(20.dp),
-                                            tint = ClaudeTerracotta
-                                        )
-                                    }
-                                }
-
-                                Spacer(Modifier.width(8.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = att.name,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    val sizeStr = remember(att.uri) { queryFileSize(context, Uri.parse(att.uri)) }
-                                    Text(
-                                        text = listOfNotNull(if (att.isImage) "Photo" else "Document", sizeStr.ifBlank { null }).joinToString(" • "),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { onRemoveAttachment(att) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Remove attachment",
-                                        modifier = Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    item {
-                        Surface(
-                            onClick = onAddMoreAttachments,
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            border = androidx.compose.foundation.BorderStroke(
-                                0.8.dp,
-                                MaterialTheme.colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = "Add more files",
-                                    tint = ClaudeTerracotta,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Active Slash Mode Badge Pill (Dismissible)
-            AnimatedVisibility(
-                visible = activeMode != null,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
-            ) {
-                if (activeMode != null) {
-                    Row(
-                        modifier = Modifier
-                            .padding(bottom = 6.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(activeMode.color.copy(alpha = 0.12f))
-                            .border(0.8.dp, activeMode.color.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            activeMode.icon,
-                            contentDescription = null,
-                            tint = activeMode.color,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = activeMode.label,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp),
-                            color = activeMode.color
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .clickable {
-                                    val newText = if (text.startsWith("${activeMode.prefix} ")) {
-                                        text.removePrefix("${activeMode.prefix} ")
-                                    } else {
-                                        text.removePrefix(activeMode.prefix).trimStart()
-                                    }
-                                    onTextChange(newText)
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Remove mode",
-                                tint = activeMode.color.copy(alpha = 0.8f),
-                                modifier = Modifier.size(12.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // ── Tier 1: Expansive Full-Width Text Input ──
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp)
-            ) {
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = onTextChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onFocusChanged { isFocused = it.isFocused },
-                    placeholder = {
-                        Text(
-                            text = if (isConnected) "Message Next AI or type / for tools..." else "Connect in Settings to chat...",
-                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.5.sp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
-                        )
-                    },
-                    maxLines = 6,
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Sentences,
-                        imeAction = ImeAction.Default
-                    ),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        cursorColor = ClaudeTerracotta
-                    ),
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        fontSize = 15.5.sp,
-                        lineHeight = 22.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                )
-
-                // Word / Token Count Badge if long prompt
-                if (text.length > 80) {
-                    val words = remember(text) { text.trim().split(Regex("\\s+")).count { it.isNotBlank() } }
-                    val estTokens = (words * 1.33).toInt()
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(top = 8.dp, end = 6.dp)
-                    ) {
-                        Text(
-                            text = "$words w · ~$estTokens t",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
-                            color = if (text.length > 4000) MaterialTheme.colorScheme.error
-                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // ── Tier 2: Refined Action Toolbar (Left Tools & Right Send/Stop) ──
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // Left Toolbar cluster: Attachments (+), Tools (✦), Web Search pill
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Plus button (+) for Attachments & Files
-                    Surface(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onAttachFile()
-                        },
-                        shape = CircleShape,
-                        color = if (activeAttachments.isNotEmpty()) ClaudeTerracotta.copy(alpha = 0.18f)
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-                        border = androidx.compose.foundation.BorderStroke(
-                            0.8.dp,
-                            if (activeAttachments.isNotEmpty()) ClaudeTerracotta.copy(alpha = 0.5f)
-                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier.size(38.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Default.Add,
-                                contentDescription = "Add attachment or file",
-                                tint = if (activeAttachments.isNotEmpty()) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-
-                    // Slash Commands & Tools Button (✦)
-                    Surface(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onOpenPlugins()
-                        },
-                        shape = RoundedCornerShape(18.dp),
-                        color = ClaudeTerracotta.copy(alpha = 0.12f),
-                        border = androidx.compose.foundation.BorderStroke(
-                            0.8.dp,
-                            ClaudeTerracotta.copy(alpha = 0.35f)
-                        ),
-                        modifier = Modifier.height(36.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.AutoAwesome,
-                                contentDescription = "Slash Commands and Tools",
-                                tint = ClaudeTerracotta,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Text(
-                                text = "Tools",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 11.5.sp
-                                ),
-                                color = ClaudeTerracotta
-                            )
-                        }
-                    }
-
-                    // Quick Web Search Toggle Pill
-                    Surface(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onToggleWebSearch()
-                        },
-                        shape = RoundedCornerShape(18.dp),
-                        color = if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.18f)
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                        border = androidx.compose.foundation.BorderStroke(
-                            0.9.dp,
-                            if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier.height(36.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Language,
-                                contentDescription = "Toggle Web Search",
-                                modifier = Modifier.size(15.dp),
-                                tint = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = if (isWebSearchActive) "Search ON" else "Search",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = if (isWebSearchActive) FontWeight.Bold else FontWeight.Medium,
-                                    fontSize = 11.5.sp
-                                ),
-                                color = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (isWebSearchActive) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(ChatGptBlue)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Right Action cluster: Clear text (✕) & Action Button (Send / Stop / Mic)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    // Clear (✕) Button if text non-empty
-                    if (text.isNotBlank()) {
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onTextChange("")
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Clear input",
-                                tint = MaterialTheme.colorScheme.outline,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-
-                    // Modern ChatGPT Dynamic Send / Stop / Mic Button with Smooth AnimatedContent Transitions
-                    val hasInput = text.isNotBlank() || activeAttachments.isNotEmpty()
-                    val actionButtonState = when {
-                        isLoading -> ActionButtonState.STOP
-                        hasInput -> ActionButtonState.SEND
-                        else -> ActionButtonState.MIC
-                    }
-
-                    AnimatedContent(
-                        targetState = actionButtonState,
-                        transitionSpec = {
-                            (scaleIn(animationSpec = tween(180)) + fadeIn(animationSpec = tween(180)))
-                                .togetherWith(scaleOut(animationSpec = tween(150)) + fadeOut(animationSpec = tween(150)))
-                        },
-                        label = "composerActionButton"
-                    ) { state ->
-                        when (state) {
-                            ActionButtonState.STOP -> {
-                                FilledIconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        onStop()
-                                    },
-                                    modifier = Modifier.size(40.dp),
-                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.Stop,
-                                        contentDescription = "Stop Generating",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                            ActionButtonState.SEND -> {
-                                FilledIconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        if (canSend) {
-                                            onSend()
-                                        } else {
-                                            Toast.makeText(context, "Bridge offline. Tap Reconnect above.", Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    modifier = Modifier.size(40.dp),
-                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = if (canSend) ClaudeTerracotta
-                                                         else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.ArrowUpward,
-                                        contentDescription = "Send",
-                                        tint = if (canSend) Color.White else MaterialTheme.colorScheme.surface,
-                                        modifier = Modifier.size(21.dp)
-                                    )
-                                }
-                            }
-                            ActionButtonState.MIC -> {
-                                Surface(
-                                    onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onVoiceInput()
-                                    },
-                                    shape = CircleShape,
-                                    color = ClaudeTerracotta.copy(alpha = 0.14f),
-                                    border = androidx.compose.foundation.BorderStroke(
-                                        0.9.dp,
-                                        ClaudeTerracotta.copy(alpha = 0.4f)
-                                    ),
-                                    modifier = Modifier.size(40.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(
-                                            Icons.Default.Mic,
-                                            contentDescription = "Voice dictation",
-                                            tint = ClaudeTerracotta,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// Note: QuickSlashChipsRow, ActionButtonState, ActiveSlashMode, and ClaudeFloatingInputBar
+// are now modularized and enhanced in ChatComposerBar.kt (package com.agychat.app.ui.chat)
 
 @Composable
 fun EmptyChatGreeting(
@@ -5865,130 +5347,7 @@ fun ConversationDrawerItem(
     }
 }
 
-@Composable
-fun SlashCommandAutocompletePopup(
-    query: String,
-    commands: List<PluginItem>,
-    onSelect: (PluginItem) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(bottom = 6.dp)
-            .shadow(8.dp, RoundedCornerShape(16.dp)),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 6.dp,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "COMMANDS",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = "${commands.size} available",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-
-            HorizontalDivider(
-                thickness = 0.6.dp,
-                color = MaterialTheme.colorScheme.outlineVariant
-            )
-
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 240.dp)
-            ) {
-                items(commands, key = { it.prefix }) { cmd ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(cmd) }
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(cmd.badgeColor).copy(alpha = 0.14f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = cmd.icon,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = Color(cmd.badgeColor)
-                            )
-                        }
-
-                        Spacer(Modifier.width(10.dp))
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = cmd.prefix,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = ClaudeTerracotta
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = cmd.title,
-                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Text(
-                                text = cmd.description,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        Spacer(Modifier.width(6.dp))
-
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = Color(cmd.badgeColor).copy(alpha = 0.12f)
-                        ) {
-                            Text(
-                                text = cmd.tag,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = Color(cmd.badgeColor),
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+// Note: SlashCommandAutocompletePopup is now modularized and enhanced in ChatComposerBar.kt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
