@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -58,7 +59,7 @@ import kotlinx.coroutines.delay
 enum class ActionButtonState { STOP, SEND, MIC }
 
 /**
- * Recognized active slash command mode representations for banner pills.
+ * Recognized active slash command mode representations for banner pills and ambient borders.
  */
 data class ActiveSlashMode(
     val prefix: String,
@@ -69,7 +70,7 @@ data class ActiveSlashMode(
 )
 
 /**
- * Format raw byte size into clean human-readable string.
+ * Format raw byte size into clean human-readable string (e.g. "128 KB", "2.4 MB").
  */
 fun formatFileSize(bytes: Long): String {
     if (bytes <= 0) return ""
@@ -103,8 +104,8 @@ fun queryFileSizeSafe(context: Context, uriString: String, fallbackSize: Long = 
 }
 
 /**
- * 2X Superior Floating Input Composer with Frosted Glass Styling, Animated Focus Glow,
- * Multi-Attachment Carousel, Voice Visualizer Integration, and Quick Actions.
+ * 2X Next-Gen Floating Input Composer with Dynamic Active-Mode Ambient Borders,
+ * Live Word & Token Telemetry Badge, Multi-Attachment Carousel, and Integrated Voice Visualizer.
  */
 @Composable
 fun ClaudeFloatingInputBar(
@@ -141,17 +142,25 @@ fun ClaudeFloatingInputBar(
     }
     val canSend = (text.isNotBlank() || activeAttachments.isNotEmpty()) && isConnected
 
-    // Recognized command modes with specialized color themes
+    // ── 1. Dynamic Active-Mode Ambient Colors ──
+    // Tailored slash modes matching exact specifications:
+    // /browser: ChatGptBlue (#3B82F6)
+    // /boost: ChatGptPurple (#8B5CF6)
+    // /plan: Sky Blue (#0284C7)
+    // /goal: Emerald Green (#10B981)
+    // /learn or /remember: Amber Gold (#F59E0B)
+    // /grill-me: Claude Terracotta (#E07A5F)
+    // Default: Claude Terracotta (#D97757) with frosted glass background.
     val recognizedModes = remember {
         listOf(
-            ActiveSlashMode("/browser", "Web Search", Icons.Default.Language, ChatGptBlue, "Live web browsing and citation analysis"),
-            ActiveSlashMode("/boost", "Deep Think", Icons.Default.AutoAwesome, ChatGptPurple, "Extended chain-of-thought reasoning"),
+            ActiveSlashMode("/browser", "Web Search", Icons.Default.Language, Color(0xFF3B82F6), "Live web browsing and citation analysis"),
+            ActiveSlashMode("/boost", "Deep Think", Icons.Default.AutoAwesome, Color(0xFF8B5CF6), "Extended chain-of-thought reasoning"),
             ActiveSlashMode("/plan", "Plan Mode", Icons.Default.Assignment, Color(0xFF0284C7), "Structured step-by-step roadmap"),
             ActiveSlashMode("/goal", "Autonomous Goal", Icons.Default.RocketLaunch, Color(0xFF10B981), "Multi-step autonomous agent loop"),
             ActiveSlashMode("/learn", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B), "Persistent memory fact learning"),
             ActiveSlashMode("/remember", "Memory", Icons.Default.Psychology, Color(0xFFF59E0B), "Persistent memory fact learning"),
+            ActiveSlashMode("/grill-me", "Interview", Icons.Default.QuestionAnswer, Color(0xFFE07A5F), "Rigorous mock interview and assessment"),
             ActiveSlashMode("/schedule", "Scheduled", Icons.Default.Schedule, Color(0xFF8B5CF6), "Automated recurring background tasks"),
-            ActiveSlashMode("/grill-me", "Interview", Icons.Default.QuestionAnswer, ClaudeTerracotta, "Rigorous mock interview and assessment"),
             ActiveSlashMode("/teamwork-preview", "Multi-Agent", Icons.Default.Groups, Color(0xFF06B6D4), "Collaborative multi-agent swarm execution"),
             ActiveSlashMode("/model", "Switch Model", Icons.Default.Tune, Color(0xFF1976D2), "Switch active AI intelligence model")
         )
@@ -161,24 +170,56 @@ fun ClaudeFloatingInputBar(
 
     val isComposerElevated = isFocused || text.isNotBlank() || activeAttachments.isNotEmpty() || isInlineVoiceRecording
 
-    // Dynamic specular border & glow transitions
+    // Dynamic elevation transition
     val composerElevation by animateDpAsState(
-        targetValue = if (isComposerElevated) 7.5.dp else 2.5.dp,
+        targetValue = if (isComposerElevated) 8.dp else 2.5.dp,
         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
         label = "composerElevation"
     )
+
+    // Dynamic Active-Mode Ambient Border color
+    val activeAccentColor = when {
+        isInlineVoiceRecording -> ClaudeTerracotta
+        activeMode != null -> activeMode.color
+        isComposerElevated -> ClaudeTerracotta
+        else -> if (isDark) GlassComposerDarkBorder else GlassComposerLightBorder
+    }
+
     val inputBorderColor by animateColorAsState(
         targetValue = when {
             isInlineVoiceRecording -> ClaudeTerracotta
-            isWebSearchActive -> ChatGptBlue.copy(alpha = 0.90f)
-            activeMode != null -> activeMode.color.copy(alpha = 0.85f)
-            isComposerElevated -> ClaudeTerracotta.copy(alpha = 0.70f)
+            activeMode != null -> activeMode.color.copy(alpha = if (isComposerElevated) 0.95f else 0.70f)
+            isComposerElevated -> ClaudeTerracotta.copy(alpha = 0.75f)
             isDark -> GlassComposerDarkBorder
             else -> GlassComposerLightBorder
         },
         animationSpec = tween(durationMillis = 220),
         label = "inputBorderColor"
     )
+
+    // Specular spot and ambient glow shadows tailored to active mode
+    val spotShadowColor by animateColorAsState(
+        targetValue = when {
+            isInlineVoiceRecording -> ClaudeTerracotta.copy(alpha = 0.38f)
+            activeMode != null -> activeMode.color.copy(alpha = if (isComposerElevated) 0.38f else 0.20f)
+            isComposerElevated -> ClaudeTerracotta.copy(alpha = 0.25f)
+            else -> Color.Black.copy(alpha = 0.08f)
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "spotShadowColor"
+    )
+
+    val ambientShadowColor by animateColorAsState(
+        targetValue = when {
+            isInlineVoiceRecording -> ClaudeTerracotta.copy(alpha = 0.16f)
+            activeMode != null -> activeMode.color.copy(alpha = if (isComposerElevated) 0.16f else 0.08f)
+            isComposerElevated -> ClaudeTerracotta.copy(alpha = 0.10f)
+            else -> Color.Black.copy(alpha = 0.05f)
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "ambientShadowColor"
+    )
+
     val composerBg by animateColorAsState(
         targetValue = if (isDark) GlassComposerDarkBg else GlassComposerLightBg,
         animationSpec = tween(durationMillis = 220),
@@ -193,7 +234,7 @@ fun ClaudeFloatingInputBar(
         tonalElevation = if (isDark) 4.dp else 1.dp,
         shadowElevation = composerElevation,
         border = BorderStroke(
-            width = if (isComposerElevated) 1.3.dp else 1.dp,
+            width = if (isComposerElevated) 1.5.dp else 1.0.dp,
             color = inputBorderColor
         ),
         modifier = modifier
@@ -201,14 +242,8 @@ fun ClaudeFloatingInputBar(
             .shadow(
                 elevation = composerElevation,
                 shape = composerShape,
-                spotColor = when {
-                    isInlineVoiceRecording -> ClaudeTerracotta.copy(alpha = 0.35f)
-                    isWebSearchActive -> ChatGptBlue.copy(alpha = 0.30f)
-                    activeMode != null -> activeMode.color.copy(alpha = 0.25f)
-                    isComposerElevated -> ClaudeTerracotta.copy(alpha = 0.22f)
-                    else -> Color.Black.copy(alpha = 0.08f)
-                },
-                ambientColor = Color.Black.copy(alpha = 0.06f)
+                spotColor = spotShadowColor,
+                ambientColor = ambientShadowColor
             )
     ) {
         Column(
@@ -274,7 +309,7 @@ fun ClaudeFloatingInputBar(
                 }
             }
 
-            // ── Multi-Attachment Horizontal Carousel Preview ──
+            // ── 4. Multi-Attachment Horizontal Carousel Preview ──
             AnimatedVisibility(
                 visible = activeAttachments.isNotEmpty(),
                 enter = fadeIn() + expandVertically(),
@@ -401,24 +436,44 @@ fun ClaudeFloatingInputBar(
                             )
                         )
 
-                        // Word / Token Count Badge for extended prompts
-                        if (text.length > 60) {
+                        // ── 3. Live Word & Token Telemetry Badge ──
+                        // Displays real-time context telemetry: e.g. "42 words · ~56 tokens" when user types
+                        if (text.isNotBlank()) {
                             val words = remember(text) { text.trim().split(Regex("\\s+")).count { it.isNotBlank() } }
                             val estTokens = (words * 1.33).toInt()
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
                                     .padding(top = 8.dp, end = 6.dp)
                             ) {
-                                Text(
-                                    text = "$words w · ~$estTokens t",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp, fontWeight = FontWeight.Medium),
-                                    color = if (text.length > 4000) MaterialTheme.colorScheme.error
-                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (text.length > 4000) MaterialTheme.colorScheme.error
+                                                else if (text.length > 2000) Color(0xFFF59E0B)
+                                                else ClaudeTerracotta
+                                            )
+                                    )
+                                    Text(
+                                        text = "$words words · ~$estTokens tokens",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        color = if (text.length > 4000) MaterialTheme.colorScheme.error
+                                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -530,11 +585,11 @@ fun ClaudeFloatingInputBar(
                             onToggleWebSearch()
                         },
                         shape = RoundedCornerShape(18.dp),
-                        color = if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.18f)
+                        color = if (isWebSearchActive) Color(0xFF3B82F6).copy(alpha = 0.18f)
                                 else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                         border = BorderStroke(
                             0.9.dp,
-                            if (isWebSearchActive) ChatGptBlue.copy(alpha = 0.75f)
+                            if (isWebSearchActive) Color(0xFF3B82F6).copy(alpha = 0.75f)
                             else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                         ),
                         modifier = Modifier.height(36.dp)
@@ -548,7 +603,7 @@ fun ClaudeFloatingInputBar(
                                 Icons.Default.Language,
                                 contentDescription = "Toggle Web Search",
                                 modifier = Modifier.size(15.dp),
-                                tint = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
+                                tint = if (isWebSearchActive) Color(0xFF3B82F6) else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
                                 text = if (isWebSearchActive) "Search ON" else "Search",
@@ -556,7 +611,7 @@ fun ClaudeFloatingInputBar(
                                     fontWeight = if (isWebSearchActive) FontWeight.Bold else FontWeight.Medium,
                                     fontSize = 11.5.sp
                                 ),
-                                color = if (isWebSearchActive) ChatGptBlue else MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (isWebSearchActive) Color(0xFF3B82F6) else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             if (isWebSearchActive) {
                                 val infinitePulse = rememberInfiniteTransition(label = "searchPulse")
@@ -573,7 +628,7 @@ fun ClaudeFloatingInputBar(
                                     modifier = Modifier
                                         .size(6.dp)
                                         .clip(CircleShape)
-                                        .background(ChatGptBlue.copy(alpha = pulseAlpha))
+                                        .background(Color(0xFF3B82F6).copy(alpha = pulseAlpha))
                                 )
                             }
                         }
@@ -708,7 +763,7 @@ fun ClaudeFloatingInputBar(
                                 Surface(
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        // Start inline interactive waveform visualizer or launch recognizer
+                                        // Start inline interactive waveform visualizer
                                         isInlineVoiceRecording = true
                                     },
                                     shape = CircleShape,
@@ -735,8 +790,9 @@ fun ClaudeFloatingInputBar(
 }
 
 /**
- * Modern Multi-Attachment Horizontal Carousel Preview with thumbnail badges,
- * file names, file sizes, dismiss actions, and quick add (+) button.
+ * 4. Modern Multi-Attachment Horizontal Carousel Preview with thumbnail badges,
+ * file type badge icons (PDF, Code, Image, Data, Archive, Audio), file size (e.g. "128 KB"),
+ * instant dismiss buttons, and dedicated "+" button.
  */
 @Composable
 fun AttachmentCarouselPreview(
@@ -767,7 +823,7 @@ fun AttachmentCarouselPreview(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Thumbnail or File Type Badge
+                    // Thumbnail or File Type Badge Icon
                     if (att.isImage) {
                         AsyncImage(
                             model = att.uri,
@@ -784,13 +840,13 @@ fun AttachmentCarouselPreview(
                             ext == "pdf" || att.mimeType == "application/pdf" ->
                                 Triple(Icons.Default.PictureAsPdf, Color(0xFFEF4444), "PDF")
                             ext in setOf("py", "kt", "js", "ts", "java", "html", "css", "cpp", "c", "rs", "go") ->
-                                Triple(Icons.Default.Code, ChatGptBlue, "CODE")
+                                Triple(Icons.Default.Code, Color(0xFF3B82F6), "CODE")
                             ext in setOf("json", "csv", "tsv", "sql", "xml") ->
-                                Triple(Icons.Default.TableChart, ChatGptEmerald, "DATA")
+                                Triple(Icons.Default.TableChart, Color(0xFF10B981), "DATA")
                             ext in setOf("zip", "tar", "gz", "rar", "7z") ->
-                                Triple(Icons.Default.Archive, ChatGptAmber, "ARCHIVE")
+                                Triple(Icons.Default.Archive, Color(0xFFF59E0B), "ARCHIVE")
                             ext in setOf("mp3", "wav", "m4a", "ogg") ->
-                                Triple(Icons.Default.VolumeUp, ChatGptPurple, "AUDIO")
+                                Triple(Icons.Default.VolumeUp, Color(0xFF8B5CF6), "AUDIO")
                             else ->
                                 Triple(Icons.Default.InsertDriveFile, ClaudeTerracotta, "DOC")
                         }
@@ -814,7 +870,7 @@ fun AttachmentCarouselPreview(
 
                     Spacer(Modifier.width(8.dp))
 
-                    // Title and Size
+                    // Title and Formatted File Size (e.g. "128 KB")
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = att.name,
@@ -836,7 +892,7 @@ fun AttachmentCarouselPreview(
                         )
                     }
 
-                    // Remove (✕) Button
+                    // Instant Dismiss (✕) Button
                     IconButton(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -855,7 +911,7 @@ fun AttachmentCarouselPreview(
             }
         }
 
-        // Quick (+) Button to add more attachments
+        // Dedicated (+) Button to attach additional files
         item {
             Surface(
                 onClick = {
@@ -881,8 +937,8 @@ fun AttachmentCarouselPreview(
 }
 
 /**
- * 2X High-End Audio & Voice Recording Visualizer with pulsing wave bars,
- * recording duration counter, and clean tactile stop / cancel controls.
+ * 2. Animated 12-Bar Harmonic Voice Recording Visualizer with randomized harmonic wave heights,
+ * pulsing red "● REC" dot with elapsed timer (e.g. 00:06), and tactile Cancel & Done buttons.
  */
 @Composable
 fun VoiceRecordingVisualizerBar(
@@ -932,7 +988,7 @@ fun VoiceRecordingVisualizerBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Left: Cancel Button
+            // Left: Clean Cancel Button with tactile feedback
             FilledTonalIconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -951,12 +1007,12 @@ fun VoiceRecordingVisualizerBar(
                 )
             }
 
-            // Center: Live REC badge + 14-Bar Waveform + Timer
+            // Center: Pulsing red "● REC" dot + 12-Bar Harmonic Waveform + Elapsed Timer (e.g. 00:06)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Red Recording Dot
+                // Pulsing Red Recording Dot
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
@@ -975,21 +1031,24 @@ fun VoiceRecordingVisualizerBar(
                     )
                 }
 
-                // 12 Harmonic Waveform Bars
+                // 12 Harmonic Waveform Bars with randomized/staggered amplitudes
                 Row(
                     modifier = Modifier.height(28.dp),
                     horizontalArrangement = Arrangement.spacedBy(2.5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val barOffsets = listOf(0, 120, 240, 80, 300, 180, 360, 100, 260, 140, 320, 200)
+                    val targetPeaks = listOf(18f, 26f, 14f, 28f, 22f, 16f, 25f, 19f, 27f, 15f, 24f, 20f)
+
                     barOffsets.forEachIndexed { index, delayMs ->
+                        val peak = targetPeaks[index % targetPeaks.size]
                         val barHeight by infiniteTransition.animateFloat(
                             initialValue = 4f,
-                            targetValue = 26f,
+                            targetValue = peak,
                             animationSpec = infiniteRepeatable(
                                 animation = tween(
-                                    durationMillis = 480 + (index * 40),
-                                    delayMillis = delayMs % 150,
+                                    durationMillis = 460 + (index * 35),
+                                    delayMillis = delayMs % 160,
                                     easing = FastOutSlowInEasing
                                 ),
                                 repeatMode = RepeatMode.Reverse
@@ -1011,7 +1070,7 @@ fun VoiceRecordingVisualizerBar(
                     }
                 }
 
-                // Timer String
+                // Elapsed Timer String (e.g. 00:06)
                 Text(
                     text = formattedTime,
                     style = MaterialTheme.typography.labelSmall.copy(
@@ -1023,7 +1082,7 @@ fun VoiceRecordingVisualizerBar(
                 )
             }
 
-            // Right: Finish / Commit Button
+            // Right: Clean Done Button with tactile feedback
             FilledIconButton(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1046,8 +1105,9 @@ fun VoiceRecordingVisualizerBar(
 }
 
 /**
- * 2X Enhanced Autocomplete Slash Command Popup with Category Filter Badges,
- * Rich Item Icons, and Touch/Keyboard Selection.
+ * 5. Tabbed Slash Command Autocomplete Popup with Category Filter Tabs
+ * ("ALL", "CLI", "TOOLS", "AGENTS", "ACTIONS"), Rich Item Icons, Prefix Pills,
+ * and Enter / Tap Selection.
  */
 @Composable
 fun SlashCommandAutocompletePopup(
@@ -1059,13 +1119,25 @@ fun SlashCommandAutocompletePopup(
     val haptic = LocalHapticFeedback.current
     var selectedCategory by remember { mutableStateOf("ALL") }
 
-    val categories = remember(commands) {
-        listOf("ALL") + commands.map { it.tag }.distinct().sorted()
+    // Category filter tabs: "ALL", "CLI", "TOOLS", "AGENTS", "ACTIONS"
+    val standardTabs = remember {
+        listOf("ALL", "CLI", "TOOLS", "AGENTS", "ACTIONS")
     }
 
     val filteredCommands = remember(commands, selectedCategory) {
-        if (selectedCategory == "ALL") commands
-        else commands.filter { it.tag.equals(selectedCategory, ignoreCase = true) }
+        when (selectedCategory) {
+            "ALL" -> commands
+            "CLI" -> commands.filter { it.tag.equals("CLI", ignoreCase = true) }
+            "TOOLS" -> commands.filter { it.tag.equals("TOOL", ignoreCase = true) || it.tag.equals("TOOLS", ignoreCase = true) }
+            "AGENTS" -> commands.filter { it.tag.equals("AGENT", ignoreCase = true) || it.tag.equals("AGENTS", ignoreCase = true) }
+            "ACTIONS" -> commands.filter {
+                it.tag.equals("ACTION", ignoreCase = true) ||
+                it.tag.equals("ACTIONS", ignoreCase = true) ||
+                it.tag.equals("DIRECT", ignoreCase = true) ||
+                it.isDirectAction
+            }
+            else -> commands.filter { it.tag.equals(selectedCategory, ignoreCase = true) }
+        }
     }
 
     Surface(
@@ -1106,41 +1178,39 @@ fun SlashCommandAutocompletePopup(
                 )
             }
 
-            // Category Filter Badges Row
-            if (categories.size > 2) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    categories.forEach { cat ->
-                        val isSelected = cat == selectedCategory
-                        Surface(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                selectedCategory = cat
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.18f)
-                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            border = BorderStroke(
-                                0.7.dp,
-                                if (isSelected) ClaudeTerracotta.copy(alpha = 0.6f)
-                                else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                            )
-                        ) {
-                            Text(
-                                text = cat,
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    fontSize = 10.sp,
-                                    color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
-                                ),
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                            )
-                        }
+            // Tabbed Category Filter Row: "ALL", "CLI", "TOOLS", "AGENTS", "ACTIONS"
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                standardTabs.forEach { cat ->
+                    val isSelected = cat == selectedCategory
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            selectedCategory = cat
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) ClaudeTerracotta.copy(alpha = 0.18f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(
+                            0.7.dp,
+                            if (isSelected) ClaudeTerracotta.copy(alpha = 0.6f)
+                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        Text(
+                            text = cat,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 10.sp,
+                                color = if (isSelected) ClaudeTerracotta else MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.5.dp)
+                        )
                     }
                 }
             }
@@ -1151,7 +1221,7 @@ fun SlashCommandAutocompletePopup(
                 modifier = Modifier.padding(top = 4.dp)
             )
 
-            // Scrollable List of Filtered Commands
+            // Scrollable List of Filtered Commands with Rich Layout
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1168,6 +1238,7 @@ fun SlashCommandAutocompletePopup(
                             .padding(horizontal = 14.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Rich Icon with Tinted Badge
                         Box(
                             modifier = Modifier
                                 .size(34.dp)
@@ -1187,11 +1258,22 @@ fun SlashCommandAutocompletePopup(
 
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = cmd.prefix,
-                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = ClaudeTerracotta
-                                )
+                                // Prefix Pill
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = ClaudeTerracotta.copy(alpha = 0.12f),
+                                    border = BorderStroke(0.6.dp, ClaudeTerracotta.copy(alpha = 0.35f))
+                                ) {
+                                    Text(
+                                        text = cmd.prefix,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        ),
+                                        color = ClaudeTerracotta,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                                    )
+                                }
                                 Spacer(Modifier.width(6.dp))
                                 Text(
                                     text = cmd.title,
@@ -1210,6 +1292,7 @@ fun SlashCommandAutocompletePopup(
 
                         Spacer(Modifier.width(6.dp))
 
+                        // Category Tag Badge
                         Surface(
                             shape = RoundedCornerShape(6.dp),
                             color = Color(cmd.badgeColor).copy(alpha = 0.12f),
@@ -1233,7 +1316,7 @@ fun SlashCommandAutocompletePopup(
 }
 
 /**
- * Modern Quick Slash Chips Row shown on empty canvas with curated commands & tools shortcut.
+ * 6. Modern Quick Slash Chips Row shown on empty canvas with curated commands & tools shortcut.
  */
 @Composable
 fun QuickSlashChipsRow(
@@ -1245,11 +1328,11 @@ fun QuickSlashChipsRow(
     val haptic = LocalHapticFeedback.current
     val curatedChips = remember {
         listOf(
-            Triple("Search Web", "/browser ", Icons.Default.Language to ChatGptBlue),
-            Triple("Deep Think", "/boost ", Icons.Default.AutoAwesome to ChatGptPurple),
-            Triple("Plan", "/plan ", Icons.Default.Assignment to ClaudeTerracotta),
-            Triple("Auto Goal", "/goal ", Icons.Default.RocketLaunch to ChatGptEmerald),
-            Triple("Remember", "/remember ", Icons.Default.Psychology to ClaudeTerracottaDark),
+            Triple("Search Web", "/browser ", Icons.Default.Language to Color(0xFF3B82F6)),
+            Triple("Deep Think", "/boost ", Icons.Default.AutoAwesome to Color(0xFF8B5CF6)),
+            Triple("Plan", "/plan ", Icons.Default.Assignment to Color(0xFF0284C7)),
+            Triple("Auto Goal", "/goal ", Icons.Default.RocketLaunch to Color(0xFF10B981)),
+            Triple("Remember", "/remember ", Icons.Default.Psychology to Color(0xFFF59E0B)),
             Triple("Switch Model", "/model ", Icons.Default.Tune to Color(0xFF1976D2))
         )
     }
