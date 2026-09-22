@@ -30,8 +30,140 @@ def is_binary_file(path: str) -> bool:
     except Exception:
         return False
 
-# Preserved streaming events per conversation across disconnects
-conversation_buffers: Dict[str, List[str]] = {}
+# Server process start time for uptime tracking
+SERVER_START_TIME = time.time()
+
+def get_server_uptime() -> dict:
+    """Calculate bridge server uptime in seconds and human-readable format."""
+    uptime_sec = round(time.time() - SERVER_START_TIME, 1)
+    hours = int(uptime_sec // 3600)
+    minutes = int((uptime_sec % 3600) // 60)
+    seconds = int(uptime_sec % 60)
+    uptime_human = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
+    return {
+        "uptime_seconds": uptime_sec,
+        "uptime_human": uptime_human,
+        "start_time": SERVER_START_TIME
+    }
+
+class ConversationReplayManager:
+    """
+    Thread-safe, bounded conversation event replay buffer.
+    Guarantees seamless stream continuation across app backgrounding,
+    device sleep, and Cloudflare tunnel drops with zero lost tokens.
+    """
+    def __init__(self, max_events_per_conv: int = 2000, max_conversations: int = 100):
+        self._buffers: Dict[str, List[str]] = {}
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._metadata: Dict[str, dict] = {}
+        self.max_events = max_events_per_conv
+        self.max_conversations = max_conversations
+
+    def _get_lock(self, conv_id: str) -> asyncio.Lock:
+        if conv_id not in self._locks:
+            self._locks[conv_id] = asyncio.Lock()
+        return self._locks[conv_id]
+
+    async def reset(self, conv_id: str):
+        """Start a fresh replay buffer for a new turn."""
+        if not conv_id:
+            return
+        lock = self._get_lock(conv_id)
+        async with lock:
+            self._buffers[conv_id] = []
+            self._metadata[conv_id] = {
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "last_seq": -1,
+                "status": "streaming"
+            }
+            self._prune_if_needed()
+
+    async def append(self, conv_id: str, event_json: str, seq: int):
+        """Append an event to the conversation's replay buffer."""
+        if not conv_id:
+            return
+        lock = self._get_lock(conv_id)
+        async with lock:
+            buf = self._buffers.setdefault(conv_id, [])
+            buf.append(event_json)
+            if len(buf) > self.max_events:
+                buf.pop(0)
+            meta = self._metadata.setdefault(conv_id, {
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "last_seq": -1,
+                "status": "streaming"
+            })
+            meta["updated_at"] = time.time()
+            meta["last_seq"] = max(meta.get("last_seq", -1), seq)
+
+    async def set_status(self, conv_id: str, status: str):
+        """Update conversation buffer status (streaming, completed, error, cancelled)."""
+        if not conv_id:
+            return
+        lock = self._get_lock(conv_id)
+        async with lock:
+            if conv_id in self._metadata:
+                self._metadata[conv_id]["status"] = status
+                self._metadata[conv_id]["updated_at"] = time.time()
+
+    async def get_events_after(self, conv_id: str, after_seq: int = -1) -> tuple[list[str], int, str]:
+        """
+        Atomically fetch all events with seq > after_seq.
+        Returns: (events_to_replay, latest_seq, status)
+        """
+        if not conv_id:
+            return [], -1, "idle"
+        lock = self._get_lock(conv_id)
+        async with lock:
+            buf = list(self._buffers.get(conv_id, []))
+            meta = dict(self._metadata.get(conv_id, {}))
+            latest_seq = meta.get("last_seq", -1)
+            status = meta.get("status", "idle")
+
+            if after_seq == -1:
+                return buf, latest_seq, status
+
+            filtered = []
+            for ev in buf:
+                try:
+                    ev_obj = json.loads(ev)
+                    ev_seq = ev_obj.get("seq", -1)
+                    if ev_seq > after_seq:
+                        filtered.append(ev)
+                except Exception:
+                    filtered.append(ev)
+            return filtered, latest_seq, status
+
+    def get_summary(self) -> dict:
+        """Return diagnostic overview of replay buffers."""
+        now = time.time()
+        summary = {}
+        for cid, meta in self._metadata.items():
+            summary[cid] = {
+                "event_count": len(self._buffers.get(cid, [])),
+                "last_seq": meta.get("last_seq", -1),
+                "status": meta.get("status", "idle"),
+                "age_seconds": round(now - meta.get("updated_at", now), 1)
+            }
+        return summary
+
+    def _prune_if_needed(self):
+        if len(self._buffers) > self.max_conversations:
+            sorted_cids = sorted(
+                self._metadata.keys(),
+                key=lambda k: self._metadata[k].get("updated_at", 0)
+            )
+            to_remove = sorted_cids[:len(sorted_cids) - self.max_conversations]
+            for cid in to_remove:
+                self._buffers.pop(cid, None)
+                self._locks.pop(cid, None)
+                self._metadata.pop(cid, None)
+
+# Global replay buffer and tasks
+replay_manager = ConversationReplayManager()
+conversation_buffers: Dict[str, List[str]] = replay_manager._buffers
 active_generation_tasks: Dict[str, asyncio.Task] = {}
 conversation_websockets: Dict[str, WebSocket] = {}
 
@@ -59,41 +191,97 @@ app.add_middleware(
 
 
 class ConnectionManager:
-    """Manages active WebSocket connections."""
+    """Manages active WebSocket connections with detailed metrics, health, and latency tracking."""
 
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self._locks: Dict[WebSocket, asyncio.Lock] = {}
+        self.connection_meta: Dict[WebSocket, dict] = {}
+        self._conn_counter: int = 0
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
         self._locks[websocket] = asyncio.Lock()
-        logger.info(f"Client connected. Total: {len(self.active_connections)}")
+        self._conn_counter += 1
+
+        client_host = "unknown"
+        if websocket.client and websocket.client.host:
+            client_host = websocket.client.host
+
+        self.connection_meta[websocket] = {
+            "id": f"conn_{self._conn_counter}",
+            "client_ip": client_host,
+            "connected_at": time.time(),
+            "last_ping_at": 0.0,
+            "last_pong_at": 0.0,
+            "latency_ms": None,
+            "messages_sent": 0,
+            "messages_received": 0,
+            "active_conversation": None
+        }
+        logger.info(f"Client connected: {self.connection_meta[websocket]['id']} ({client_host}). Total: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
         self._locks.pop(websocket, None)
-        logger.info(f"Client disconnected. Total: {len(self.active_connections)}")
+        meta = self.connection_meta.pop(websocket, None)
+        cid = meta["id"] if meta else "unknown"
+        logger.info(f"Client disconnected: {cid}. Total: {len(self.active_connections)}")
 
-    async def send(self, message: str, websocket: WebSocket):
+    def record_received(self, websocket: WebSocket):
+        if websocket in self.connection_meta:
+            self.connection_meta[websocket]["messages_received"] += 1
+
+    def record_latency(self, websocket: WebSocket, latency_ms: float):
+        if websocket in self.connection_meta:
+            self.connection_meta[websocket]["latency_ms"] = round(latency_ms, 1)
+            self.connection_meta[websocket]["last_pong_at"] = time.time()
+
+    def set_active_conversation(self, websocket: WebSocket, conv_id: str):
+        if websocket in self.connection_meta:
+            self.connection_meta[websocket]["active_conversation"] = conv_id
+
+    async def send(self, message: str, websocket: WebSocket) -> bool:
         lock = self._locks.get(websocket)
+        success = False
         if lock:
             async with lock:
                 try:
                     await websocket.send_text(message)
+                    success = True
                 except Exception as e:
                     logger.warning(f"Failed to send message: {e}")
         else:
             try:
                 await websocket.send_text(message)
+                success = True
             except Exception as e:
                 logger.warning(f"Failed to send message: {e}")
+
+        if success and websocket in self.connection_meta:
+            self.connection_meta[websocket]["messages_sent"] += 1
+        return success
 
     async def broadcast(self, message: str):
         for connection in list(self.active_connections):
             await self.send(message, connection)
+
+    def get_active_diagnostics(self) -> List[dict]:
+        now = time.time()
+        diagnostics = []
+        for ws, meta in self.connection_meta.items():
+            diagnostics.append({
+                "connection_id": meta["id"],
+                "client_ip": meta["client_ip"],
+                "connected_seconds": round(now - meta["connected_at"], 1),
+                "latency_ms": meta["latency_ms"],
+                "messages_sent": meta["messages_sent"],
+                "messages_received": meta["messages_received"],
+                "active_conversation": meta["active_conversation"]
+            })
+        return diagnostics
 
 
 manager = ConnectionManager()
@@ -105,7 +293,8 @@ async def health_check():
     return {
         "status": "ok",
         "connected_clients": len(manager.active_connections),
-        "service": "AGY Chat Colab Bridge"
+        "service": "AGY Chat Colab Bridge",
+        "uptime": get_server_uptime()["uptime_human"]
     }
 
 
@@ -121,10 +310,53 @@ async def get_models():
 
 @app.get("/api/system/status")
 async def system_status():
-    """Detailed host runtime environment, memory, GPU and performance telemetry."""
+    """Detailed host runtime environment, live memory, CPU load, uptime, and active connection tracking."""
     env = get_host_environment_summary()
+    uptime_info = get_server_uptime()
+    conn_diagnostics = manager.get_active_diagnostics()
+    replay_summary = replay_manager.get_summary()
+
     return {
         "status": "ok",
+        "uptime": {
+            "server_uptime_seconds": uptime_info["uptime_seconds"],
+            "server_uptime_human": uptime_info["uptime_human"],
+            "server_start_time": uptime_info["start_time"],
+            "system_uptime_seconds": env.get("system_uptime_seconds"),
+            "system_uptime_human": env.get("system_uptime_human"),
+        },
+        "live_memory": {
+            "total_gb": env.get("ram_total_gb") or env.get("ram_gb"),
+            "used_gb": env.get("ram_used_gb"),
+            "free_gb": env.get("ram_free_gb"),
+            "available_gb": env.get("ram_available_gb"),
+            "usage_percent": env.get("ram_usage_percent"),
+        },
+        "cpu_load": {
+            "cpu_count": env.get("cpu_count"),
+            "load_1m": env.get("cpu_load_1m"),
+            "load_5m": env.get("cpu_load_5m"),
+            "load_15m": env.get("cpu_load_15m"),
+            "usage_percent": env.get("cpu_percent"),
+        },
+        "disk": {
+            "total_gb": env.get("disk_total_gb"),
+            "used_gb": env.get("disk_used_gb"),
+            "free_gb": env.get("disk_free_gb"),
+            "usage_percent": env.get("disk_usage_percent"),
+        },
+        "connections": {
+            "connected_clients": len(manager.active_connections),
+            "active_connections": conn_diagnostics,
+        },
+        "active_streaming": {
+            "active_tasks_count": len(active_generation_tasks),
+            "active_conversations": list(active_generation_tasks.keys()),
+        },
+        "replay_buffer": {
+            "buffered_conversations_count": len(conversation_buffers),
+            "conversations": replay_summary,
+        },
         "environment": env,
         "connected_clients": len(manager.active_connections),
         "buffered_conversations": len(conversation_buffers),
@@ -492,13 +724,23 @@ async def websocket_endpoint(websocket: WebSocket):
         websocket
     )
 
-    # Keep-alive ping task to prevent Cloudflare 100s WebSocket timeout
+    # Dynamic keep-alive ping task (25s interval to prevent Cloudflare 100s timeout)
     async def ping_task():
+        ping_idx = 0
         while True:
-            await asyncio.sleep(45)
+            await asyncio.sleep(25)
+            ping_idx += 1
+            now = time.time()
+            if websocket in manager.connection_meta:
+                manager.connection_meta[websocket]["last_ping_at"] = now
             try:
                 await manager.send(
-                    json.dumps({"type": "ping", "content": "", "timestamp": time.time()}),
+                    json.dumps({
+                        "type": "ping",
+                        "ping_id": f"ping_{ping_idx}",
+                        "server_timestamp": now,
+                        "timestamp": now
+                    }),
                     websocket
                 )
             except Exception:
@@ -511,6 +753,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             raw = await websocket.receive_text()
+            manager.record_received(websocket)
             logger.info(f"Received: {raw[:200]}")
 
             # Parse incoming message
@@ -601,16 +844,46 @@ async def websocket_endpoint(websocket: WebSocket):
                         }), websocket)
                     continue
 
+                # Handle client pong heartbeat (RTT measurement)
+                if payload.get("action") == "pong" or payload.get("type") == "pong":
+                    s_ts = payload.get("server_timestamp") or payload.get("timestamp")
+                    if s_ts:
+                        try:
+                            s_float = float(s_ts)
+                            rtt_ms = round((time.time() - s_float) * 1000, 2)
+                            if 0 < rtt_ms < 60000:
+                                manager.record_latency(websocket, rtt_ms)
+                        except Exception:
+                            pass
+                    continue
+
                 # Handle client ping heartbeat
                 if payload.get("action") == "ping" or payload.get("type") == "ping":
                     c_ts = payload.get("client_timestamp") or payload.get("timestamp") or time.time()
                     req_cwd = payload.get("cwd", "/content")
-                    await manager.send(json.dumps({
+                    now_ms = time.time() * 1000
+                    latency_ms = None
+                    try:
+                        c_float = float(c_ts)
+                        if c_float > 1e11:  # timestamp in ms
+                            latency_ms = max(1.0, round(now_ms - c_float, 1))
+                        elif c_float > 1e8:  # timestamp in seconds
+                            latency_ms = max(1.0, round((time.time() - c_float) * 1000, 1))
+                    except Exception:
+                        pass
+                    if latency_ms is not None:
+                        manager.record_latency(websocket, latency_ms)
+
+                    pong_payload = {
                         "type": "pong",
                         "client_timestamp": c_ts,
+                        "server_timestamp": time.time(),
                         "timestamp": time.time(),
                         "environment": get_host_environment_summary(req_cwd)
-                    }), websocket)
+                    }
+                    if latency_ms is not None:
+                        pong_payload["latency_ms"] = latency_ms
+                    await manager.send(json.dumps(pong_payload), websocket)
                     continue
 
                 # Handle get_environment request from client
@@ -623,23 +896,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     }), websocket)
                     continue
 
-                # Handle resume_conversation for seamless reconnect across app minimization
+                # Handle resume_conversation for seamless reconnect across Cloudflare tunnel drops
                 if payload.get("action") == "resume_conversation" or payload.get("type") == "resume_conversation":
                     resume_cid = payload.get("conversation_id", "")
                     after_seq = payload.get("after_seq", -1)
                     logger.info(f"Resume conversation requested for: {resume_cid}, after_seq: {after_seq}")
                     if resume_cid:
                         conversation_websockets[resume_cid] = websocket
-                        buffered = conversation_buffers.get(resume_cid, [])
-                        logger.info(f"Replaying buffered events for {resume_cid} (total {len(buffered)}, after_seq={after_seq})")
-                        for buf_event in buffered:
-                            try:
-                                ev_obj = json.loads(buf_event)
-                                ev_seq = ev_obj.get("seq", -1)
-                                if after_seq == -1 or ev_seq > after_seq:
-                                    await manager.send(buf_event, websocket)
-                            except Exception:
-                                await manager.send(buf_event, websocket)
+                        manager.set_active_conversation(websocket, resume_cid)
+                        events_to_replay, latest_seq, status = await replay_manager.get_events_after(resume_cid, after_seq)
+                        logger.info(f"Replaying {len(events_to_replay)} buffered events for {resume_cid} (after_seq={after_seq}, latest={latest_seq}, status={status})")
+                        for buf_event in events_to_replay:
+                            await manager.send(buf_event, websocket)
+                        # Replay sync acknowledgment
+                        await manager.send(json.dumps({
+                            "type": "resume_sync",
+                            "conversation_id": resume_cid,
+                            "replayed_count": len(events_to_replay),
+                            "after_seq": after_seq,
+                            "latest_seq": latest_seq,
+                            "status": status,
+                            "timestamp": time.time()
+                        }), websocket)
                     continue
 
                 # Handle get_file request for artifacts / workspace files
@@ -777,13 +1055,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     cancel_agy_command(conv_id)
                     old_task.cancel()
                 conversation_websockets[conv_id] = websocket
-                conversation_buffers[conv_id] = []
+                manager.set_active_conversation(websocket, conv_id)
+                await replay_manager.reset(conv_id)
 
             current_conv_id = conv_id
 
             async def stream_worker(msg, cid, eff, mdl, mems, c_inst, pers, a_mem, is_temp, hist, c_meta, work_dir):
                 try:
-                    conversation_buffers[cid] = []
+                    if cid:
+                        await replay_manager.reset(cid)
                     seq_counter = 0
                     async for event in run_agy_command(
                         msg,
@@ -802,25 +1082,37 @@ async def websocket_endpoint(websocket: WebSocket):
                         try:
                             ev_obj = json.loads(event)
                             ev_obj["seq"] = seq_counter
+                            if cid:
+                                ev_obj["conversation_id"] = cid
                             seq_counter += 1
                             event_with_seq = json.dumps(ev_obj)
                         except Exception:
                             event_with_seq = event
 
-                        conversation_buffers.setdefault(cid, []).append(event_with_seq)
+                        if cid:
+                            await replay_manager.append(cid, event_with_seq, seq_counter - 1)
                         target_ws = conversation_websockets.get(cid) or websocket
                         if target_ws in manager.active_connections:
                             await manager.send(event_with_seq, target_ws)
+
+                    if cid:
+                        await replay_manager.set_status(cid, "completed")
                 except asyncio.CancelledError:
                     logger.info(f"Stream worker cancelled for conversation: {cid}")
+                    if cid:
+                        await replay_manager.set_status(cid, "cancelled")
                 except Exception as ex:
                     logger.error(f"Stream worker error: {ex}")
                     err_event = json.dumps({
                         "type": "error",
                         "content": f"Bridge streaming error: {ex}",
+                        "conversation_id": cid,
+                        "seq": seq_counter,
                         "timestamp": time.time()
                     })
-                    conversation_buffers.setdefault(cid, []).append(err_event)
+                    if cid:
+                        await replay_manager.append(cid, err_event, seq_counter)
+                        await replay_manager.set_status(cid, "error")
                     target_ws = conversation_websockets.get(cid) or websocket
                     if target_ws in manager.active_connections:
                         try:

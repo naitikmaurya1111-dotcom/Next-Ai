@@ -61,7 +61,7 @@ def cancel_agy_command(client_conv_id: str) -> bool:
 
 
 def get_host_environment_summary(cwd: str = "/content") -> dict:
-    """Collect real-time host environment telemetry for the client and model awareness."""
+    """Collect rich real-time host environment telemetry, memory, CPU load, and uptime."""
     import platform
     import subprocess
     import sys
@@ -94,14 +94,75 @@ def get_host_environment_summary(cwd: str = "/content") -> dict:
         except Exception:
             pass
 
-    mem_total_gb = 0
+    # Detailed live memory usage from /proc/meminfo
+    mem_total_gb = 0.0
+    mem_available_gb = 0.0
+    mem_free_gb = 0.0
+    mem_used_gb = 0.0
+    mem_usage_pct = 0.0
     try:
         with open("/proc/meminfo") as f:
+            mem_info = {}
             for line in f:
-                if "MemTotal:" in line:
-                    mem_kb = int(line.split()[1])
-                    mem_total_gb = round(mem_kb / (1024 * 1024), 1)
-                    break
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    mem_info[parts[0].strip()] = parts[1].strip()
+            total_kb = int(mem_info.get("MemTotal", "0 kB").split()[0])
+            avail_kb = int(mem_info.get("MemAvailable", "0 kB").split()[0])
+            free_kb = int(mem_info.get("MemFree", "0 kB").split()[0])
+            used_kb = max(0, total_kb - avail_kb)
+            mem_total_gb = round(total_kb / (1024 * 1024), 2)
+            mem_available_gb = round(avail_kb / (1024 * 1024), 2)
+            mem_free_gb = round(free_kb / (1024 * 1024), 2)
+            mem_used_gb = round(used_kb / (1024 * 1024), 2)
+            mem_usage_pct = round((used_kb / total_kb) * 100, 1) if total_kb > 0 else 0.0
+    except Exception:
+        pass
+
+    # CPU load average (1m, 5m, 15m) and CPU count
+    cpu_count = os.cpu_count() or 2
+    load_1m, load_5m, load_15m = 0.0, 0.0, 0.0
+    try:
+        l1, l5, l15 = os.getloadavg()
+        load_1m, load_5m, load_15m = round(l1, 2), round(l5, 2), round(l15, 2)
+    except Exception:
+        pass
+
+    # CPU usage percentage (via psutil or loadavg estimation)
+    cpu_usage_pct = 0.0
+    try:
+        import psutil
+        cpu_usage_pct = round(psutil.cpu_percent(interval=0.05), 1)
+    except Exception:
+        cpu_usage_pct = round(min(100.0, (load_1m / max(1, cpu_count)) * 100), 1)
+
+    # System Uptime
+    uptime_sec = 0.0
+    uptime_human = "0s"
+    try:
+        with open("/proc/uptime") as f:
+            uptime_sec = round(float(f.read().split()[0]), 1)
+            hours = int(uptime_sec // 3600)
+            minutes = int((uptime_sec % 3600) // 60)
+            seconds = int(uptime_sec % 60)
+            uptime_human = f"{hours}h {minutes}m {seconds}s" if hours > 0 else f"{minutes}m {seconds}s"
+    except Exception:
+        pass
+
+    # Disk usage for /content
+    disk_total_gb = 0.0
+    disk_used_gb = 0.0
+    disk_free_gb = 0.0
+    disk_usage_pct = 0.0
+    try:
+        st = os.statvfs(target_cwd if os.path.exists(target_cwd) else "/content")
+        total_b = st.f_frsize * st.f_blocks
+        free_b = st.f_frsize * st.f_bavail
+        used_b = total_b - free_b
+        disk_total_gb = round(total_b / (1024**3), 2)
+        disk_used_gb = round(used_b / (1024**3), 2)
+        disk_free_gb = round(free_b / (1024**3), 2)
+        disk_usage_pct = round((used_b / total_b) * 100, 1) if total_b > 0 else 0.0
     except Exception:
         pass
 
@@ -119,8 +180,23 @@ def get_host_environment_summary(cwd: str = "/content") -> dict:
         "host": "Google Colab",
         "os": f"Linux Ubuntu ({platform.machine()})",
         "python": sys.version.split()[0],
-        "cpu_count": os.cpu_count() or 2,
+        "cpu_count": cpu_count,
         "ram_gb": mem_total_gb,
+        "ram_total_gb": mem_total_gb,
+        "ram_used_gb": mem_used_gb,
+        "ram_free_gb": mem_free_gb,
+        "ram_available_gb": mem_available_gb,
+        "ram_usage_percent": mem_usage_pct,
+        "cpu_load_1m": load_1m,
+        "cpu_load_5m": load_5m,
+        "cpu_load_15m": load_15m,
+        "cpu_percent": cpu_usage_pct,
+        "system_uptime_seconds": uptime_sec,
+        "system_uptime_human": uptime_human,
+        "disk_total_gb": disk_total_gb,
+        "disk_used_gb": disk_used_gb,
+        "disk_free_gb": disk_free_gb,
+        "disk_usage_percent": disk_usage_pct,
         "has_gpu": has_gpu,
         "gpu_name": gpu_name,
         "drive_mounted": drive_mounted,
@@ -725,15 +801,83 @@ def sanitize_text(text: str) -> str:
     s = CONTROL_CHAR_REGEX.sub('', s)
     return s
 
-def _make_event(event_type: str, content: str = "", **kwargs) -> str:
+def _make_event(event_type: str, content: str = "", seq: int | None = None, **kwargs) -> str:
     """Create a JSON-framed WebSocket event for the Android client."""
     payload = {
         "type": event_type,
         "content": content,
         "timestamp": time.time(),
-        **kwargs
     }
+    if seq is not None:
+        payload["seq"] = seq
+    payload.update(kwargs)
     return json.dumps(payload)
+
+
+class AdaptiveStreamFlusher:
+    """
+    Adaptive token coalescing and flushing for smooth real-time streaming.
+    Ensures:
+    1. Zero Time-To-First-Token (TTFT) latency: emits first chunk immediately.
+    2. Adaptive coalescing during high-speed token bursts to prevent WebSocket frame spam.
+    3. Natural boundary flushing on newlines and sentence delimiters.
+    4. Immediate forced flush before tool events, memory updates, thinking, or stream completion.
+    5. Zero lost tokens: all accumulated text is completely flushed in order.
+    """
+    def __init__(self, max_buffer_chars: int = 48, max_flush_delay_sec: float = 0.025):
+        self.buffer = ""
+        self.max_buffer_chars = max_buffer_chars
+        self.max_flush_delay_sec = max_flush_delay_sec
+        self.last_flush_time = 0.0
+        self.has_emitted_first = False
+
+    def push(self, text: str) -> list[str]:
+        """Add text delta and return any chunks ready to be flushed."""
+        if not text:
+            return []
+        self.buffer += text
+        now = time.time()
+
+        # Immediate flush for very first token to guarantee lowest TTFT
+        if not self.has_emitted_first and self.buffer:
+            self.has_emitted_first = True
+            self.last_flush_time = now
+            chunk = self.buffer
+            self.buffer = ""
+            return [chunk]
+
+        # Flush if buffer reaches char threshold
+        if len(self.buffer) >= self.max_buffer_chars:
+            self.last_flush_time = now
+            chunk = self.buffer
+            self.buffer = ""
+            return [chunk]
+
+        # Flush on natural boundaries (newline or sentence end)
+        if "\n" in self.buffer or any(self.buffer.endswith(p) for p in (". ", "? ", "! ", "```\n", ":\n")):
+            self.last_flush_time = now
+            chunk = self.buffer
+            self.buffer = ""
+            return [chunk]
+
+        # Flush if time since last flush exceeds adaptive delay
+        if (now - self.last_flush_time) >= self.max_flush_delay_sec:
+            self.last_flush_time = now
+            chunk = self.buffer
+            self.buffer = ""
+            return [chunk]
+
+        return []
+
+    def flush(self) -> list[str]:
+        """Force flush all buffered content."""
+        if not self.buffer:
+            return []
+        chunk = self.buffer
+        self.buffer = ""
+        self.last_flush_time = time.time()
+        return [chunk]
+
 
 def get_agy_path() -> str:
     """Find the path to the agy binary."""
@@ -846,6 +990,7 @@ async def run_agy_command(
     actual_prompt = message_trimmed
     is_search_intent = False
     search_query = ""
+    seq_counter = 0
 
     if message_trimmed.startswith("/browser ") or message_trimmed.startswith("/search "):
         is_search_intent = True
@@ -856,17 +1001,18 @@ async def run_agy_command(
         search_query = message_trimmed
 
     if is_search_intent and search_query:
-        yield _make_event("info", f"🌐 Searching the web for: \"{search_query}\"…")
+        yield _make_event("info", f"🌐 Searching the web for: \"{search_query}\"…", seq=seq_counter)
+        seq_counter += 1
         try:
-            from websearch import search_ddg_lite, search_google_news
-            search_results = await asyncio.to_thread(search_ddg_lite, search_query, 5)
-            if not search_results:
-                search_results = await asyncio.to_thread(search_google_news, search_query, 5)
+            from websearch import execute_search
+            search_results = await asyncio.to_thread(execute_search, search_query, 5)
         except Exception as s_err:
             logger.warning(f"Live web search failed: {s_err}")
 
         if search_results:
-            yield _make_event("info", f"🌐 Found {len(search_results)} live web sources")
+            sources_summary = ", ".join(set(r.get("source", "Web") for r in search_results if r.get("source")))
+            yield _make_event("info", f"🌐 Found {len(search_results)} live web sources ({sources_summary})", seq=seq_counter)
+            seq_counter += 1
 
     target_cwd = cwd if (cwd and os.path.exists(cwd)) else "/content"
 
@@ -907,7 +1053,8 @@ async def run_agy_command(
     ])
 
     logger.info(f"Executing: {' '.join(cmd_args[:6])} ... [CWD: {target_cwd}] -p '{message_trimmed[:40]}'")
-    yield _make_event("info", f"Starting {model_display}…")
+    yield _make_event("info", f"Starting {model_display}…", seq=seq_counter)
+    seq_counter += 1
 
     process = None
     try:
@@ -922,6 +1069,7 @@ async def run_agy_command(
 
         accumulated_text = ""
         sanitizer = MemoryStreamingSanitizer()
+        flusher = AdaptiveStreamFlusher()
         stream_start_time = time.time()
 
         while True:
@@ -932,7 +1080,8 @@ async def run_agy_command(
                 line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=300.0)
             except asyncio.TimeoutError:
                 logger.warning(f"Process stdout readline timed out after 300s for conv {client_conv_id}")
-                yield _make_event("info", "Process execution timed out.")
+                yield _make_event("info", "Process execution timed out.", seq=seq_counter)
+                seq_counter += 1
                 break
             if not line_bytes:
                 break
@@ -960,6 +1109,11 @@ async def run_agy_command(
                     text_delta = step_update.get("text_delta")
 
                     if step_type in ("tool", "tool_call") or tool_name:
+                        # Flush any pending text chunk prior to tool event so ordering is preserved
+                        for pending_chunk in flusher.flush():
+                            yield _make_event("chunk", pending_chunk, seq=seq_counter)
+                            seq_counter += 1
+
                         tool_info = step_update.get("tool_info", {})
                         if not tool_name:
                             tool_name = tool_info.get("name", "tool")
@@ -976,46 +1130,95 @@ async def run_agy_command(
                         yield _make_event(
                             "tool_event",
                             content=f"Tool {tool_name} ({state})",
+                            seq=seq_counter,
                             tool_name=str(tool_name),
                             tool_state=str(state),
                             tool_params=params,
                             tool_output=clean_out,
                             duration=tool_duration
                         )
+                        seq_counter += 1
                     elif step_type in ("thought", "reasoning", "thinking") and text_delta:
+                        # Flush any pending text chunk before thinking
+                        for pending_chunk in flusher.flush():
+                            yield _make_event("chunk", pending_chunk, seq=seq_counter)
+                            seq_counter += 1
+
                         cleaned_thought = sanitize_text(text_delta)
                         if cleaned_thought:
-                            yield _make_event("thinking", cleaned_thought)
+                            yield _make_event("thinking", cleaned_thought, seq=seq_counter)
+                            seq_counter += 1
                     elif step_type == "agent_response" and text_delta:
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
                             updates, stripped_chunk = sanitizer.feed(cleaned_chunk)
-                            for u in updates:
-                                logger.info(f"Autonomous memory detected: {u}")
-                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"], importance=u.get("importance", 7))
+                            if updates:
+                                # Flush pending text chunk before memory tag
+                                for pending_chunk in flusher.flush():
+                                    yield _make_event("chunk", pending_chunk, seq=seq_counter)
+                                    seq_counter += 1
+                                for u in updates:
+                                    logger.info(f"Autonomous memory detected: {u}")
+                                    yield _make_event(
+                                        "memory_updated",
+                                        content=u["content"],
+                                        action=u["action"],
+                                        category=u["category"],
+                                        importance=u.get("importance", 7),
+                                        seq=seq_counter
+                                    )
+                                    seq_counter += 1
                             if stripped_chunk:
-                                yield _make_event("chunk", stripped_chunk)
+                                for ready_chunk in flusher.push(stripped_chunk):
+                                    yield _make_event("chunk", ready_chunk, seq=seq_counter)
+                                    seq_counter += 1
                     elif text_delta:
                         cleaned_chunk = sanitize_text(text_delta)
                         if cleaned_chunk:
                             accumulated_text += cleaned_chunk
                             updates, stripped_chunk = sanitizer.feed(cleaned_chunk)
-                            for u in updates:
-                                logger.info(f"Autonomous memory detected: {u}")
-                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"], importance=u.get("importance", 7))
+                            if updates:
+                                for pending_chunk in flusher.flush():
+                                    yield _make_event("chunk", pending_chunk, seq=seq_counter)
+                                    seq_counter += 1
+                                for u in updates:
+                                    logger.info(f"Autonomous memory detected: {u}")
+                                    yield _make_event(
+                                        "memory_updated",
+                                        content=u["content"],
+                                        action=u["action"],
+                                        category=u["category"],
+                                        importance=u.get("importance", 7),
+                                        seq=seq_counter
+                                    )
+                                    seq_counter += 1
                             if stripped_chunk:
-                                yield _make_event("chunk", stripped_chunk)
+                                for ready_chunk in flusher.push(stripped_chunk):
+                                    yield _make_event("chunk", ready_chunk, seq=seq_counter)
+                                    seq_counter += 1
 
                 elif event_type == "result":
                     result = data.get("result", {})
                     final_response = result.get("response", accumulated_text)
                     final_updates, final_chunk = sanitizer.flush()
+                    if final_chunk:
+                        flusher.push(final_chunk)
+                    for pending_chunk in flusher.flush():
+                        yield _make_event("chunk", pending_chunk, seq=seq_counter)
+                        seq_counter += 1
+
                     for u in final_updates:
                         logger.info(f"Final autonomous memory detected: {u}")
-                        yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u["category"], importance=u.get("importance", 7))
-                    if final_chunk:
-                        yield _make_event("chunk", final_chunk)
+                        yield _make_event(
+                            "memory_updated",
+                            content=u["content"],
+                            action=u["action"],
+                            category=u["category"],
+                            importance=u.get("importance", 7),
+                            seq=seq_counter
+                        )
+                        seq_counter += 1
 
                     _, cleaned_done = extract_and_strip_memory_tags(sanitize_text(final_response))
 
@@ -1027,7 +1230,16 @@ async def run_agy_command(
                             if fact_key not in sanitizer.emitted_facts:
                                 sanitizer.emitted_facts.add(fact_key)
                                 logger.info(f"Semantic reflex memory detected: {u}")
-                                yield _make_event("memory_updated", content=u["content"], action=u["action"], category=u.get("category", "general"), importance=u.get("importance", 8))
+                                yield _make_event(
+                                    "memory_updated",
+                                    content=u["content"],
+                                    action=u["action"],
+                                    category=u.get("category", "general"),
+                                    importance=u.get("importance", 8),
+                                    seq=seq_counter
+                                )
+                                seq_counter += 1
+
                     elapsed_sec = max(0.05, time.time() - stream_start_time)
                     tokens_est = max(1, int(len(accumulated_text or cleaned_done) / 3.8))
                     tokens_per_sec = round(tokens_est / elapsed_sec, 1)
@@ -1037,14 +1249,21 @@ async def run_agy_command(
                         cleaned_done.strip(),
                         tokens_per_second=tokens_per_sec,
                         duration_sec=round(elapsed_sec, 2),
-                        token_count=tokens_est
+                        token_count=tokens_est,
+                        seq=seq_counter
                     )
+                    seq_counter += 1
 
             except json.JSONDecodeError:
                 # Filter out raw terminal escapes, telemetry, or unparsed logs from corrupting the response
                 logger.debug(f"Ignoring non-JSON CLI stream line: {raw_line[:100]}")
 
         await process.wait()
+
+        # Flush any remaining buffer before process exit to prevent lost tokens
+        for pending_chunk in flusher.flush():
+            yield _make_event("chunk", pending_chunk, seq=seq_counter)
+            seq_counter += 1
 
         if process.returncode != 0 and process.returncode is not None:
             stderr_out = ""
@@ -1053,7 +1272,8 @@ async def run_agy_command(
                 stderr_out = err_bytes.decode("utf-8", errors="replace").strip()
             stderr_cleaned = sanitize_text(stderr_out)
             if not accumulated_text:
-                yield _make_event("error", f"AGY CLI error ({process.returncode}): {stderr_cleaned}")
+                yield _make_event("error", f"AGY CLI error ({process.returncode}): {stderr_cleaned}", seq=seq_counter)
+                seq_counter += 1
             else:
                 elapsed_sec = max(0.05, time.time() - stream_start_time)
                 tokens_est = max(1, int(len(accumulated_text) / 3.8))
@@ -1063,20 +1283,24 @@ async def run_agy_command(
                     sanitize_text(accumulated_text).strip(),
                     tokens_per_second=tokens_per_sec,
                     duration_sec=round(elapsed_sec, 2),
-                    token_count=tokens_est
+                    token_count=tokens_est,
+                    seq=seq_counter
                 )
+                seq_counter += 1
         else:
             if not accumulated_text:
-                yield _make_event("done", "")
+                yield _make_event("done", "", seq=seq_counter)
+                seq_counter += 1
 
     except FileNotFoundError:
         yield _make_event(
             "error",
-            "Antigravity CLI (agy) not found in system PATH. Make sure it is installed in Colab."
+            "Antigravity CLI (agy) not found in system PATH. Make sure it is installed in Colab.",
+            seq=seq_counter
         )
     except Exception as e:
         logger.exception(f"Error in run_agy_command: {e}")
-        yield _make_event("error", f"Bridge error: {str(e)}")
+        yield _make_event("error", f"Bridge error: {str(e)}", seq=seq_counter)
     finally:
         if process and process.returncode is None:
             try:

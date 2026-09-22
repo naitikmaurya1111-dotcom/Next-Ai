@@ -49,6 +49,51 @@ val CodeBlockBg            = Color(0xFF0D0D0D)
 val CodeBlockHeader        = Color(0xFF1C1C1F)
 val CodeBlockBorder        = Color(0xFF2E2E33)
 
+// ── 2X Aesthetics: Message Bubble Tokens ─────────────────────────────────────
+val UserBubbleDarkBg1       = Color(0xFF2C2B30) // Elevated warm obsidian
+val UserBubbleDarkBg2       = Color(0xFF222125) // Subtle depth falloff
+val UserBubbleDarkBorder    = Color(0x38FFFFFF) // Hairline crystalline rim
+val UserBubbleLightBg1      = Color(0xFFF7F6F3) // Claude signature warm cream
+val UserBubbleLightBg2      = Color(0xFFEEEBE4) // Gentle parchment shading
+val UserBubbleLightBorder   = Color(0xFFE0DDD5) // Subtle warm separation
+
+// ── 2X Aesthetics: Glassmorphic Floating Composer ────────────────────────────
+val GlassComposerDarkBg     = Color(0xEB1C1C21) // Frosted dark glass
+val GlassComposerDarkBorder = Color(0x35FFFFFF) // Subtle specular glass highlight
+val GlassComposerDarkGlow   = Color(0x28D97757) // Warm ambient aura
+val GlassComposerLightBg    = Color(0xF2FDFCFC) // Frosted crisp pearl glass
+val GlassComposerLightBorder= Color(0x24000000) // Subtle frosted outline
+val GlassComposerLightGlow  = Color(0x1CD97757)
+
+// ── 2X Aesthetics: Enhanced High-Contrast Syntax Colors ─────────────────────
+// Dark theme syntax palette (Crisp, vibrant, non-glare)
+val SyntaxCommentDark       = Color(0xFF8B949E) // Italicized slate
+val SyntaxStringDark        = Color(0xFF7EE787) // Mint emerald
+val SyntaxNumberDark        = Color(0xFF79C0FF) // Soft cyan sky
+val SyntaxKeywordDark       = Color(0xFFFF7B72) // Bright coral
+val SyntaxTypeDark          = Color(0xFFFFA657) // Warm peach amber
+val SyntaxAnnotationDark    = Color(0xFFD2A8FF) // Vivid lavender
+val SyntaxDefaultDark       = Color(0xFFF0F6FC) // Crisp white
+
+// Light theme syntax palette (High-contrast, deep pigmentation)
+val SyntaxCommentLight      = Color(0xFF57606A) // Muted charcoal slate
+val SyntaxStringLight       = Color(0xFF116329) // Deep forest green
+val SyntaxNumberLight       = Color(0xFF0550AE) // Royal cobalt
+val SyntaxKeywordLight      = Color(0xFFCF222E) // Deep ruby crimson
+val SyntaxTypeLight         = Color(0xFF953800) // Rich rust amber
+val SyntaxAnnotationLight   = Color(0xFF8250DF) // Deep amethyst
+val SyntaxDefaultLight      = Color(0xFF1F2328) // Deep carbon
+
+// ── 2X Aesthetics: Contextual Smart Suggestion Chip Accents ─────────────────
+val ChipCodeAccent          = Color(0xFF3B82F6) // Tech Blue
+val ChipBugAccent           = Color(0xFFEF5350) // Coral Red
+val ChipExplainAccent       = Color(0xFF8B5CF6) // Deep Purple
+val ChipTakeawayAccent      = Color(0xFF10A37F) // Emerald
+val ChipSearchAccent        = Color(0xFF0284C7) // Sky Blue
+val ChipSecurityAccent      = Color(0xFFD97757) // Terracotta Warm
+val ChipMathAccent          = Color(0xFF06B6D4) // Cyan Teal
+
+
 // ── Material 3 Schemes ────────────────────────────────────────────────────
 val DarkColorScheme = darkColorScheme(
     primary             = ClaudeTerracotta,

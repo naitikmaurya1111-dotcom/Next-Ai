@@ -15,17 +15,18 @@ import androidx.core.content.FileProvider
 import com.agychat.app.domain.model.AttachmentItem
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.util.UUID
-import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -129,6 +130,136 @@ class LocalFileManager @Inject constructor(
         private const val TAG = "LocalFileManager"
         private const val MAX_TEXT_FILE_READ_BYTES = 5 * 1024 * 1024 // 5MB limit for reading text into memory
 
+        // High-performance static extension-to-MIME lookup table (O(1) resolution)
+        private val EXTENSION_TO_MIME = HashMap<String, String>(128).apply {
+            // Text & Markdown
+            put("txt", "text/plain")
+            put("text", "text/plain")
+            put("log", "text/plain")
+            put("md", "text/markdown")
+            put("markdown", "text/markdown")
+
+            // Programming & Scripts
+            put("py", "text/x-python")
+            put("kt", "text/x-kotlin")
+            put("kts", "text/x-kotlin")
+            put("java", "text/x-java-source")
+            put("js", "application/javascript")
+            put("jsx", "application/javascript")
+            put("mjs", "application/javascript")
+            put("cjs", "application/javascript")
+            put("ts", "application/typescript")
+            put("tsx", "application/typescript")
+            put("c", "text/x-c")
+            put("cpp", "text/x-c++")
+            put("cc", "text/x-c++")
+            put("cxx", "text/x-c++")
+            put("h", "text/x-c-header")
+            put("hpp", "text/x-c++-header")
+            put("cs", "text/x-csharp")
+            put("go", "text/x-go")
+            put("rs", "text/x-rust")
+            put("rb", "text/x-ruby")
+            put("php", "application/x-httpd-php")
+            put("swift", "text/x-swift")
+            put("sh", "application/x-sh")
+            put("bash", "application/x-sh")
+            put("zsh", "application/x-sh")
+            put("sql", "application/sql")
+            put("r", "text/x-r")
+            put("dart", "text/x-dart")
+            put("scala", "text/x-scala")
+            put("lua", "text/x-lua")
+
+            // Web & Markup & Configs
+            put("html", "text/html")
+            put("htm", "text/html")
+            put("css", "text/css")
+            put("scss", "text/x-scss")
+            put("sass", "text/x-sass")
+            put("less", "text/x-less")
+            put("json", "application/json")
+            put("xml", "application/xml")
+            put("yaml", "text/yaml")
+            put("yml", "text/yaml")
+            put("toml", "application/toml")
+            put("ini", "text/plain")
+            put("properties", "text/plain")
+            put("gradle", "text/x-groovy")
+            put("env", "text/plain")
+
+            // Images
+            put("jpg", "image/jpeg")
+            put("jpeg", "image/jpeg")
+            put("png", "image/png")
+            put("webp", "image/webp")
+            put("gif", "image/gif")
+            put("svg", "image/svg+xml")
+            put("bmp", "image/bmp")
+            put("ico", "image/x-icon")
+            put("heic", "image/heic")
+            put("heif", "image/heif")
+            put("avif", "image/avif")
+            put("tiff", "image/tiff")
+            put("tif", "image/tiff")
+
+            // Documents
+            put("pdf", "application/pdf")
+            put("doc", "application/msword")
+            put("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            put("xls", "application/vnd.ms-excel")
+            put("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            put("ppt", "application/vnd.ms-powerpoint")
+            put("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+            put("csv", "text/csv")
+            put("tsv", "text/tab-separated-values")
+            put("rtf", "application/rtf")
+            put("epub", "application/epub+zip")
+
+            // Archives
+            put("zip", "application/zip")
+            put("tar", "application/x-tar")
+            put("gz", "application/gzip")
+            put("7z", "application/x-7z-compressed")
+            put("rar", "application/vnd.rar")
+            put("bz2", "application/x-bzip2")
+            put("xz", "application/x-xz")
+
+            // Audio
+            put("mp3", "audio/mpeg")
+            put("wav", "audio/wav")
+            put("ogg", "audio/ogg")
+            put("m4a", "audio/mp4")
+            put("flac", "audio/flac")
+            put("aac", "audio/aac")
+            put("opus", "audio/opus")
+
+            // Video
+            put("mp4", "video/mp4")
+            put("mkv", "video/x-matroska")
+            put("webm", "video/webm")
+            put("mov", "video/quicktime")
+            put("avi", "video/x-msvideo")
+            put("flv", "video/x-flv")
+
+            // Binaries & Executables
+            put("wasm", "application/wasm")
+            put("bin", "application/octet-stream")
+            put("exe", "application/octet-stream")
+            put("so", "application/octet-stream")
+            put("dylib", "application/octet-stream")
+            put("apk", "application/vnd.android.package-archive")
+        }
+
+        private val BINARY_EXTENSIONS = setOf(
+            "pdf", "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "heic", "heif", "avif", "tiff", "tif",
+            "docx", "doc", "xlsx", "xls", "pptx", "ppt", "odt", "ods", "odp",
+            "zip", "tar", "gz", "7z", "rar", "bz2", "xz", "zst", "tgz",
+            "mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma",
+            "mp4", "mov", "avi", "mkv", "webm", "flv", "wmv", "3gp",
+            "bin", "wasm", "exe", "so", "dylib", "apk", "aab", "aar", "jar", "class", "pyc", "dex", "o"
+        )
+
         fun normalizeFileId(rawPathOrUrl: String): String {
             var s = rawPathOrUrl.trim()
             if (s.startsWith("[") && s.contains("](") && s.endsWith(")")) {
@@ -176,55 +307,84 @@ class LocalFileManager @Inject constructor(
             ) {
                 return true
             }
-            val ext = filename.substringAfterLast(".", "").lowercase()
-            return ext in setOf(
-                "pdf", "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico",
-                "docx", "doc", "xlsx", "xls", "pptx", "ppt",
-                "zip", "tar", "gz", "7z", "rar",
-                "mp3", "wav", "ogg", "m4a", "mp4", "mov", "avi", "mkv",
-                "bin", "wasm", "exe", "so", "dylib", "apk"
-            )
+            val cleanName = filename.substringBefore("?").substringBefore("#")
+            val ext = cleanName.substringAfterLast(".", "").lowercase()
+            return ext in BINARY_EXTENSIONS
         }
 
         fun detectMimeType(filename: String): String {
-            val ext = filename.substringAfterLast(".", "").lowercase()
-            return when (ext) {
-                "md", "markdown" -> "text/markdown"
-                "txt" -> "text/plain"
-                "py" -> "text/x-python"
-                "kt", "kts" -> "text/x-kotlin"
-                "java" -> "text/x-java-source"
-                "js", "jsx" -> "application/javascript"
-                "ts", "tsx" -> "application/typescript"
-                "html", "htm" -> "text/html"
-                "css" -> "text/css"
-                "json" -> "application/json"
-                "sh", "bash" -> "application/x-sh"
-                "jpg", "jpeg" -> "image/jpeg"
-                "png" -> "image/png"
-                "webp" -> "image/webp"
-                "gif" -> "image/gif"
-                "svg" -> "image/svg+xml"
-                "pdf" -> "application/pdf"
-                "doc" -> "application/msword"
-                "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                "xls" -> "application/vnd.ms-excel"
-                "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                "ppt" -> "application/vnd.ms-powerpoint"
-                "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                "zip" -> "application/zip"
-                "tar" -> "application/x-tar"
-                "gz" -> "application/gzip"
-                "mp3" -> "audio/mpeg"
-                "wav" -> "audio/wav"
-                "mp4" -> "video/mp4"
-                else -> "application/octet-stream"
-            }
+            val cleanName = filename.substringBefore("?").substringBefore("#")
+            val ext = cleanName.substringAfterLast(".", "").lowercase()
+            if (ext.isEmpty()) return "application/octet-stream"
+
+            // 1. Fast O(1) table lookup
+            val known = EXTENSION_TO_MIME[ext]
+            if (known != null) return known
+
+            // 2. Android system MimeTypeMap fallback
+            val systemMime = try {
+                android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            } catch (_: Throwable) { null }
+
+            return systemMime?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
         }
     }
 
-    private val savedFilesDir = File(context.filesDir, "saved_files").apply { mkdirs() }
-    private val attachmentsDir = File(context.filesDir, "attachments").apply { mkdirs() }
+    // In-memory hot cache for zero-lag instant file retrieval
+    private val memoryCache = ConcurrentHashMap<String, LocalFileEntity>()
+
+    private fun putInMemoryCache(key: String, entity: LocalFileEntity) {
+        if (key.isNotBlank()) {
+            if (memoryCache.size > 128) {
+                // Drop a random entry to maintain bounded memory footprint
+                val iter = memoryCache.keys().iterator()
+                if (iter.hasNext()) memoryCache.remove(iter.next())
+            }
+            memoryCache[key] = entity
+        }
+    }
+
+    /**
+     * Robust directory creation with automatic parent verification and fallback.
+     */
+    private fun ensureDirectory(dir: File): File {
+        if (!dir.exists()) {
+            try {
+                val created = dir.mkdirs()
+                if (!created && !dir.exists()) {
+                    dir.mkdir()
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Failed ensuring directory: ${dir.absolutePath}", t)
+            }
+        }
+        return dir
+    }
+
+    fun getSavedFilesDir(): File {
+        val primary = File(context.filesDir, "saved_files")
+        ensureDirectory(primary)
+        if (!primary.exists() || !primary.canWrite()) {
+            val fallback = File(context.cacheDir, "saved_files")
+            ensureDirectory(fallback)
+            return fallback
+        }
+        return primary
+    }
+
+    fun getAttachmentsDir(): File {
+        val primary = File(context.filesDir, "attachments")
+        ensureDirectory(primary)
+        if (!primary.exists() || !primary.canWrite()) {
+            val fallback = File(context.cacheDir, "attachments")
+            ensureDirectory(fallback)
+            return fallback
+        }
+        return primary
+    }
+
+    private val savedFilesDir: File get() = getSavedFilesDir()
+    private val attachmentsDir: File get() = getAttachmentsDir()
 
     private val downloadHttpClient: OkHttpClient by lazy {
         okHttpClient.newBuilder()
@@ -240,6 +400,36 @@ class LocalFileManager @Inject constructor(
     fun detectMimeType(filename: String): String = Companion.detectMimeType(filename)
 
     /**
+     * Atomic file writing with safe temp file swap and file descriptor sync.
+     */
+    private fun safeWriteFile(targetFile: File, writeAction: (File) -> Unit): Boolean {
+        val parentDir = targetFile.parentFile ?: return false
+        ensureDirectory(parentDir)
+        val tempFile = File(parentDir, "${targetFile.name}.tmp_${System.nanoTime()}")
+        return try {
+            writeAction(tempFile)
+            if (tempFile.exists() && tempFile.length() > 0) {
+                if (targetFile.exists()) {
+                    targetFile.delete()
+                }
+                val renamed = tempFile.renameTo(targetFile)
+                if (!renamed) {
+                    tempFile.copyTo(targetFile, overwrite = true)
+                    tempFile.delete()
+                }
+                true
+            } else {
+                tempFile.delete()
+                false
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed safe write for ${targetFile.absolutePath}", t)
+            try { if (tempFile.exists()) tempFile.delete() } catch (_: Throwable) {}
+            false
+        }
+    }
+
+    /**
      * Cache or save a file generated or viewed by the AI into phone internal storage.
      * Stored both as a real file on disk and as an indexed entry in Room DB.
      */
@@ -252,18 +442,13 @@ class LocalFileManager @Inject constructor(
         val normPath = normalizeFileId(remotePath)
         val resolvedName = filename?.takeIf { it.isNotBlank() } ?: getFileName(normPath)
         val safeDiskName = "${normPath.hashCode().toString().replace("-", "n")}_$resolvedName"
-        val localDiskFile = File(savedFilesDir, safeDiskName)
+        val localDiskFile = File(getSavedFilesDir(), safeDiskName)
 
-        try {
-            val tempFile = File(savedFilesDir, "${safeDiskName}.tmp")
-            tempFile.writeText(content, Charsets.UTF_8)
-            if (localDiskFile.exists()) localDiskFile.delete()
-            if (!tempFile.renameTo(localDiskFile)) {
-                tempFile.copyTo(localDiskFile, overwrite = true)
-                tempFile.delete()
+        safeWriteFile(localDiskFile) { tmp ->
+            FileOutputStream(tmp).use { fos ->
+                fos.write(content.toByteArray(Charsets.UTF_8))
+                fos.fd.sync()
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to write local disk file $safeDiskName", t)
         }
 
         val entity = LocalFileEntity(
@@ -277,6 +462,9 @@ class LocalFileManager @Inject constructor(
             mimeType = detectMimeType(resolvedName),
             cachedAt = System.currentTimeMillis()
         )
+
+        putInMemoryCache(normPath, entity)
+        putInMemoryCache(resolvedName, entity)
 
         try {
             fileDao.insertFile(entity)
@@ -299,18 +487,13 @@ class LocalFileManager @Inject constructor(
         val normPath = normalizeFileId(remotePath)
         val resolvedName = filename?.takeIf { it.isNotBlank() } ?: getFileName(normPath)
         val safeDiskName = "${normPath.hashCode().toString().replace("-", "n")}_$resolvedName"
-        val localDiskFile = File(savedFilesDir, safeDiskName)
+        val localDiskFile = File(getSavedFilesDir(), safeDiskName)
 
-        try {
-            val tempFile = File(savedFilesDir, "${safeDiskName}.tmp")
-            tempFile.writeBytes(bytes)
-            if (localDiskFile.exists()) localDiskFile.delete()
-            if (!tempFile.renameTo(localDiskFile)) {
-                tempFile.copyTo(localDiskFile, overwrite = true)
-                tempFile.delete()
+        safeWriteFile(localDiskFile) { tmp ->
+            FileOutputStream(tmp).use { fos ->
+                fos.write(bytes)
+                fos.fd.sync()
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to write local binary disk file $safeDiskName", t)
         }
 
         val entity = LocalFileEntity(
@@ -325,6 +508,9 @@ class LocalFileManager @Inject constructor(
             cachedAt = System.currentTimeMillis()
         )
 
+        putInMemoryCache(normPath, entity)
+        putInMemoryCache(resolvedName, entity)
+
         try {
             fileDao.insertFile(entity)
         } catch (t: Throwable) {
@@ -336,13 +522,18 @@ class LocalFileManager @Inject constructor(
 
     /**
      * Retrieve cached file from phone storage without needing any network or internet connection.
-     * Searches Room DB index and disk files, guaranteeing instant offline retrieval.
+     * Uses tiered lookup: In-Memory Hot Cache -> Room DB Index -> Disk Scan with Self-Healing.
      */
     suspend fun getCachedFile(pathOrName: String): LocalFileEntity? = withContext(Dispatchers.IO) {
         val norm = normalizeFileId(pathOrName)
         val fname = getFileName(norm)
 
-        // 1. Primary lookup in Room DB
+        // Tier 0: In-Memory Hot Cache (0ms latency)
+        memoryCache[norm]?.let { return@withContext it }
+        memoryCache[fname]?.let { return@withContext it }
+        memoryCache[pathOrName]?.let { return@withContext it }
+
+        // Tier 1: Primary lookup in Room DB
         val fromDb = try {
             fileDao.findFileWithFallback(norm, pathOrName, fname) ?: fileDao.findFile(norm, pathOrName)
         } catch (t: Throwable) {
@@ -354,30 +545,37 @@ class LocalFileManager @Inject constructor(
             val diskFile = File(fromDb.localPath)
             val isBin = isBinaryFile(fromDb.mimeType, fromDb.filename)
 
-            if (diskFile.exists()) {
+            if (diskFile.exists() && diskFile.length() > 0) {
                 if (!isBin && fromDb.content.isBlank() && diskFile.length() <= MAX_TEXT_FILE_READ_BYTES) {
                     val readContent = try { diskFile.readText(Charsets.UTF_8) } catch (_: Throwable) { "" }
-                    return@withContext fromDb.copy(content = readContent)
+                    val hydrated = fromDb.copy(content = readContent)
+                    putInMemoryCache(norm, hydrated)
+                    return@withContext hydrated
                 }
+                putInMemoryCache(norm, fromDb)
                 return@withContext fromDb
             } else if (fromDb.content.isNotBlank()) {
-                // Restore disk file from DB content if it was deleted
-                try {
-                    diskFile.writeText(fromDb.content, Charsets.UTF_8)
-                } catch (_: Throwable) {}
+                // Self-healing: Restore disk file from DB content if it was deleted
+                safeWriteFile(diskFile) { tmp ->
+                    FileOutputStream(tmp).use { fos ->
+                        fos.write(fromDb.content.toByteArray(Charsets.UTF_8))
+                        fos.fd.sync()
+                    }
+                }
+                putInMemoryCache(norm, fromDb)
                 return@withContext fromDb
             }
         }
 
-        // 2. Secondary fallback: Scan saved_files and attachments directories for matching filename
-        val diskCandidate = listOf(savedFilesDir, attachmentsDir).asSequence()
+        // Tier 2: Secondary fallback: Scan saved_files and attachments directories for matching filename
+        val diskCandidate = listOf(getSavedFilesDir(), getAttachmentsDir()).asSequence()
             .mapNotNull { dir ->
                 dir.listFiles()?.firstOrNull { f ->
-                    f.name.endsWith("_$fname") || f.name == fname || f.name.contains(fname)
+                    (f.name.endsWith("_$fname") || f.name == fname || f.name.contains(fname)) && f.length() > 0
                 }
             }.firstOrNull()
 
-        if (diskCandidate != null && diskCandidate.exists()) {
+        if (diskCandidate != null && diskCandidate.exists() && diskCandidate.length() > 0) {
             val isBin = isBinaryFile(detectMimeType(fname), fname)
             val textContent = if (!isBin && diskCandidate.length() <= MAX_TEXT_FILE_READ_BYTES) {
                 try { diskCandidate.readText(Charsets.UTF_8) } catch (_: Throwable) { "" }
@@ -394,7 +592,9 @@ class LocalFileManager @Inject constructor(
                 mimeType = detectMimeType(fname),
                 cachedAt = diskCandidate.lastModified()
             )
+            // Self-healing: index discovered disk file into Room DB
             try { fileDao.insertFile(entity) } catch (_: Throwable) {}
+            putInMemoryCache(norm, entity)
             return@withContext entity
         }
 
@@ -403,7 +603,7 @@ class LocalFileManager @Inject constructor(
 
     /**
      * Stream download large files (PDFs, binaries, outputs) directly to disk cache.
-     * Uses constant small buffer to prevent OOM on large files.
+     * Uses constant small buffer to prevent OOM on large files, with automatic retry.
      */
     suspend fun downloadAndCacheRemoteFile(
         downloadUrl: String,
@@ -413,24 +613,46 @@ class LocalFileManager @Inject constructor(
         val normPath = normalizeFileId(remotePath)
         val resolvedName = getFileName(normPath)
         val safeDiskName = "${normPath.hashCode().toString().replace("-", "n")}_$resolvedName"
-        val localDiskFile = File(savedFilesDir, safeDiskName)
-        val tempFile = File(savedFilesDir, "${safeDiskName}.tmp")
+        val savedDir = getSavedFilesDir()
+        val localDiskFile = File(savedDir, safeDiskName)
+        val tempFile = File(savedDir, "${safeDiskName}.tmp_${System.nanoTime()}")
 
         try {
-            val request = Request.Builder().url(downloadUrl).build()
-            val response = downloadHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.w(TAG, "Download failed for $downloadUrl: HTTP ${response.code}")
-                return@withContext null
+            var response: okhttp3.Response? = null
+            var attempts = 0
+            while (attempts < 3) {
+                attempts++
+                try {
+                    val request = Request.Builder().url(downloadUrl).build()
+                    val callResp = downloadHttpClient.newCall(request).execute()
+                    if (callResp.isSuccessful) {
+                        response = callResp
+                        break
+                    } else {
+                        callResp.close()
+                    }
+                } catch (e: Throwable) {
+                    if (attempts >= 3) throw e
+                    delay(attempts * 1000L)
+                }
             }
 
-            val body = response.body ?: return@withContext null
-            body.byteStream().use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var read: Int
-                    while (input.read(buffer).also { read = it } != -1) {
-                        output.write(buffer, 0, read)
+            val resp = response ?: return@withContext null
+            resp.use { r ->
+                if (!r.isSuccessful) {
+                    Log.w(TAG, "Download failed for $downloadUrl: HTTP ${r.code}")
+                    return@withContext null
+                }
+
+                val body = r.body ?: return@withContext null
+                body.byteStream().use { input ->
+                    FileOutputStream(tempFile).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            output.write(buffer, 0, read)
+                        }
+                        output.fd.sync()
                     }
                 }
             }
@@ -459,6 +681,9 @@ class LocalFileManager @Inject constructor(
                 cachedAt = System.currentTimeMillis()
             )
 
+            putInMemoryCache(normPath, entity)
+            putInMemoryCache(resolvedName, entity)
+
             try {
                 fileDao.insertFile(entity)
             } catch (t: Throwable) {
@@ -468,8 +693,9 @@ class LocalFileManager @Inject constructor(
             entity
         } catch (t: Throwable) {
             Log.e(TAG, "Error streaming download from $downloadUrl", t)
-            if (tempFile.exists()) tempFile.delete()
             null
+        } finally {
+            try { if (tempFile.exists()) tempFile.delete() } catch (_: Throwable) {}
         }
     }
 
@@ -532,9 +758,8 @@ class LocalFileManager @Inject constructor(
     }
 
     /**
-     * Uploads large attachments (PDFs, docs, large files >1.5MB) directly to Colab bridge via HTTP multipart.
+     * Uploads large attachments directly to Colab bridge via HTTP multipart.
      * Prevents Base64 payload bloat, WebSocket buffer overflow, and frame rejection.
-     * Returns server path (e.g. /tmp/uploads/1726..._doc.pdf) on success.
      */
     suspend fun uploadAttachmentToBridge(
         bridgeUrl: String,
@@ -564,6 +789,7 @@ class LocalFileManager @Inject constructor(
             inputStream.use { input ->
                 FileOutputStream(tempFile).use { output ->
                     input.copyTo(output)
+                    output.fd.sync()
                 }
             }
 
@@ -614,10 +840,12 @@ class LocalFileManager @Inject constructor(
     suspend fun saveAttachmentLocally(sourceUri: Uri, originalName: String, isImage: Boolean, mimeType: String?): AttachmentItem = withContext(Dispatchers.IO) {
         try {
             val safeName = originalName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-            val targetFile = File(attachmentsDir, "${UUID.randomUUID()}_$safeName")
+            val targetFile = File(getAttachmentsDir(), "${UUID.randomUUID()}_$safeName")
+
             context.contentResolver.openInputStream(sourceUri)?.use { input ->
                 FileOutputStream(targetFile).use { output ->
                     input.copyTo(output)
+                    output.fd.sync()
                 }
             }
 
@@ -637,6 +865,7 @@ class LocalFileManager @Inject constructor(
                     cachedAt = System.currentTimeMillis()
                 )
                 fileDao.insertFile(entity)
+                putInMemoryCache(targetFile.absolutePath, entity)
             } catch (t: Throwable) {
                 Log.w(TAG, "Could not index attachment in Room DB", t)
             }
@@ -661,8 +890,7 @@ class LocalFileManager @Inject constructor(
     }
 
     /**
-     * Export file directly to device's public Downloads/NextAI directory
-     * so other apps (file manager, text editor) can access it directly.
+     * Export file directly to device's public Downloads/NextAI directory.
      */
     suspend fun exportToPublicDownloads(filename: String, content: String): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         try {
@@ -684,7 +912,8 @@ class LocalFileManager @Inject constructor(
                 }
             } else {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
+                val targetDir = File(downloadsDir, "NextAI")
+                ensureDirectory(targetDir)
                 val targetFile = File(targetDir, filename)
                 targetFile.writeText(content, Charsets.UTF_8)
                 Pair(true, "Saved to Downloads/NextAI/$filename")
@@ -718,7 +947,8 @@ class LocalFileManager @Inject constructor(
                 }
             } else {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
+                val targetDir = File(downloadsDir, "NextAI")
+                ensureDirectory(targetDir)
                 val targetFile = File(targetDir, filename)
                 targetFile.writeBytes(bytes)
                 Pair(true, "Saved to Downloads/NextAI/$filename")
@@ -730,7 +960,7 @@ class LocalFileManager @Inject constructor(
     }
 
     /**
-     * Export a local disk file (PDF, binary, image, text) directly to device's public Downloads/NextAI directory
+     * Export a local disk file directly to device's public Downloads/NextAI directory
      * using streaming copy to prevent any OutOfMemoryError.
      */
     suspend fun exportToPublicDownloads(sourceFile: File, filename: String = sourceFile.name): Pair<Boolean, String> = withContext(Dispatchers.IO) {
@@ -764,7 +994,8 @@ class LocalFileManager @Inject constructor(
                 }
             } else {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
+                val targetDir = File(downloadsDir, "NextAI")
+                ensureDirectory(targetDir)
                 val targetFile = File(targetDir, resolvedName)
                 sourceFile.inputStream().use { input ->
                     targetFile.outputStream().use { output ->
@@ -791,7 +1022,7 @@ class LocalFileManager @Inject constructor(
     }
 
     /**
-     * Open any file (PDF, docx, image, code) in an external viewer app installed on device.
+     * Open any file in an external viewer app installed on device.
      */
     fun openFileInExternalApp(context: Context, file: File): Pair<Boolean, String> {
         return try {
@@ -814,19 +1045,26 @@ class LocalFileManager @Inject constructor(
     }
 
     /**
-     * Delete cached files from local disk and remove records from Room DB.
+     * Delete cached files from local disk, clear memory cache, and remove records from Room DB.
      */
     suspend fun deleteCachedFiles(pathsOrIds: List<String>): Int = withContext(Dispatchers.IO) {
         var count = 0
         val idsToDelete = mutableListOf<String>()
+        val savedDir = getSavedFilesDir()
+
         for (raw in pathsOrIds) {
             try {
                 val norm = normalizeFileId(raw)
                 val fn = getFileName(norm)
                 val safeDiskName = "${norm.hashCode().toString().replace("-", "n")}_$fn"
-                File(savedFilesDir, safeDiskName).takeIf { it.exists() }?.delete()
-                File(savedFilesDir, fn).takeIf { it.exists() }?.delete()
-                File(savedFilesDir, norm).takeIf { it.exists() }?.delete()
+                File(savedDir, safeDiskName).takeIf { it.exists() }?.delete()
+                File(savedDir, fn).takeIf { it.exists() }?.delete()
+                File(savedDir, norm).takeIf { it.exists() }?.delete()
+
+                memoryCache.remove(raw)
+                memoryCache.remove(norm)
+                memoryCache.remove(fn)
+
                 idsToDelete.add(raw)
                 idsToDelete.add(norm)
                 idsToDelete.add(fn)
@@ -852,15 +1090,18 @@ class LocalFileManager @Inject constructor(
         val norm = normalizeFileId(pathOrName)
         val fn = getFileName(norm)
         val safeDiskName = "${norm.hashCode().toString().replace("-", "n")}_$fn"
-        val exactFile = File(savedFilesDir, safeDiskName)
+        val savedDir = getSavedFilesDir()
+
+        val exactFile = File(savedDir, safeDiskName)
         if (exactFile.exists() && exactFile.length() > 0) return exactFile
-        val byName = File(savedFilesDir, fn)
+        val byName = File(savedDir, fn)
         if (byName.exists() && byName.length() > 0) return byName
-        val byNorm = File(savedFilesDir, norm)
+        val byNorm = File(savedDir, norm)
         if (byNorm.exists() && byNorm.length() > 0) return byNorm
         val direct = File(pathOrName)
         if (direct.exists() && direct.length() > 0) return direct
-        return listOf(savedFilesDir, attachmentsDir).asSequence()
+
+        return listOf(getSavedFilesDir(), getAttachmentsDir()).asSequence()
             .mapNotNull { dir ->
                 dir.listFiles()?.firstOrNull { f ->
                     (f.name.endsWith("_$fn") || f.name == fn || f.name.contains(fn)) && f.length() > 0
@@ -905,4 +1146,10 @@ class LocalFileManager @Inject constructor(
         }
         Pair(successCount, msg)
     }
+
+    fun clearMemoryCache() {
+        memoryCache.clear()
+    }
+
+    fun getMemoryCacheSize(): Int = memoryCache.size
 }

@@ -1348,7 +1348,7 @@ fun KaTeXMathView(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Math Equation Block (ChatGPT-style unboxed display math)
+//  Math Equation Block (Enhanced 2X display math with smooth scroll & copy)
 // ═══════════════════════════════════════════════════════════════════════════════
 @Composable
 fun MathEquationBlockView(
@@ -1358,36 +1358,107 @@ fun MathEquationBlockView(
 ) {
     val context     = LocalContext.current
     val haptic      = LocalHapticFeedback.current
+    val isDark      = MaterialTheme.colorScheme.background.red < 0.5f
     val normFormula = remember(formula) { normalizeLatexFormula(formula) }
+    var isCopied    by remember { mutableStateOf(false) }
+    LaunchedEffect(isCopied) { if (isCopied) { delay(1800); isCopied = false } }
 
-    // Pure unboxed equation container matching ChatGPT:
-    // No box, no card background, no border, no category badges, no "formula no." labels.
-    // Long-press anywhere on the equation directly copies clean LaTeX with haptic feedback & toast.
-    Box(
+    val mathScrollState = rememberScrollState()
+    val cardBg = if (isDark) Color(0xFF16161B) else Color(0xFFF8F7F4)
+    val cardBorder = if (isDark) Color(0xFF282832) else Color(0xFFE4E0D6)
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = cardBg,
+        border = androidx.compose.foundation.BorderStroke(0.8.dp, cardBorder),
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 8.dp, start = 2.dp, end = 2.dp)
-            .pointerInput(normFormula) {
-                detectTapGestures(
-                    onLongPress = {
+            .padding(vertical = 4.dp)
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = ClaudeTerracotta.copy(alpha = 0.15f),
+                        border = androidx.compose.foundation.BorderStroke(0.5.dp, ClaudeTerracotta.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = "MATH",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.sp,
+                                letterSpacing = 0.5.sp
+                            ),
+                            color = ClaudeTerracotta,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.5.dp)
+                        )
+                    }
+                    val category = remember(normFormula) { detectMathCategory(normFormula) }
+                    Text(
+                        text = category,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+
+                Surface(
+                    onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cm.setPrimaryClip(ClipData.newPlainText("LaTeX Formula", normFormula))
+                        isCopied = true
                         Toast.makeText(context, "Formula copied", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else Color.Transparent
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                            contentDescription = "Copy LaTeX",
+                            tint = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            modifier = Modifier.size(11.dp)
+                        )
+                        Text(
+                            text = if (isCopied) "Copied!" else "LaTeX",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                            color = if (isCopied) ChatGptEmerald else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
                     }
-                )
-            },
-        contentAlignment = Alignment.CenterStart
-    ) {
-        DisableSelection {
-            NativeMathEquationView(
-                formula   = normFormula,
-                textColor = textColor,
-                modifier  = Modifier.fillMaxWidth()
-            )
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            DisableSelection {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(mathScrollState)
+                        .padding(vertical = 2.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    NativeMathEquationView(
+                        formula   = normFormula,
+                        textColor = textColor,
+                        modifier  = Modifier.wrapContentWidth()
+                    )
+                }
+            }
         }
     }
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  Main MarkdownContent composable
@@ -1832,7 +1903,7 @@ fun FormattedMarkdownText(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Syntax highlighter (unchanged — already solid)
+//  Syntax highlighter (Enhanced 2X high-contrast dark & light tokens)
 // ═══════════════════════════════════════════════════════════════════════════════
 object SyntaxHighlighter {
     private val keywords = setOf(
@@ -1861,13 +1932,13 @@ object SyntaxHighlighter {
         val cacheKey = "$language:$isDark:${code.hashCode()}:${code.length}"
         syntaxHighlightCache.get(cacheKey)?.let { return it }
 
-        val commentColor    = if (isDark) Color(0xFF8B949E) else Color(0xFF6E7781)
-        val stringColor     = if (isDark) Color(0xFF7EE787) else Color(0xFF116329)
-        val numberColor     = if (isDark) Color(0xFF79C0FF) else Color(0xFF0550AE)
-        val keywordColor    = if (isDark) Color(0xFFFF7B72) else Color(0xFFCF222E)
-        val typeColor       = if (isDark) Color(0xFFFFA657) else Color(0xFF953800)
-        val annotationColor = if (isDark) Color(0xFFD2A8FF) else Color(0xFF8250DF)
-        val defaultColor    = if (isDark) Color(0xFFE6EDF3) else Color(0xFF1F2328)
+        val commentColor    = if (isDark) SyntaxCommentDark else SyntaxCommentLight
+        val stringColor     = if (isDark) SyntaxStringDark else SyntaxStringLight
+        val numberColor     = if (isDark) SyntaxNumberDark else SyntaxNumberLight
+        val keywordColor    = if (isDark) SyntaxKeywordDark else SyntaxKeywordLight
+        val typeColor       = if (isDark) SyntaxTypeDark else SyntaxTypeLight
+        val annotationColor = if (isDark) SyntaxAnnotationDark else SyntaxAnnotationLight
+        val defaultColor    = if (isDark) SyntaxDefaultDark else SyntaxDefaultLight
         val langLower       = language.lowercase()
         val isHashLang      = langLower in setOf("python","py","bash","sh","shell","yaml","yml","dockerfile","r")
 
@@ -1905,7 +1976,7 @@ object SyntaxHighlighter {
                     TokenType.STRING     -> SpanStyle(color = stringColor)
                     TokenType.NUMBER     -> SpanStyle(color = numberColor)
                     TokenType.KEYWORD    -> SpanStyle(color = keywordColor, fontWeight = FontWeight.Bold)
-                    TokenType.TYPE       -> SpanStyle(color = typeColor)
+                    TokenType.TYPE       -> SpanStyle(color = typeColor, fontWeight = FontWeight.SemiBold)
                     TokenType.ANNOTATION -> SpanStyle(color = annotationColor)
                     TokenType.PLAIN      -> SpanStyle(color = defaultColor)
                 }) { append(chunk) }
@@ -1919,91 +1990,191 @@ object SyntaxHighlighter {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Code block view
+//  Code block view (Enhanced 2X IDE aesthetics, language tags, smooth scroll & subtle line numbers)
 // ═══════════════════════════════════════════════════════════════════════════════
 @Composable
 fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier, showLineNumbers: Boolean = true) {
     val context     = LocalContext.current
     val haptic      = LocalHapticFeedback.current
     val isDark      = MaterialTheme.colorScheme.background.red < 0.5f
-    val displayLang = if (language.isNotBlank()) language.uppercase() else "CODE"
+
+    val (langColor, displayLang) = remember(language) {
+        when (language.lowercase().trim()) {
+            "python", "py"             -> Color(0xFF3B82F6) to "PYTHON"
+            "kotlin", "kt"             -> Color(0xFF8B5CF6) to "KOTLIN"
+            "java"                     -> Color(0xFFF59E0B) to "JAVA"
+            "javascript", "js"         -> Color(0xFFEAB308) to "JAVASCRIPT"
+            "typescript", "ts"         -> Color(0xFF38BDF8) to "TYPESCRIPT"
+            "rust", "rs"               -> Color(0xFFF97316) to "RUST"
+            "go"                       -> Color(0xFF06B6D4) to "GO"
+            "cpp", "c++", "c"          -> Color(0xFFEC4899) to (if (language.lowercase() == "c") "C" else "C++")
+            "csharp", "cs"             -> Color(0xFF10B981) to "C#"
+            "swift"                    -> Color(0xFFF43F5E) to "SWIFT"
+            "sql"                      -> Color(0xFFF59E0B) to "SQL"
+            "html"                     -> Color(0xFFEA580C) to "HTML"
+            "css"                      -> Color(0xFF6366F1) to "CSS"
+            "json"                     -> Color(0xFF10A37F) to "JSON"
+            "sh", "bash", "shell", "zsh"-> Color(0xFF22C55E) to "SHELL"
+            "markdown", "md"           -> Color(0xFF64748B) to "MARKDOWN"
+            else                       -> ClaudeTerracotta to (if (language.isNotBlank()) language.uppercase() else "CODE")
+        }
+    }
+
     var isCopied    by remember { mutableStateOf(false) }
     var isSaved     by remember { mutableStateOf(false) }
     var isWrapped   by remember { mutableStateOf(false) }
+    val codeScrollState = rememberScrollState()
+
     LaunchedEffect(isCopied) { if (isCopied) { delay(2000); isCopied = false } }
     LaunchedEffect(isSaved) { if (isSaved) { delay(2000); isSaved = false } }
 
     val lines           = remember(code) { code.lines() }
     val lineCount       = lines.size
     val highlightedCode = remember(code, language, isDark) { SyntaxHighlighter.highlight(code, language, isDark) }
-    val headerBg        = if (isDark) Color(0xFF1B1B20) else Color(0xFFEAE8E2)
-    val bodyBg          = if (isDark) Color(0xFF101014) else Color(0xFFF9F9F8)
-    val borderColor     = if (isDark) Color(0xFF2C2C34) else Color(0xFFDDDCD5)
-    val lineNumColor    = if (isDark) Color(0xFF555562) else Color(0xFFA0A0A8)
 
-    Column(modifier = modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(bodyBg).border(1.dp, borderColor, RoundedCornerShape(12.dp))) {
+    val headerBg        = if (isDark) Color(0xFF1A1A20) else Color(0xFFF1EFEB)
+    val bodyBg          = if (isDark) Color(0xFF0F0F13) else Color(0xFFFAFAF8)
+    val gutterBg        = if (isDark) Color(0xFF141418) else Color(0xFFF4F2EC)
+    val borderColor     = if (isDark) Color(0xFF2B2B36) else Color(0xFFDDD8CE)
+    val lineNumColor    = if (isDark) Color(0xFF646473) else Color(0xFF9CA3AF)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(bodyBg)
+            .border(1.dp, borderColor, RoundedCornerShape(14.dp))
+    ) {
         DisableSelection {
             Row(
-                modifier              = Modifier.fillMaxWidth().background(headerBg).padding(horizontal = 14.dp, vertical = 7.dp),
+                modifier              = Modifier
+                    .fillMaxWidth()
+                    .background(headerBg)
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
                 verticalAlignment     = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(if (isDark) Color(0xFF282830) else Color(0xFFDEDBD4)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                        Text(text = displayLang, style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 0.6.sp), color = if (isDark) Color(0xFFD0D0D8) else Color(0xFF404048))
+                    // Modern IDE window control dots
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        modifier = Modifier.padding(end = 9.dp)
+                    ) {
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFF5F56).copy(alpha = 0.85f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFFBD2E).copy(alpha = 0.85f)))
+                        Box(modifier = Modifier.size(9.dp).clip(CircleShape).background(Color(0xFF27C93F).copy(alpha = 0.85f)))
                     }
-                    if (lineCount > 1) { Spacer(Modifier.width(8.dp)); Text(text = "$lineCount lines", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = if (isDark) Color(0xFF7E7E8A) else Color(0xFF888892)) }
+
+                    // Clear language tag with distinct language color accent
+                    Surface(
+                        shape = RoundedCornerShape(5.dp),
+                        color = langColor.copy(alpha = if (isDark) 0.18f else 0.12f),
+                        border = androidx.compose.foundation.BorderStroke(0.6.dp, langColor.copy(alpha = 0.35f))
+                    ) {
+                        Text(
+                            text = displayLang,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 10.sp,
+                                letterSpacing = 0.7.sp
+                            ),
+                            color = if (isDark) langColor else Color(0xFF252528),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    if (lineCount > 1) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "$lineCount lines",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                            color = if (isDark) Color(0xFF868694) else Color(0xFF757582)
+                        )
+                    }
                 }
+
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Surface(onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); isWrapped = !isWrapped }, shape = RoundedCornerShape(6.dp), color = if (isWrapped) ClaudeTerracotta.copy(alpha = 0.15f) else Color.Transparent) {
-                        Text(text = if (isWrapped) "Wrap" else "Scroll", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold), color = if (isWrapped) ClaudeTerracotta else if (isDark) Color(0xFFA6A6B0) else Color(0xFF606068), modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp))
+                    // Wrap / Scroll toggle button
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            isWrapped = !isWrapped
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isWrapped) ClaudeTerracotta.copy(alpha = 0.15f) else Color.Transparent
+                    ) {
+                        Text(
+                            text = if (isWrapped) "Wrap" else "Scroll",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                            color = if (isWrapped) ClaudeTerracotta else if (isDark) Color(0xFFA6A6B0) else Color(0xFF606068),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
                     }
-                    Surface(onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        val ext = when (language.lowercase()) {
-                            "python", "py" -> ".py"
-                            "kotlin", "kt" -> ".kt"
-                            "java" -> ".java"
-                            "javascript", "js" -> ".js"
-                            "typescript", "ts" -> ".ts"
-                            "json" -> ".json"
-                            "html" -> ".html"
-                            "css" -> ".css"
-                            "c" -> ".c"
-                            "cpp", "c++" -> ".cpp"
-                            "csharp", "cs" -> ".cs"
-                            "rust", "rs" -> ".rs"
-                            "go" -> ".go"
-                            "sh", "bash" -> ".sh"
-                            "sql" -> ".sql"
-                            "markdown", "md" -> ".md"
-                            else -> ".txt"
-                        }
-                        val fname = "code_${System.currentTimeMillis() % 1000000}$ext"
-                        try {
-                            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                            val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
-                            val targetFile = File(targetDir, fname)
-                            targetFile.writeText(code, Charsets.UTF_8)
-                            isSaved = true
-                            Toast.makeText(context, "Saved to Downloads/NextAI/$fname", Toast.LENGTH_SHORT).show()
-                        } catch (_: Throwable) {
-                            try {
-                                val fallbackFile = File(context.filesDir, fname)
-                                fallbackFile.writeText(code, Charsets.UTF_8)
-                                isSaved = true
-                                Toast.makeText(context, "Saved to app storage: $fname", Toast.LENGTH_SHORT).show()
-                            } catch (_: Throwable) {
-                                Toast.makeText(context, "Could not save file", Toast.LENGTH_SHORT).show()
+
+                    // Save file button
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val ext = when (language.lowercase()) {
+                                "python", "py" -> ".py"
+                                "kotlin", "kt" -> ".kt"
+                                "java" -> ".java"
+                                "javascript", "js" -> ".js"
+                                "typescript", "ts" -> ".ts"
+                                "json" -> ".json"
+                                "html" -> ".html"
+                                "css" -> ".css"
+                                "c" -> ".c"
+                                "cpp", "c++" -> ".cpp"
+                                "csharp", "cs" -> ".cs"
+                                "rust", "rs" -> ".rs"
+                                "go" -> ".go"
+                                "sh", "bash" -> ".sh"
+                                "sql" -> ".sql"
+                                "markdown", "md" -> ".md"
+                                else -> ".txt"
                             }
-                        }
-                    }, shape = RoundedCornerShape(6.dp), color = if (isSaved) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)) {
+                            val fname = "code_${System.currentTimeMillis() % 1000000}$ext"
+                            try {
+                                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                                val targetDir = File(downloadsDir, "NextAI").apply { mkdirs() }
+                                val targetFile = File(targetDir, fname)
+                                targetFile.writeText(code, Charsets.UTF_8)
+                                isSaved = true
+                                Toast.makeText(context, "Saved to Downloads/NextAI/$fname", Toast.LENGTH_SHORT).show()
+                            } catch (_: Throwable) {
+                                try {
+                                    val fallbackFile = File(context.filesDir, fname)
+                                    fallbackFile.writeText(code, Charsets.UTF_8)
+                                    isSaved = true
+                                    Toast.makeText(context, "Saved to app storage: $fname", Toast.LENGTH_SHORT).show()
+                                } catch (_: Throwable) {
+                                    Toast.makeText(context, "Could not save file", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isSaved) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)
+                    ) {
                         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(if (isSaved) Icons.Default.Check else Icons.Default.Download, contentDescription = null, modifier = Modifier.size(12.dp), tint = if (isSaved) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
                             Text(text = if (isSaved) "Saved!" else "Save", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold), color = if (isSaved) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
                         }
                     }
-                    Surface(onClick = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Code", code)); isCopied = true; Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show() }, shape = RoundedCornerShape(6.dp), color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)) {
+
+                    // Copy code button
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Code", code))
+                            isCopied = true
+                            Toast.makeText(context, "Code copied to clipboard", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (isCopied) ChatGptEmerald.copy(alpha = 0.15f) else if (isDark) Color(0xFF282832) else Color(0xFFDCDAD2)
+                    ) {
                         Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(if (isCopied) Icons.Default.Check else Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(12.dp), tint = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
                             Text(text = if (isCopied) "Copied!" else "Copy", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold), color = if (isCopied) ChatGptEmerald else if (isDark) Color(0xFFA6A6B0) else Color(0xFF505058))
@@ -2016,22 +2187,45 @@ fun CodeBlockView(language: String, code: String, modifier: Modifier = Modifier,
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
                 val shouldShowNums = showLineNumbers && !isWrapped && lineCount > 1
                 if (shouldShowNums) {
+                    val gutterWidth = maxOf(28.dp, (lineCount.toString().length * 9 + 16).dp)
                     DisableSelection {
-                        Text(
-                            text     = (1..lineCount).joinToString("\n"),
-                            style    = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, lineHeight = 20.sp, fontSize = 12.sp, textAlign = TextAlign.End),
-                            color    = lineNumColor,
-                            modifier = Modifier.padding(start = 10.dp, end = 8.dp).widthIn(min = 22.dp).drawBehind {
-                                drawLine(color = borderColor.copy(alpha = 0.6f), start = Offset(size.width, 0f), end = Offset(size.width, size.height), strokeWidth = 1.dp.toPx())
-                            }
-                        )
+                        Box(
+                            modifier = Modifier
+                                .width(gutterWidth)
+                                .background(gutterBg)
+                                .drawBehind {
+                                    drawLine(
+                                        color = borderColor.copy(alpha = 0.7f),
+                                        start = Offset(size.width, 0f),
+                                        end = Offset(size.width, size.height),
+                                        strokeWidth = 1.dp.toPx()
+                                    )
+                                }
+                                .padding(end = 8.dp)
+                        ) {
+                            Text(
+                                text     = (1..lineCount).joinToString("\n"),
+                                style    = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    lineHeight = 20.sp,
+                                    fontSize = 12.sp,
+                                    textAlign = TextAlign.End
+                                ),
+                                color    = lineNumColor,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                     }
                 }
                 Text(
                     text     = highlightedCode,
-                    style    = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace, lineHeight = 20.sp, fontSize = 12.sp),
+                    style    = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 20.sp,
+                        fontSize = 12.sp
+                    ),
                     modifier = if (isWrapped) Modifier.weight(1f).padding(horizontal = 12.dp)
-                               else Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)
+                               else Modifier.weight(1f).horizontalScroll(codeScrollState).padding(horizontal = 12.dp)
                 )
             }
         }

@@ -337,5 +337,29 @@ sealed class WsEvent {
 }
 
 enum class ConnectionState {
-    DISCONNECTED, CONNECTING, CONNECTED, ERROR
+    DISCONNECTED, CONNECTING, CONNECTED, ERROR;
+
+    val isConnected: Boolean get() = this == CONNECTED
+    val isConnectingOrConnected: Boolean get() = this == CONNECTING || this == CONNECTED
+    val isOffline: Boolean get() = this == DISCONNECTED || this == ERROR
 }
+
+@Immutable
+@Serializable
+data class NetworkState(
+    val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
+    val queuedMessagesCount: Int = 0,
+    val reconnectAttempt: Int = 0,
+    val nextReconnectDelayMs: Long = 0L,
+    val isReconnecting: Boolean = false
+)
+
+@Immutable
+@Serializable
+data class CacheMetrics(
+    val totalFilesCount: Int = 0,
+    val totalSizeBytes: Long = 0L,
+    val memoryCacheHits: Long = 0L,
+    val diskCacheHits: Long = 0L
+)
+
