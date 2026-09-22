@@ -393,6 +393,7 @@ fun HistoryDrawerContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConversationDrawerItem(
     conv: ConversationEntity,

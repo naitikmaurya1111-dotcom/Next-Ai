@@ -31,8 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.agychat.app.domain.model.HostEnvironment
-import com.agychat.app.domain.model.PluginItem
+import com.agychat.app.domain.PluginItem
 import com.agychat.app.ui.common.NextAiLogo
 import com.agychat.app.ui.theme.ChatGptBlue
 import com.agychat.app.ui.theme.ChatGptEmerald
