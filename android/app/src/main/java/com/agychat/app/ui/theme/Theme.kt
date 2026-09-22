@@ -50,7 +50,7 @@ object ThemeState {
 fun AGYChatTheme(
     darkTheme: Boolean = when (ThemeState.themeMode) {
         "light" -> false
-        "dark" -> true
+        "dark", "amoled" -> true
         else -> isSystemInDarkTheme()
     },
     dynamicColor: Boolean = ThemeState.dynamicColor,
@@ -63,12 +63,13 @@ fun AGYChatTheme(
 
     val resolvedDark = when (ThemeState.themeMode) {
         "light" -> false
-        "dark" -> true
+        "dark", "amoled" -> true
         else -> isSystemInDarkTheme()
     }
     val resolvedDynamic = ThemeState.dynamicColor
 
     val colorScheme = when {
+        ThemeState.themeMode == "amoled" -> AmoledColorScheme
         resolvedDynamic && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (resolvedDark) dynamicDarkColorScheme(context)
             else dynamicLightColorScheme(context)

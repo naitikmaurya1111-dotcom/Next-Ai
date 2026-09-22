@@ -116,6 +116,27 @@ val DarkColorScheme = darkColorScheme(
     onError             = Color.White
 )
 
+val AmoledColorScheme = darkColorScheme(
+    primary             = ClaudeTerracotta,
+    onPrimary           = Color.White,
+    primaryContainer    = Color(0xFF2C1913),
+    onPrimaryContainer  = Color(0xFFFFDBCF),
+    secondary           = ChatGptEmerald,
+    onSecondary         = Color.White,
+    tertiary            = ChatGptBlue,
+    onTertiary          = Color.White,
+    background          = Color.Black,
+    onBackground        = Color(0xFFF2F2F5),
+    surface             = Color(0xFF0C0C0E),
+    onSurface           = Color(0xFFF2F2F5),
+    surfaceVariant      = Color(0xFF16161B),
+    onSurfaceVariant    = Color(0xFFA1A1AA),
+    outline             = Color(0xFF24242A),
+    outlineVariant      = Color(0xFF1A1A20),
+    error               = Color(0xFFEF5350),
+    onError             = Color.White
+)
+
 val LightColorScheme = lightColorScheme(
     primary             = ClaudeTerracotta,
     onPrimary           = Color.White,

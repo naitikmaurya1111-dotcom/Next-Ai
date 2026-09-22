@@ -1,13 +1,15 @@
 package com.agychat.app.ui.history
 
+import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,9 +25,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -52,6 +60,63 @@ private fun formatRelativeTime(updatedAt: Long): String {
     }
 }
 
+@Composable
+private fun HighlightedText(
+    text: String,
+    query: String,
+    style: TextStyle,
+    color: Color,
+    maxLines: Int = 1,
+    overflow: TextOverflow = TextOverflow.Ellipsis,
+    modifier: Modifier = Modifier
+) {
+    if (query.isBlank()) {
+        Text(
+            text = text,
+            style = style,
+            color = color,
+            maxLines = maxLines,
+            overflow = overflow,
+            modifier = modifier
+        )
+    } else {
+        val annotatedString = buildAnnotatedString {
+            var startIndex = 0
+            val lowerText = text.lowercase(Locale.getDefault())
+            val lowerQuery = query.lowercase(Locale.getDefault())
+            while (startIndex < text.length) {
+                val index = lowerText.indexOf(lowerQuery, startIndex)
+                if (index == -1) {
+                    append(text.substring(startIndex))
+                    break
+                }
+                if (index > startIndex) {
+                    append(text.substring(startIndex, index))
+                }
+                val endIndex = (index + query.length).coerceAtMost(text.length)
+                withStyle(
+                    SpanStyle(
+                        background = ClaudeTerracotta.copy(alpha = 0.22f),
+                        color = ClaudeTerracotta,
+                        fontWeight = FontWeight.Bold
+                    )
+                ) {
+                    append(text.substring(index, endIndex))
+                }
+                startIndex = endIndex
+            }
+        }
+        Text(
+            text = annotatedString,
+            style = style,
+            color = color,
+            maxLines = maxLines,
+            overflow = overflow,
+            modifier = modifier
+        )
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryScreen(
@@ -59,10 +124,17 @@ fun HistoryScreen(
     onRestoreConversation: (String) -> Unit = {},
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf(HistoryFilter.ALL) }
     var showClearAllDialog by remember { mutableStateOf(false) }
+
+    // Multi-Select Batch Delete / Export State
+    var isMultiSelectMode by remember { mutableStateOf(false) }
+    val selectedIds = remember { mutableStateListOf<String>() }
+    var showBatchDeleteConfirmDialog by remember { mutableStateOf(false) }
+
     val conversations by chatViewModel.conversations.collectAsState(initial = emptyList())
     val activeConversationId by chatViewModel.activeConversationId.collectAsState()
 
@@ -114,64 +186,215 @@ fun HistoryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+            if (isMultiSelectMode) {
+                // Multi-select Batch Action Bar
+                TopAppBar(
+                    title = {
                         Text(
-                            "Chat History",
-                            style = MaterialTheme.typography.titleLarge,
+                            text = "${selectedIds.size} selected",
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            isMultiSelectMode = false
+                            selectedIds.clear()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel selection")
+                        }
+                    },
+                    actions = {
+                        // Select All / Deselect All
+                        IconButton(onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (selectedIds.size == filteredConversations.size) {
+                                selectedIds.clear()
+                            } else {
+                                selectedIds.clear()
+                                selectedIds.addAll(filteredConversations.map { it.id })
+                            }
+                        }) {
+                            Icon(
+                                if (selectedIds.size == filteredConversations.size && filteredConversations.isNotEmpty())
+                                    Icons.Default.Deselect else Icons.Default.SelectAll,
+                                contentDescription = "Select All"
+                            )
+                        }
+
+                        // Batch Export
+                        IconButton(
+                            onClick = {
+                                if (selectedIds.isNotEmpty()) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val selectedConvs = conversations.filter { it.id in selectedIds }
+                                    val exportBuilder = StringBuilder()
+                                    exportBuilder.append("# Next AI - Exported Conversations (${selectedConvs.size})\n\n")
+                                    selectedConvs.forEach { conv ->
+                                        exportBuilder.append("## ${conv.title}\n")
+                                        exportBuilder.append("- Model: ${conv.modelId ?: "Default"}\n")
+                                        exportBuilder.append("- Messages: ${conv.messageCount}\n")
+                                        exportBuilder.append("- Updated: ${formatRelativeTime(conv.updatedAt)}\n\n")
+                                    }
+                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, exportBuilder.toString())
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "Export Selected Chats"))
+                                }
+                            },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = "Export Selected")
+                        }
+
+                        // Batch Delete
+                        IconButton(
+                            onClick = {
+                                if (selectedIds.isNotEmpty()) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showBatchDeleteConfirmDialog = true
+                                }
+                            },
+                            enabled = selectedIds.isNotEmpty()
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Delete Selected",
+                                tint = if (selectedIds.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = ClaudeTerracotta.copy(alpha = 0.12f)
+                    )
+                )
+            } else {
+                TopAppBar(
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "Chat History",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (conversations.isNotEmpty()) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = ClaudeTerracotta.copy(alpha = 0.12f)
+                                ) {
+                                    Text(
+                                        text = "${conversations.size}",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = ClaudeTerracotta,
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        // Multi-select toggle button
                         if (conversations.isNotEmpty()) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = ClaudeTerracotta.copy(alpha = 0.12f)
-                            ) {
-                                Text(
-                                    text = "${conversations.size}",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = ClaudeTerracotta,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                            IconButton(onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                isMultiSelectMode = true
+                            }) {
+                                Icon(Icons.Default.Checklist, contentDescription = "Multi-select", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+
+                        IconButton(onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            chatViewModel.startNewConversation()
+                            onBack()
+                        }) {
+                            Icon(Icons.Default.AddComment, contentDescription = "New Chat", tint = ClaudeTerracotta)
+                        }
+
+                        if (conversations.isNotEmpty()) {
+                            IconButton(onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showClearAllDialog = true
+                            }) {
+                                Icon(
+                                    Icons.Default.DeleteSweep,
+                                    contentDescription = "Clear All Chats",
+                                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
                                 )
                             }
                         }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        chatViewModel.startNewConversation()
-                        onBack()
-                    }) {
-                        Icon(Icons.Default.AddComment, contentDescription = "New Chat", tint = ClaudeTerracotta)
-                    }
-                    if (conversations.isNotEmpty()) {
-                        IconButton(onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showClearAllDialog = true
-                        }) {
-                            Icon(
-                                Icons.Default.DeleteSweep,
-                                contentDescription = "Clear All Chats",
-                                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.85f)
-                            )
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
+            }
         }
     ) { padding ->
+        // Batch Delete Confirmation Dialog
+        if (showBatchDeleteConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showBatchDeleteConfirmDialog = false },
+                icon = {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                },
+                title = { Text("Delete ${selectedIds.size} Conversations?", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        "Are you sure you want to permanently remove the ${selectedIds.size} selected conversations? This action cannot be undone.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            selectedIds.forEach { id ->
+                                chatViewModel.deleteConversation(id)
+                            }
+                            selectedIds.clear()
+                            isMultiSelectMode = false
+                            showBatchDeleteConfirmDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Text("Delete Selected", fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBatchDeleteConfirmDialog = false }) {
+                        Text("Cancel")
+                    }
+                },
+                shape = RoundedCornerShape(18.dp)
+            )
+        }
+
         // Clear All Confirmation Dialog
         if (showClearAllDialog) {
             AlertDialog(
@@ -267,7 +490,7 @@ fun HistoryScreen(
             )
         }
 
-        // Single Conversation Delete Modal
+        // Single Conversation Delete Modal (triggered by swipe or menu)
         if (conversationToDelete != null) {
             AlertDialog(
                 onDismissRequest = { conversationToDelete = null },
@@ -336,7 +559,7 @@ fun HistoryScreen(
                     .widthIn(max = 720.dp)
                     .fillMaxSize()
             ) {
-                // Search Input Field
+                // Search Input Field with Real-Time Query Highlight
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -385,7 +608,6 @@ fun HistoryScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // ALL Filter Chip
                     FilterChip(
                         selected = selectedFilter == HistoryFilter.ALL,
                         onClick = {
@@ -400,7 +622,6 @@ fun HistoryScreen(
                         )
                     )
 
-                    // PINNED Filter Chip
                     val pinnedCount = remember(conversations) { conversations.count { it.isPinned } }
                     FilterChip(
                         selected = selectedFilter == HistoryFilter.PINNED,
@@ -424,7 +645,6 @@ fun HistoryScreen(
                         )
                     )
 
-                    // RECENT Filter Chip (7d)
                     val recentCount = remember(conversations, sevenDaysAgo) {
                         conversations.count { it.updatedAt >= sevenDaysAgo }
                     }
@@ -528,31 +748,50 @@ fun HistoryScreen(
                         }
                     }
                 } else {
-                    // Conversation List grouped chronologically into Today, Yesterday, Previous 7 Days, Older
+                    // Conversation List grouped chronologically into:
+                    // 'Pinned 📌', 'Today', 'Yesterday', 'Previous 7 Days', 'Older'
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Section: PINNED
+                        // Section: 'Pinned 📌'
                         if (selectedFilter != HistoryFilter.PINNED && pinnedList.isNotEmpty()) {
                             item(key = "h_pinned") {
                                 SectionHeader(
-                                    title = "PINNED",
+                                    title = "PINNED 📌",
                                     count = pinnedList.size,
                                     icon = Icons.Default.PushPin,
                                     tint = Color(0xFFFFB300)
                                 )
                             }
                             items(pinnedList, key = { it.id }) { conv ->
-                                ConversationCard(
+                                SwipeableConversationRow(
                                     conversation = conv,
                                     isActive = conv.id == activeConversationId,
+                                    searchQuery = searchQuery,
+                                    isMultiSelectMode = isMultiSelectMode,
+                                    isSelected = conv.id in selectedIds,
+                                    onSelectToggle = {
+                                        if (conv.id in selectedIds) selectedIds.remove(conv.id)
+                                        else selectedIds.add(conv.id)
+                                    },
+                                    onLongClick = {
+                                        if (!isMultiSelectMode) {
+                                            isMultiSelectMode = true
+                                            selectedIds.add(conv.id)
+                                        }
+                                    },
                                     onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        chatViewModel.loadConversation(conv.id)
-                                        onRestoreConversation(conv.id)
-                                        onBack()
+                                        if (isMultiSelectMode) {
+                                            if (conv.id in selectedIds) selectedIds.remove(conv.id)
+                                            else selectedIds.add(conv.id)
+                                        } else {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            chatViewModel.loadConversation(conv.id)
+                                            onRestoreConversation(conv.id)
+                                            onBack()
+                                        }
                                     },
                                     onPin = {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -571,14 +810,32 @@ fun HistoryScreen(
 
                         if (selectedFilter == HistoryFilter.PINNED) {
                             items(pinnedList, key = { it.id }) { conv ->
-                                ConversationCard(
+                                SwipeableConversationRow(
                                     conversation = conv,
                                     isActive = conv.id == activeConversationId,
+                                    searchQuery = searchQuery,
+                                    isMultiSelectMode = isMultiSelectMode,
+                                    isSelected = conv.id in selectedIds,
+                                    onSelectToggle = {
+                                        if (conv.id in selectedIds) selectedIds.remove(conv.id)
+                                        else selectedIds.add(conv.id)
+                                    },
+                                    onLongClick = {
+                                        if (!isMultiSelectMode) {
+                                            isMultiSelectMode = true
+                                            selectedIds.add(conv.id)
+                                        }
+                                    },
                                     onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        chatViewModel.loadConversation(conv.id)
-                                        onRestoreConversation(conv.id)
-                                        onBack()
+                                        if (isMultiSelectMode) {
+                                            if (conv.id in selectedIds) selectedIds.remove(conv.id)
+                                            else selectedIds.add(conv.id)
+                                        } else {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            chatViewModel.loadConversation(conv.id)
+                                            onRestoreConversation(conv.id)
+                                            onBack()
+                                        }
                                     },
                                     onPin = {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -594,7 +851,7 @@ fun HistoryScreen(
                                 )
                             }
                         } else {
-                            // Render distinct visual sections: Today, Yesterday, Previous 7 Days, Older
+                            // Render distinct visual sections: 'Today', 'Yesterday', 'Previous 7 Days', 'Older'
                             groupOrder.forEach { groupName ->
                                 val groupConvs = grouped[groupName] ?: return@forEach
                                 if (groupConvs.isNotEmpty()) {
@@ -613,14 +870,32 @@ fun HistoryScreen(
                                         )
                                     }
                                     items(groupConvs, key = { it.id }) { conv ->
-                                        ConversationCard(
+                                        SwipeableConversationRow(
                                             conversation = conv,
                                             isActive = conv.id == activeConversationId,
+                                            searchQuery = searchQuery,
+                                            isMultiSelectMode = isMultiSelectMode,
+                                            isSelected = conv.id in selectedIds,
+                                            onSelectToggle = {
+                                                if (conv.id in selectedIds) selectedIds.remove(conv.id)
+                                                else selectedIds.add(conv.id)
+                                            },
+                                            onLongClick = {
+                                                if (!isMultiSelectMode) {
+                                                    isMultiSelectMode = true
+                                                    selectedIds.add(conv.id)
+                                                }
+                                            },
                                             onClick = {
-                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                chatViewModel.loadConversation(conv.id)
-                                                onRestoreConversation(conv.id)
-                                                onBack()
+                                                if (isMultiSelectMode) {
+                                                    if (conv.id in selectedIds) selectedIds.remove(conv.id)
+                                                    else selectedIds.add(conv.id)
+                                                } else {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    chatViewModel.loadConversation(conv.id)
+                                                    onRestoreConversation(conv.id)
+                                                    onBack()
+                                                }
                                             },
                                             onPin = {
                                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -693,10 +968,91 @@ private fun SectionHeader(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SwipeableConversationRow(
+    conversation: ConversationEntity,
+    isActive: Boolean,
+    searchQuery: String,
+    isMultiSelectMode: Boolean,
+    isSelected: Boolean,
+    onSelectToggle: () -> Unit,
+    onLongClick: () -> Unit,
+    onClick: () -> Unit,
+    onPin: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onDelete()
+                false // wait for dialog confirmation
+            } else {
+                false
+            }
+        }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "Delete",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
+                    Icon(
+                        Icons.Default.DeleteOutline,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
+        }
+    ) {
+        ConversationCard(
+            conversation = conversation,
+            isActive = isActive,
+            searchQuery = searchQuery,
+            isMultiSelectMode = isMultiSelectMode,
+            isSelected = isSelected,
+            onSelectToggle = onSelectToggle,
+            onLongClick = onLongClick,
+            onClick = onClick,
+            onPin = onPin,
+            onRename = onRename,
+            onDelete = onDelete
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ConversationCard(
     conversation: ConversationEntity,
     isActive: Boolean = false,
+    searchQuery: String = "",
+    isMultiSelectMode: Boolean = false,
+    isSelected: Boolean = false,
+    onSelectToggle: () -> Unit = {},
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
     onPin: () -> Unit,
     onRename: () -> Unit,
@@ -739,16 +1095,21 @@ fun ConversationCard(
             .border(
                 width = if (isActive) 1.5.dp else if (conversation.isPinned) 1.dp else 0.8.dp,
                 color = when {
+                    isSelected -> ClaudeTerracotta
                     isActive -> ClaudeTerracotta.copy(alpha = 0.8f)
                     conversation.isPinned -> Color(0xFFFFB300).copy(alpha = 0.6f)
                     else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
                 },
                 shape = RoundedCornerShape(14.dp)
             )
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = when {
+                isSelected -> ClaudeTerracotta.copy(alpha = 0.12f)
                 isActive -> ClaudeTerracotta.copy(alpha = 0.08f)
                 conversation.isPinned -> Color(0xFFFFB300).copy(alpha = 0.04f)
                 else -> MaterialTheme.colorScheme.surface
@@ -761,8 +1122,18 @@ fun ConversationCard(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Multi-Select Checkbox
+            if (isMultiSelectMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onSelectToggle() },
+                    colors = CheckboxDefaults.colors(checkedColor = ClaudeTerracotta)
+                )
+                Spacer(Modifier.width(8.dp))
+            }
+
             // Left Accent Pill Indicator for Active Conversation
-            if (isActive) {
+            if (isActive && !isMultiSelectMode) {
                 Box(
                     modifier = Modifier
                         .width(3.5.dp)
@@ -810,8 +1181,9 @@ fun ConversationCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
+                    HighlightedText(
                         text = conversation.title.ifBlank { "Untitled Conversation" },
+                        query = searchQuery,
                         style = MaterialTheme.typography.titleSmall.copy(
                             fontWeight = if (isActive) FontWeight.Bold else FontWeight.SemiBold
                         ),
@@ -944,65 +1316,67 @@ fun ConversationCard(
                 }
             }
 
-            // Overflow Menu Button (MoreVert)
-            Box {
-                IconButton(
-                    onClick = { showMenu = true },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "Conversation options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            // Overflow Menu Button (MoreVert) - Hidden in multi-select mode
+            if (!isMultiSelectMode) {
+                Box {
+                    IconButton(
+                        onClick = { showMenu = true },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "Conversation options",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
 
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(if (conversation.isPinned) "Unpin" else "Pin to Top") },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.PushPin,
-                                contentDescription = null,
-                                tint = if (conversation.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            onPin()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Edit, contentDescription = null)
-                        },
-                        onClick = {
-                            showMenu = false
-                            onRename()
-                        }
-                    )
-                    HorizontalDivider()
-                    DropdownMenuItem(
-                        text = {
-                            Text("Delete", color = MaterialTheme.colorScheme.error)
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Default.DeleteOutline,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        }
-                    )
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(if (conversation.isPinned) "Unpin" else "Pin to Top") },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.PushPin,
+                                    contentDescription = null,
+                                    tint = if (conversation.isPinned) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                onPin()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Rename") },
+                            leadingIcon = {
+                                Icon(Icons.Default.Edit, contentDescription = null)
+                            },
+                            onClick = {
+                                showMenu = false
+                                onRename()
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = {
+                                Text("Delete", color = MaterialTheme.colorScheme.error)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.DeleteOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
+                        )
+                    }
                 }
             }
         }

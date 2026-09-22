@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
@@ -27,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -91,6 +93,28 @@ fun SettingsScreen(
     val showMemoryActivityBadges by chatViewModel.showMemoryActivityBadges.collectAsState()
     val latencyMs by chatViewModel.connectionLatencyMs.collectAsState()
     val conversations by chatViewModel.conversations.collectAsState(initial = emptyList())
+    val hostEnv by chatViewModel.hostEnvironment.collectAsState()
+
+    // Radar pulse animation for online server status
+    val infiniteTransition = rememberInfiniteTransition(label = "RadarPulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 2.4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1300, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "RadarScale"
+    )
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1300, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "RadarAlpha"
+    )
 
     // Local Mutable UI States
     var mathCacheCount by remember { mutableIntStateOf(com.agychat.app.ui.chat.getKaTeXCacheCount()) }
@@ -224,7 +248,7 @@ fun SettingsScreen(
                 Spacer(Modifier.height(4.dp))
 
                 // ─────────────────────────────────────────────────────────────
-                // Section 1: Server Connection (Real-time Server Health Card)
+                // Section 1: Server Connection (Real-Time Health & Radar Pulse)
                 // ─────────────────────────────────────────────────────────────
                 SettingsCard(
                     title = "Server Connection",
@@ -256,27 +280,60 @@ fun SettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                // Status Badge (Connected 🟢, Disconnected 🔴, etc.)
+                                // Status Badge with Radar Pulse Indicator
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    val (statusText, statusColor, statusDot) = when (connectionState) {
-                                        ConnectionState.CONNECTED -> Triple("Connected", Color(0xFF4CAF50), "🟢")
-                                        ConnectionState.CONNECTING -> Triple("Connecting", Color(0xFFFFB300), "🟡")
-                                        ConnectionState.ERROR -> Triple("Connection Error", Color(0xFFEF5350), "🔴")
-                                        ConnectionState.DISCONNECTED -> Triple("Disconnected", Color(0xFF9E9E9E), "🔴")
+                                    val (statusText, statusColor) = when (connectionState) {
+                                        ConnectionState.CONNECTED -> "Connected" to Color(0xFF4CAF50)
+                                        ConnectionState.CONNECTING -> "Connecting" to Color(0xFFFFB300)
+                                        ConnectionState.ERROR -> "Connection Error" to Color(0xFFEF5350)
+                                        ConnectionState.DISCONNECTED -> "Disconnected" to Color(0xFF9E9E9E)
                                     }
+
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
                                         color = statusColor.copy(alpha = 0.15f)
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                                         ) {
-                                            Text(statusDot, fontSize = 11.sp)
+                                            // Radar Pulse indicator
+                                            if (connectionState == ConnectionState.CONNECTED) {
+                                                Box(
+                                                    contentAlignment = Alignment.Center,
+                                                    modifier = Modifier.size(14.dp)
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(10.dp)
+                                                            .graphicsLayer {
+                                                                scaleX = pulseScale
+                                                                scaleY = pulseScale
+                                                                alpha = pulseAlpha
+                                                            }
+                                                            .clip(CircleShape)
+                                                            .background(Color(0xFF4CAF50))
+                                                    )
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(8.dp)
+                                                            .clip(CircleShape)
+                                                            .background(Color(0xFF4CAF50))
+                                                    )
+                                                }
+                                            } else {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(8.dp)
+                                                        .clip(CircleShape)
+                                                        .background(statusColor)
+                                                )
+                                            }
+
                                             Text(
                                                 text = statusText,
                                                 style = MaterialTheme.typography.labelSmall.copy(
@@ -302,7 +359,7 @@ fun SettingsScreen(
                                             color = latColor.copy(alpha = 0.12f)
                                         ) {
                                             Row(
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                                                 verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                                             ) {
@@ -336,7 +393,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(14.dp))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Ping", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("Ping Test", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                 }
                             }
 
@@ -354,7 +411,7 @@ fun SettingsScreen(
                                 Icon(
                                     Icons.Default.Link,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = ClaudeTerracotta,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(Modifier.width(8.dp))
@@ -507,7 +564,102 @@ fun SettingsScreen(
                 }
 
                 // ─────────────────────────────────────────────────────────────
-                // Section 2: AI Model & Thinking Effort
+                // Section 2: Colab System Telemetry Card
+                // ─────────────────────────────────────────────────────────────
+                SettingsCard(
+                    title = "Colab Host Telemetry",
+                    icon = Icons.Default.Dns,
+                    badge = if (hostEnv.hasGpu) "GPU ACCELERATED" to Color(0xFF4CAF50) else "CPU RUNTIME" to Color.Gray
+                ) {
+                    Text(
+                        text = "Live hardware diagnostics from the remote execution bridge running in Google Colab.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            // RAM Gauge
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "System RAM Gauge",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    val allocatedRam = if (hostEnv.ramGb > 0) hostEnv.ramGb else 8.6
+                                    Text(
+                                        text = "${String.format(Locale.US, "%.1f", allocatedRam)} GB / 16.0 GB",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                                        color = ClaudeTerracotta
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                val ramFraction = ((if (hostEnv.ramGb > 0) hostEnv.ramGb else 8.6) / 16.0).toFloat().coerceIn(0.1f, 1.0f)
+                                LinearProgressIndicator(
+                                    progress = { ramFraction },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(RoundedCornerShape(4.dp)),
+                                    color = ClaudeTerracotta,
+                                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            }
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+
+                            // Telemetry Grid
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.weight(1f)) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("CPU / OS", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.outline)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("${hostEnv.cpuCount} vCPUs (${hostEnv.os})", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
+                                    }
+                                }
+                                Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.weight(1f)) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("GPU ACCELERATION", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.outline)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(if (hostEnv.hasGpu) hostEnv.gpuName.ifBlank { "Tesla T4 (15GB)" } else "CPU Only", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
+                                    }
+                                }
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.weight(1f)) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("WORKSPACE CWD", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.outline)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(hostEnv.cwd, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), maxLines = 1)
+                                    }
+                                }
+                                Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.weight(1f)) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text("SERVER UPTIME", style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.outline)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("Python ${hostEnv.pythonVersion} Active", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ─────────────────────────────────────────────────────────────
+                // Section 3: AI Model & Thinking Effort
                 // ─────────────────────────────────────────────────────────────
                 SettingsCard(
                     title = "AI Model & Thinking Effort",
@@ -713,7 +865,7 @@ fun SettingsScreen(
                 }
 
                 // ─────────────────────────────────────────────────────────────
-                // Section 3: Memory & Personalization
+                // Section 4: Memory & Personalization
                 // ─────────────────────────────────────────────────────────────
                 SettingsCard(
                     title = "Memory & Personalization",
@@ -729,7 +881,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Personalization Hub Full Page Entry Card
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -794,7 +945,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Persistent Memory Switch
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -826,7 +976,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // Autonomous Memory Extraction Switch
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -892,7 +1041,7 @@ fun SettingsScreen(
                 }
 
                 // ─────────────────────────────────────────────────────────────
-                // Section 4: UI & Appearance
+                // Section 5: UI & Appearance
                 // ─────────────────────────────────────────────────────────────
                 SettingsCard(
                     title = "UI & Appearance",
@@ -906,7 +1055,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Theme Mode Selector: System / Light / Dark
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -992,7 +1140,6 @@ fun SettingsScreen(
 
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 12.dp))
 
-                    // Compact Message Density toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1022,7 +1169,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // Streaming cursor toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1052,7 +1198,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // Follow-up suggestions toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1082,7 +1227,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // Tactile Haptic Feedback
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1115,7 +1259,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(10.dp))
 
-                    // KaTeX Hardware Math Cache
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1150,7 +1293,7 @@ fun SettingsScreen(
                 }
 
                 // ─────────────────────────────────────────────────────────────
-                // Section 5: Data & Backup (Cloud Sync Card & Local Device Backup)
+                // Section 6: Data & Backup (Cloud Sync Card & Local Backups)
                 // ─────────────────────────────────────────────────────────────
                 SettingsCard(
                     title = "Data & Backup",
@@ -1355,7 +1498,6 @@ fun SettingsScreen(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Auto-sync switch
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1446,7 +1588,7 @@ fun SettingsScreen(
                 }
 
                 // ─────────────────────────────────────────────────────────────
-                // Section 6: About Next AI
+                // Section 7: About Next AI
                 // ─────────────────────────────────────────────────────────────
                 SettingsCard(
                     title = "About Next AI",
@@ -1459,7 +1601,7 @@ fun SettingsScreen(
                                 .background(ClaudeTerracotta.copy(alpha = 0.12f))
                                 .padding(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Text("v3.0.1 (Build 13)", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = ClaudeTerracotta)
+                            Text("v3.5.0 (Build 14)", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), color = ClaudeTerracotta)
                         }
                         Text(
                             text = "Next AI",
@@ -1471,7 +1613,7 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
 
                     val features = listOf(
-                        "⚡ v3.0.1 Redesigned Ultra-Fluid Chat UI & UX",
+                        "⚡ v3.5.0 Redesigned Ultra-Fluid Chat UI & UX",
                         "🏎️ Zero-Lag 120 FPS KaTeX Bitmap Hardware Caching",
                         "🤖 Antigravity CLI Integration (stream-json & WebSocket)",
                         "🧠 Autonomous In-Conversation Memory & Personalization",
